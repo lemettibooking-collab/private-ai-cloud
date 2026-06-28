@@ -2,11 +2,12 @@
 
 ## Current status
 
-- DB-01 scaffold only.
+- DB-02 adds `0001_initial_p0_schema.sql`.
 - No real DB connection.
-- No migrations yet.
+- The migration is not automatically executed.
 - No backend routes yet.
 - No auth yet.
+- RLS is not enabled yet.
 
 ## Target database
 
@@ -24,10 +25,10 @@ The MVP product needs Postgres-compatible tenant isolation, future RLS, JSONB, a
 - Future migration files go into `db/migrations`.
 - Seed files go into `db/seeds`.
 - P0 schema source is `docs/architecture/database-schema-v0.1.md`.
+- `db/migrations/0001_initial_p0_schema.sql` targets PostgreSQL and defines the initial P0 schema.
 
 ## Future DB patches
 
-- DB-02 P0 migrations.
 - DB-03 seed demo workspace.
 - DB-04 DB client/query layer.
 - DB-05 read-only API routes.
