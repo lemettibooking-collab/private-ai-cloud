@@ -2,9 +2,9 @@
 
 ## Current status
 
-- DB-02 adds `0001_initial_p0_schema.sql`.
+- DB-03 adds `db/seeds/0001_seed_smart_algorithms_demo.sql`.
 - No real DB connection.
-- The migration is not automatically executed.
+- The migration and seed are not automatically executed.
 - No backend routes yet.
 - No auth yet.
 - RLS is not enabled yet.
@@ -26,10 +26,12 @@ The MVP product needs Postgres-compatible tenant isolation, future RLS, JSONB, a
 - Seed files go into `db/seeds`.
 - P0 schema source is `docs/architecture/database-schema-v0.1.md`.
 - `db/migrations/0001_initial_p0_schema.sql` targets PostgreSQL and defines the initial P0 schema.
+- `db/seeds/0001_seed_smart_algorithms_demo.sql` creates the Smart Algorithms Demo workspace and demo operational data.
+- The seed assumes `0001_initial_p0_schema.sql` has already been applied.
+- The seed is safe/idempotent and can be re-run without duplicating demo rows.
 
 ## Future DB patches
 
-- DB-03 seed demo workspace.
 - DB-04 DB client/query layer.
 - DB-05 read-only API routes.
 - DB-06 first UI rewire.
@@ -46,3 +48,14 @@ createdb private_ai_cloud_dev
 ```
 
 Exact commands may vary depending on local Homebrew/Postgres setup. Docker is not required.
+
+Optional local apply commands:
+
+```bash
+psql "$DATABASE_URL" -f db/migrations/0001_initial_p0_schema.sql
+psql "$DATABASE_URL" -f db/seeds/0001_seed_smart_algorithms_demo.sql
+```
+
+Only run these commands against a local/dev database. Never run blindly against production.
+
+Next step: DB-04 can add the DB client/query layer, or DB-03.5 can syntax-check/apply the SQL locally if needed.

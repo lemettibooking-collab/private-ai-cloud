@@ -2,11 +2,11 @@
 
 ## Current Milestone
 
-DB-02 P0 SQL migration.
+DB-03 Smart Algorithms Demo seed SQL.
 
 Private AI Cloud is currently a frontend-only MVP UI prototype for a closed AI Operations Center. It demonstrates the intended product surfaces, approval-first operating model, AI department map, mocked workflows, and Smart Algorithms roadmap without backend execution.
 
-DB strategy selected for planning: PostgreSQL-compatible foundation, with local development via Homebrew PostgreSQL and no Docker requirement for DB-01. Raw SQL migrations are planned. DB-02 adds the first P0 SQL migration only and does not add a runtime DB connection, backend routes, auth, ORM, or dependencies.
+DB strategy selected for planning: PostgreSQL-compatible foundation, with local development via Homebrew PostgreSQL and no Docker requirement for DB-01. Raw SQL migrations are planned. DB-03 adds Smart Algorithms Demo seed SQL only and does not add a runtime DB connection, backend routes, auth, ORM, or dependencies.
 
 ## Completed Stages
 
@@ -29,6 +29,7 @@ DB strategy selected for planning: PostgreSQL-compatible foundation, with local 
 - DB Foundation Implementation Plan v0.1: `docs/architecture/db-foundation-implementation-plan-v0.1.md`.
 - DB-01 scaffold: `db/README.md`, `db/migrations`, `db/seeds`, and `.env.example`.
 - DB-02 P0 SQL migration: `db/migrations/0001_initial_p0_schema.sql`.
+- DB-03 Smart Algorithms Demo seed SQL: `db/seeds/0001_seed_smart_algorithms_demo.sql`.
 
 ## Active Routes
 
@@ -66,8 +67,7 @@ Latest baseline verification:
 
 ## Next Recommended Stages
 
-- DB-03 seed Smart Algorithms Demo.
-- DB-04 DB client/query layer.
+- DB-03.5 local SQL validation or DB-04 DB client/query layer.
 - DB-05 read-only API routes.
 - Knowledge Base upload.
 - RAG layer.
