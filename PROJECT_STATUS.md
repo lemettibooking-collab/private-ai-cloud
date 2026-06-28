@@ -2,9 +2,11 @@
 
 ## Current Milestone
 
-Blueprint-aligned UI prototype + UI Refinement Patch 1.
+DB-01 database foundation scaffold.
 
 Private AI Cloud is currently a frontend-only MVP UI prototype for a closed AI Operations Center. It demonstrates the intended product surfaces, approval-first operating model, AI department map, mocked workflows, and Smart Algorithms roadmap without backend execution.
+
+DB strategy selected for planning: PostgreSQL-compatible foundation, with local development via Homebrew PostgreSQL and no Docker requirement for DB-01. Raw SQL migrations are planned. DB-01 is scaffold only and does not add a runtime DB connection, backend routes, auth, ORM, or dependencies.
 
 ## Completed Stages
 
@@ -22,6 +24,10 @@ Private AI Cloud is currently a frontend-only MVP UI prototype for a closed AI O
 - Dedicated Roadmap page for v0.1, v0.2, v0.3, v1.0, and v2.0.
 - QA report: `docs/qa/ui-product-review-v0.1.md`.
 - UI Refinement Patch 1 implementation notes added to QA report.
+- Data Model Blueprint v0.1: `docs/architecture/data-model-blueprint-v0.1.md`.
+- Database Schema Blueprint v0.1: `docs/architecture/database-schema-v0.1.md`.
+- DB Foundation Implementation Plan v0.1: `docs/architecture/db-foundation-implementation-plan-v0.1.md`.
+- DB-01 scaffold: `db/README.md`, `db/migrations`, `db/seeds`, and `.env.example`.
 
 ## Active Routes
 
@@ -59,10 +65,10 @@ Latest baseline verification:
 
 ## Next Recommended Stages
 
-- Product UI review.
-- Data model blueprint.
-- DB schema.
-- Backend foundation.
+- DB-02 P0 SQL migration.
+- DB-03 seed demo workspace.
+- DB-04 DB client/query layer.
+- DB-05 read-only API routes.
 - Knowledge Base upload.
 - RAG layer.
 - Workflow engine backend.

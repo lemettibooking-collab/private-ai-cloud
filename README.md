@@ -36,6 +36,12 @@ The current baseline is aligned with Product Blueprint v0.2 and includes UI Refi
 - Real integrations
 - Docker/self-host runtime
 
+## Database Status
+
+The current project is still frontend-only. DB-01 only adds database scaffold documentation and environment placeholders. There is no runtime database connection yet.
+
+Future DB work targets PostgreSQL. Docker is not required for DB-01.
+
 ## Commands
 
 ```bash
