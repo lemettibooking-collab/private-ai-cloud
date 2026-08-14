@@ -13,6 +13,10 @@ import {
   type CodexTaskValidationError,
   type CodexTaskValidationErrors,
 } from "@/lib/codex-task-artifact";
+import {
+  buildEffectiveCodexTaskInput,
+  type PathSelectionMode,
+} from "@/lib/codex-task-form-policy";
 
 const initialInput: CodexTaskArtifactInput = {
   goal: "",
@@ -61,7 +65,7 @@ type FieldDefinition = {
   rows: number;
 };
 
-const primaryFieldDefinitions: readonly FieldDefinition[] = [
+const primaryTaskFieldDefinitions: readonly FieldDefinition[] = [
   {
     name: "goal",
     label: "Что нужно сделать?",
@@ -89,26 +93,26 @@ const primaryFieldDefinitions: readonly FieldDefinition[] = [
     required: true,
     rows: 3,
   },
-  {
-    name: "allowedPaths",
-    label: "Какие файлы или папки можно менять?",
-    description:
-      "Один путь или правило пути на строку. Если точные пути неизвестны, сначала уточните их перед запуском Codex.",
-    placeholder:
-      "app/workflows/codex-task/run/page.tsx\ncomponents/domain/",
-    required: true,
-    rows: 4,
-  },
-  {
-    name: "acceptanceCriteria",
-    label: "Как понять, что задача выполнена?",
-    description: "Один проверяемый результат на строку.",
-    placeholder:
-      "Форма использует введённые данные\nВсе проверки проходят",
-    required: true,
-    rows: 5,
-  },
 ];
+
+const allowedPathsFieldDefinition: FieldDefinition = {
+  name: "allowedPaths",
+  label: "Какие файлы или папки можно менять?",
+  description:
+    "Один путь или правило на строку. Используйте этот режим, только если точные пути уже известны.",
+  placeholder: "app/workflows/codex-task/run/page.tsx\ncomponents/domain/",
+  required: true,
+  rows: 4,
+};
+
+const acceptanceCriteriaFieldDefinition: FieldDefinition = {
+  name: "acceptanceCriteria",
+  label: "Как понять, что задача выполнена?",
+  description: "Один проверяемый результат на строку.",
+  placeholder: "Форма использует введённые данные\nВсе проверки проходят",
+  required: true,
+  rows: 5,
+};
 
 const technicalFieldDefinitions: readonly FieldDefinition[] = [
   {
@@ -175,6 +179,8 @@ export function CodexTaskArtifactForm() {
   const [downloadStatus, setDownloadStatus] = useState("");
   const [artifactInvalidated, setArtifactInvalidated] = useState(false);
   const [technicalSettingsOpen, setTechnicalSettingsOpen] = useState(false);
+  const [pathSelectionMode, setPathSelectionMode] =
+    useState<PathSelectionMode>("discover");
 
   function updateField(field: CodexTaskArtifactField, value: string) {
     setInput((current) => ({ ...current, [field]: value }));
@@ -188,10 +194,30 @@ export function CodexTaskArtifactForm() {
     }
   }
 
+  function changePathSelectionMode(mode: PathSelectionMode) {
+    if (mode === pathSelectionMode) {
+      return;
+    }
+
+    setPathSelectionMode(mode);
+    setErrors((current) => ({ ...current, allowedPaths: undefined }));
+    setCopyStatus("idle");
+    setDownloadStatus("");
+
+    if (artifact) {
+      setArtifact(null);
+      setArtifactInvalidated(true);
+    }
+  }
+
   function generateArtifact(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    const result = createCodexTaskArtifact(input);
+    const effectiveInput = buildEffectiveCodexTaskInput(
+      input,
+      pathSelectionMode,
+    );
+    const result = createCodexTaskArtifact(effectiveInput);
 
     if (!result.ok) {
       setErrors(result.errors);
@@ -308,7 +334,67 @@ export function CodexTaskArtifactForm() {
         description="Сформируйте проверяемое задание для Codex. Ничего не сохраняется и не запускается."
       >
         <form className="min-w-0 space-y-5" onSubmit={generateArtifact}>
-          {primaryFieldDefinitions.map(renderField)}
+          {primaryTaskFieldDefinitions.map(renderField)}
+
+          <fieldset className="min-w-0 space-y-3">
+            <legend className="text-sm font-medium text-slate-200">
+              Как определить область кода?
+              <span className="ml-1 text-xs font-normal text-slate-400">
+                (обязательное)
+              </span>
+            </legend>
+            <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-slate-800 bg-slate-900/50 p-4 transition has-checked:border-cyan-400/40 has-checked:bg-cyan-400/10">
+              <input
+                checked={pathSelectionMode === "discover"}
+                className="mt-1 size-4 shrink-0 accent-cyan-400"
+                name="pathSelectionMode"
+                onChange={() => changePathSelectionMode("discover")}
+                type="radio"
+                value="discover"
+              />
+              <span className="min-w-0">
+                <span className="block text-sm font-medium text-slate-200">
+                  Определить по репозиторию — рекомендуется
+                </span>
+                <span className="mt-1 block text-xs leading-5 text-slate-500">
+                  Codex сначала изучит структуру проекта и предложит минимальный
+                  список файлов. На этом этапе код изменяться не будет.
+                </span>
+              </span>
+            </label>
+            <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-slate-800 bg-slate-900/50 p-4 transition has-checked:border-cyan-400/40 has-checked:bg-cyan-400/10">
+              <input
+                checked={pathSelectionMode === "manual"}
+                className="mt-1 size-4 shrink-0 accent-cyan-400"
+                name="pathSelectionMode"
+                onChange={() => changePathSelectionMode("manual")}
+                type="radio"
+                value="manual"
+              />
+              <span className="min-w-0">
+                <span className="block text-sm font-medium text-slate-200">
+                  Указать пути вручную
+                </span>
+                <span className="mt-1 block text-xs leading-5 text-slate-500">
+                  Для разработчика, который уже знает точные файлы или папки.
+                </span>
+              </span>
+            </label>
+          </fieldset>
+
+          {pathSelectionMode === "discover" ? (
+            <div
+              className="rounded-lg border border-amber-400/30 bg-amber-400/10 p-4 text-sm leading-6 text-amber-100"
+              role="status"
+            >
+              Будет создано задание только на анализ репозитория. Codex
+              предложит файлы и остановится до подтверждения Owner.
+            </div>
+          ) : (
+            renderField(allowedPathsFieldDefinition)
+          )}
+
+          {renderField(acceptanceCriteriaFieldDefinition)}
 
           <details
             className="min-w-0 rounded-lg border border-slate-800 bg-slate-900/30 p-4"
@@ -334,7 +420,9 @@ export function CodexTaskArtifactForm() {
               className="inline-flex h-9 w-full items-center justify-center rounded-md border border-cyan-400/40 bg-cyan-400/15 px-3 text-sm font-medium text-cyan-100 transition hover:bg-cyan-400/25 sm:w-auto"
               type="submit"
             >
-              Подготовить задание
+              {pathSelectionMode === "discover"
+                ? "Подготовить анализ репозитория"
+                : "Подготовить задание"}
             </button>
             <StatusBadge tone="locked">без внешних действий</StatusBadge>
           </div>
@@ -355,8 +443,24 @@ export function CodexTaskArtifactForm() {
 
       <SectionCard
         action={
-          <StatusBadge tone={artifact ? "success" : "neutral"}>
-            {artifact ? "задание готово" : "не подготовлено"}
+          <StatusBadge
+            tone={
+              artifact && pathSelectionMode === "discover"
+                ? "locked"
+                : artifact
+                  ? "success"
+                  : "neutral"
+            }
+          >
+            {artifact && pathSelectionMode === "discover" ? (
+              <span className="max-w-48 text-center leading-4">
+                Только анализ — изменения запрещены
+              </span>
+            ) : artifact ? (
+              "задание готово"
+            ) : (
+              "не подготовлено"
+            )}
           </StatusBadge>
         }
         className="min-w-0"
