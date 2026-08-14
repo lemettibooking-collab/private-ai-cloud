@@ -42,13 +42,26 @@ The current project is still frontend-only. DB-01 only adds database scaffold do
 
 Future DB work targets PostgreSQL. Docker is not required for DB-01.
 
-## Commands
+## Local Prerequisites
+
+- Node.js 24.13.x (`.nvmrc` pins 24.13.1).
+- npm 11.8.0, as declared by the `packageManager` contract.
+
+With `nvm`, activate the project runtime before installing dependencies:
 
 ```bash
+nvm use
 npm install
-npm run dev
+```
+
+## Verification And Development
+
+```bash
 npm run lint
+npm run typecheck
+npm test
 npm run build
+npm run dev
 ```
 
 Open the local app at `http://localhost:3000` after `npm run dev`.

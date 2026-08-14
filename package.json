@@ -2,11 +2,18 @@
   "name": "private-ai-cloud",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "npm@11.8.0",
+  "engines": {
+    "node": "24.13.x",
+    "npm": "11.8.x"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit --incremental false",
+    "test": "node --test tests/runtime-contract.test.mts"
   },
   "dependencies": {
     "next": "16.2.9",
