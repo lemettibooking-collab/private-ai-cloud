@@ -1,20 +1,15 @@
 import type { StatusTone } from "./app";
+import type { ApprovalStatus, RiskLevel } from "@/lib/contracts/domain";
 
-export type ApprovalStatus =
-  | "pending"
-  | "approved"
-  | "rejected"
-  | "edited"
-  | "expired"
-  | "cancelled";
+export type { ApprovalStatus, RiskLevel } from "@/lib/contracts/domain";
 
-export type RiskLevel = "low" | "medium" | "high" | "blocked";
+export type ApprovalDisplayRiskLevel = RiskLevel | "blocked";
 
 export type ApprovalRequest = {
   id: string;
   title: string;
   actionType: string;
-  riskLevel: RiskLevel;
+  riskLevel: ApprovalDisplayRiskLevel;
   riskTone: StatusTone;
   requestedBy: string;
   allowedApprovers?: string[];

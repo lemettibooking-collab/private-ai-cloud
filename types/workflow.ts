@@ -1,17 +1,10 @@
 import type { StatusTone } from "./app";
 import type { SourceCitation } from "./knowledge";
+import type { WorkflowRunStatus } from "@/lib/contracts/domain";
 
-export type WorkflowStatus =
-  | "draft"
-  | "queued"
-  | "running"
-  | "generated"
-  | "waiting_approval"
-  | "approved"
-  | "rejected"
-  | "executed"
-  | "failed"
-  | "cancelled";
+export type { WorkflowRunStatus } from "@/lib/contracts/domain";
+
+export type WorkflowStatus = WorkflowRunStatus;
 
 export type WorkflowTemplate = {
   code: string;
