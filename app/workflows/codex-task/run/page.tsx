@@ -7,9 +7,9 @@ export default function CodexTaskRunPage() {
   return (
     <AppShell>
       <PageHeader
-        description="Transform product intent into a precise Codex task with context, constraints, acceptance criteria, and verify commands."
-        eyebrow="Workflow run"
-        title="Product / Codex Task"
+        description="Подготовьте точное задание с контекстом, ограничениями, критериями приёмки и командами проверки."
+        eyebrow="Запуск процесса"
+        title="Задание для Codex"
       />
       <WorkflowLifecycle compact />
       <div className="mt-6">
