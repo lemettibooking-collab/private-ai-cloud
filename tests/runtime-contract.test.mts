@@ -40,7 +40,7 @@ const expectedScripts = {
   start: "next start",
   lint: "eslint",
   typecheck: "tsc --noEmit --incremental false",
-  test: "node --test tests/runtime-contract.test.mts",
+  test: "node --test tests/*.test.mts",
 } as const;
 
 function validateRuntimeContract(packageJson: RuntimeContractPackage): string[] {
