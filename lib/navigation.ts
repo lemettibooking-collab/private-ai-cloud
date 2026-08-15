@@ -7,6 +7,11 @@ export const navigationItems: NavItem[] = [
     description: "Owner attention center",
   },
   {
+    label: "Projects",
+    href: "/projects",
+    description: "Project Control Center",
+  },
+  {
     label: "Knowledge Base",
     href: "/knowledge",
     description: "Documents and indexing",
