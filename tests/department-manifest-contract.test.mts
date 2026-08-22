@@ -1337,6 +1337,52 @@ test("repeated Department restrictions in child input are stably deduplicated", 
   );
 });
 
+test("maximum Project and Department policy boundaries compose for Department and child evaluation", () => {
+  const projectApprovals = makePolicyAdditions(
+    "Project approval",
+    projectManifestLimits.maxUserApprovalActions,
+  );
+  const projectForbidden = makePolicyAdditions(
+    "Project forbidden action",
+    projectManifestLimits.maxUserForbiddenActions,
+  );
+  const departmentApprovals = makePolicyAdditions(
+    "Department approval",
+    departmentManifestLimits.maxAdditionalApprovalActions,
+  );
+  const departmentForbidden = makePolicyAdditions(
+    "Department forbidden action",
+    departmentManifestLimits.maxAdditionalForbiddenActions,
+  );
+  const projectManifest = makeProject({
+    policy: {
+      ...makeProject().policy,
+      requiredApprovalActions: projectApprovals,
+      forbiddenActions: projectForbidden,
+    },
+  });
+  const departmentManifest = makeDepartment({
+    policy: {
+      ...makeDepartment().policy,
+      additionalRequiredApprovalActions: departmentApprovals,
+      additionalForbiddenActions: departmentForbidden,
+    },
+  });
+  const departmentDecision = evaluateDepartmentManifest({ projectManifest, departmentManifest });
+  assert.equal(departmentDecision.verdict, "allow", JSON.stringify(departmentDecision));
+  assert.equal(departmentDecision.normalizedDepartment?.effectiveRequiredApprovalActions.length, 138);
+  assert.equal(departmentDecision.normalizedDepartment?.effectiveForbiddenActions.length, 133);
+  const childDecision = evaluateDepartmentChildScope(makeChild({
+    projectManifest,
+    departmentManifest,
+    additionalRequiredApprovalActions: [],
+    additionalForbiddenActions: [],
+  }));
+  assert.equal(childDecision.verdict, "allow", JSON.stringify(childDecision));
+  assert.equal(childDecision.normalizedScope?.requiredApprovalActions.length, 138);
+  assert.equal(childDecision.normalizedScope?.forbiddenActions.length, 133);
+});
+
 test("64 Department approval additions and no child additions are allowed", () => {
   const inherited = makePolicyAdditions(
     "Department approval",

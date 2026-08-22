@@ -419,6 +419,65 @@ test("accepts the full 64-item project custom approval boundary", () => {
     ...systemRequiredProjectApprovalActions,
     ...customApprovals,
   ]);
+  assert.equal(manifest.policy.requiredApprovalActions.length, 74);
+  const repeated = requireValidManifest(manifest);
+  assert.deepEqual(repeated, manifest);
+});
+
+test("normalization is idempotent at the 64-item custom forbidden boundary", () => {
+  const customForbidden = Array.from(
+    { length: projectManifestLimits.maxUserForbiddenActions },
+    (_, index) => `Project forbidden action ${index}`,
+  );
+  const manifest = requireValidManifest(makeManifest({
+    policy: {
+      ...makeManifest().policy,
+      forbiddenActions: customForbidden,
+    },
+  }));
+  assert.deepEqual(manifest.policy.forbiddenActions, [
+    ...systemForbiddenProjectActions,
+    ...customForbidden,
+  ]);
+  assert.equal(manifest.policy.forbiddenActions.length, 69);
+  assert.deepEqual(requireValidManifest(manifest), manifest);
+});
+
+test("65 custom Project policy values remain denied", () => {
+  const cases = [
+    ["requiredApprovalActions", projectManifestLimits.maxUserApprovalActions] as const,
+    ["forbiddenActions", projectManifestLimits.maxUserForbiddenActions] as const,
+  ];
+  for (const [field, limit] of cases) {
+    const result = validateAndNormalizeProjectManifest(makeManifest({
+      policy: {
+        ...makeManifest().policy,
+        [field]: Array.from({ length: limit + 1 }, (_, index) => `Custom policy ${index}`),
+      },
+    }));
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.ok(result.errors.some((error) => error.code === "limit_exceeded" && error.path === `policy.${field}`));
+  }
+});
+
+test("oversized repetitions of canonical system policy values deny within an absolute bound", () => {
+  const cases = [
+    ["requiredApprovalActions", projectManifestLimits.maxUserApprovalActions, systemRequiredProjectApprovalActions] as const,
+    ["forbiddenActions", projectManifestLimits.maxUserForbiddenActions, systemForbiddenProjectActions] as const,
+  ];
+  for (const [field, userLimit, systemValues] of cases) {
+    const result = validateAndNormalizeProjectManifest(makeManifest({
+      policy: {
+        ...makeManifest().policy,
+        [field]: Array.from(
+          { length: userLimit + systemValues.length + 1 },
+          () => systemValues[0],
+        ),
+      },
+    }));
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.ok(result.errors.some((error) => error.code === "limit_exceeded" && error.path === `policy.${field}`));
+  }
 });
 
 test("allows a child to inherit all system and 64 project approvals", () => {

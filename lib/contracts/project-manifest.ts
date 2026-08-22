@@ -589,6 +589,67 @@ function normalizeTextList(
   return values;
 }
 
+function normalizePolicyTextList(
+  input: unknown,
+  path: string,
+  maxUserItems: number,
+  systemValues: readonly string[],
+  errors: MutableManifestErrors,
+): readonly string[] | null {
+  if (!Array.isArray(input)) {
+    addManifestError(errors, "invalid_type", path, `${path} must be an array.`);
+    return null;
+  }
+  const maxInputItems = maxUserItems + systemValues.length;
+  if (input.length > maxInputItems) {
+    addManifestError(
+      errors,
+      "limit_exceeded",
+      path,
+      `${path} must contain at most ${maxUserItems} user values and ${systemValues.length} canonical system values.`,
+    );
+  }
+  const canonicalSystemValues = new Set(systemValues);
+  const seenSystemInputs = new Set<string>();
+  const seen = new Set<string>();
+  const values: string[] = [];
+  let userItemCount = 0;
+  for (const [index, item] of input.slice(0, maxInputItems).entries()) {
+    if (typeof item !== "string") {
+      addManifestError(errors, "invalid_type", `${path}[${index}]`, `${path}[${index}] must be a string.`);
+      continue;
+    }
+    const value = normalizeText(item, true);
+    if (value.length === 0) continue;
+    if (value.length > projectManifestLimits.maxTextListItemLength) {
+      addManifestError(errors, "limit_exceeded", `${path}[${index}]`, `${path}[${index}] is too long.`);
+      continue;
+    }
+    if (nonNewlineControlCharacterPattern.test(value)) {
+      addManifestError(errors, "invalid_type", `${path}[${index}]`, `${path}[${index}] contains a control character.`);
+      continue;
+    }
+    if (canonicalSystemValues.has(value) && !seenSystemInputs.has(value)) {
+      seenSystemInputs.add(value);
+    } else {
+      userItemCount += 1;
+    }
+    if (!seen.has(value)) {
+      seen.add(value);
+      values.push(value);
+    }
+  }
+  if (userItemCount > maxUserItems) {
+    addManifestError(
+      errors,
+      "limit_exceeded",
+      path,
+      `${path} must contain at most ${maxUserItems} user values.`,
+    );
+  }
+  return values;
+}
+
 function normalizeIdList(
   input: unknown,
   path: string,
@@ -866,16 +927,18 @@ function normalizePolicy(
     "policy.dataEgressMode",
     errors,
   );
-  const requiredApprovalActions = normalizeTextList(
+  const requiredApprovalActions = normalizePolicyTextList(
     input.requiredApprovalActions,
     "policy.requiredApprovalActions",
     projectManifestLimits.maxUserApprovalActions,
+    systemRequiredProjectApprovalActions,
     errors,
   );
-  const forbiddenActions = normalizeTextList(
+  const forbiddenActions = normalizePolicyTextList(
     input.forbiddenActions,
     "policy.forbiddenActions",
     projectManifestLimits.maxUserForbiddenActions,
+    systemForbiddenProjectActions,
     errors,
   );
   return externalActionMode === null ||
