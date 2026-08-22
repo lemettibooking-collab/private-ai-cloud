@@ -12,6 +12,11 @@ export const navigationItems: NavItem[] = [
     description: "Project Control Center",
   },
   {
+    label: "Operations",
+    href: "/operations",
+    description: "Multi-project operations",
+  },
+  {
     label: "Knowledge Base",
     href: "/knowledge",
     description: "Documents and indexing",
