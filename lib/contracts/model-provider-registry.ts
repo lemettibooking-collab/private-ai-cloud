@@ -71,7 +71,7 @@ export type ModelProviderRegistry = Readonly<{
 
 export type ModelProviderRegistryReasonCode =
   | "invalid_input" | "limit_exceeded" | "invalid_project_registry" | "invalid_invocation_admission"
-  | "invalid_provider_registry" | "workspace_mismatch" | "project_version_mismatch"
+  | "invalid_provider_registry" | "provider_deployment_mode_mismatch" | "workspace_mismatch" | "project_version_mismatch"
   | "duplicate_provider_id" | "duplicate_deployment_id" | "duplicate_model_profile_id"
   | "provider_not_found" | "deployment_not_found" | "model_profile_missing" | "model_profile_inactive"
   | "provider_inactive" | "deployment_inactive" | "region_not_supported" | "data_egress_not_supported"
@@ -120,6 +120,7 @@ const auditUnsafePattern = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u;
 const auditIdentifierPattern = /^[A-Za-z0-9][A-Za-z0-9/:@._-]*$/u;
 const registryFields = ["workspaceId", "version", "providers", "deployments", "modelProfiles"] as const;
 const providerFields = ["id", "kind", "status", "deploymentMode", "supportedDataRegions", "supportedDataEgressModes", "capabilities"] as const;
+const remoteProviderKinds = ["openai", "anthropic", "deepseek", "qwen"] as const;
 const deploymentFields = ["id", "providerId", "status", "providerModelId", "providerModelVersion", "capabilities", "supportedOutputTypes", "maxInputTokens", "maxOutputTokens", "inputCostUsdMicrosPerMillionTokens", "outputCostUsdMicrosPerMillionTokens", "latencyClass", "qualityTier"] as const;
 const profileFields = ["modelProfileId", "status", "requiredCapabilities", "supportedOutputTypes", "candidates"] as const;
 const candidateFields = ["deploymentId", "priority"] as const;
@@ -207,6 +208,13 @@ function normalizeRegistryData(input: unknown): ModelProviderRegistryValidationD
     const egress = enumArray(raw.supportedDataEgressModes, projectDataEgressModes, projectDataEgressModes.length, `${path}.supportedDataEgressModes`, reasons);
     const capabilities = enumArray(raw.capabilities, modelProviderCapabilities, modelProviderRegistryLimits.maxCapabilities, `${path}.capabilities`, reasons, true);
     if (!providerId) reason(reasons, "invalid_provider_registry", `${path}.id`, "Provider ID is invalid."); if (!includes(modelProviderKinds, kind)) reason(reasons, "invalid_provider_registry", `${path}.kind`, "Provider kind is invalid."); if (!includes(modelProviderStatuses, status)) reason(reasons, "invalid_provider_registry", `${path}.status`, "Provider status is invalid."); if (!includes(modelDeploymentModes, mode)) reason(reasons, "invalid_provider_registry", `${path}.deploymentMode`, "Deployment mode is invalid.");
+    const modeMatchesKind = kind === "mock"
+      || (kind === "local" && mode === "local")
+      || (includes(remoteProviderKinds, kind) && mode === "remote");
+    if (includes(modelProviderKinds, kind) && includes(modelDeploymentModes, mode)
+      && !modeMatchesKind) {
+      reason(reasons, "provider_deployment_mode_mismatch", `${path}.deploymentMode`, "Provider kind and deploymentMode are incompatible.", { providerId: providerId ?? null });
+    }
     if (mode === "remote" && egress?.includes("forbidden")) reason(reasons, "invalid_provider_registry", `${path}.supportedDataEgressModes`, "Remote providers cannot support forbidden egress.", { providerId: providerId ?? null });
     if (providerId && includes(modelProviderKinds, kind) && includes(modelProviderStatuses, status) && includes(modelDeploymentModes, mode) && regions && egress && capabilities) providerWrappers.push({ path, value: { id: providerId, kind, status, deploymentMode: mode, supportedDataRegions: regions, supportedDataEgressModes: egress, capabilities } });
   }
