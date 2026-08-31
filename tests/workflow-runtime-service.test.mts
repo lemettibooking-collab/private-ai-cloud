@@ -1,0 +1,1114 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import test from "node:test";
+
+/* eslint-disable @typescript-eslint/no-explicit-any -- factual/adversarial fixtures cross unknown boundaries */
+
+const serviceContract = (await import(
+  new URL("../lib/workflows/workflow-runtime-service.ts", import.meta.url).href
+)) as typeof import("../lib/workflows/workflow-runtime-service");
+const runContract = (await import(
+  new URL("../lib/contracts/workflow-run.ts", import.meta.url).href
+)) as typeof import("../lib/contracts/workflow-run");
+const invocationContract = (await import(
+  new URL("../lib/contracts/model-invocation.ts", import.meta.url).href
+)) as typeof import("../lib/contracts/model-invocation");
+const adapterContract = (await import(
+  new URL("../lib/contracts/model-provider-adapter.ts", import.meta.url).href
+)) as typeof import("../lib/contracts/model-provider-adapter");
+const apiContract = (await import(
+  new URL("../lib/workflows/workflow-runtime-api.ts", import.meta.url).href
+)) as typeof import("../lib/workflows/workflow-runtime-api");
+
+const { createWorkflowRuntimeService } = serviceContract;
+const { createWorkflowRunSnapshot } = runContract;
+const {
+  validateAndNormalizeModelInvocationRequest,
+  validateAndNormalizeModelInvocationResult,
+} = invocationContract;
+const { validateAndNormalizeModelProviderHealth } = adapterContract;
+const { handleWorkflowRuntimeCommand } = apiContract;
+
+type RuntimeState = import("../lib/workflows/workflow-runtime-service").WorkflowRuntimeState;
+type RuntimeResponse = import("../lib/workflows/workflow-runtime-service").WorkflowRuntimeResponse;
+type RuntimeStore = import("../lib/workflows/workflow-runtime-service").WorkflowRuntimeStateStore;
+type CommandBeginInput = import("../lib/workflows/workflow-runtime-service").WorkflowRuntimeCommandBeginInput;
+type ClaimInput = import("../lib/workflows/workflow-runtime-service").WorkflowRuntimeClaimInput;
+type CompareAndSwapInput = import("../lib/workflows/workflow-runtime-service").WorkflowRuntimeCompareAndSwapInput;
+type AuthorizationInput = import("../lib/workflows/workflow-runtime-service").WorkflowRuntimeCommandAuthorizationInput;
+type RuntimeService = import("../lib/workflows/workflow-runtime-service").WorkflowRuntimeService;
+type RuntimeDependencies = import("../lib/workflows/workflow-runtime-service").WorkflowRuntimeServiceDependencies;
+type AdvanceCommand = import("../lib/workflows/workflow-runtime-service").WorkflowRuntimeAdvanceCommand;
+type ModelProvider = import("../lib/contracts/model-provider-adapter").ModelProvider;
+type InvocationDraft = import("../lib/contracts/model-invocation").ModelInvocationDraft;
+
+function clone<T>(value: T): T {
+  return structuredClone(value);
+}
+
+function frozen(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return true;
+  return Object.isFrozen(value) && Object.values(value).every(frozen);
+}
+
+function budget() {
+  return {
+    maxConcurrentRuns: 4,
+    maxAttemptsPerRun: 3,
+    maxRunMinutes: 120,
+    dailyTokenBudget: 1_000_000,
+    monthlyCostBudgetUsdCents: 250_000,
+  };
+}
+
+function projectRegistry(agentIds: readonly string[]) {
+  const subjectBinding = (kind: "agent" | "workflow", subjectId: string) => ({
+    id: `${subjectId}-binding`,
+    projectId: "project-one",
+    departmentId: "department-one",
+    version: 1,
+    status: "active",
+    kind,
+    subjectId,
+    requestedResources: [{ resourceId: "repository-one", capabilities: ["read_metadata"] }],
+    requestedModelProfileIds: ["model-shared"],
+    requestedKnowledgeCollectionIds: [],
+    requestedBudget: { ...budget(), maxConcurrentRuns: 1, maxAttemptsPerRun: 3, maxRunMinutes: 30 },
+    externalActionMode: "approval_required",
+    dataEgressMode: "forbidden",
+    additionalRequiredApprovalActions: [],
+    additionalForbiddenActions: [],
+  });
+  return {
+    workspaceId: "workspace-primary",
+    projects: [{
+      projectManifest: {
+        id: "project-one",
+        workspaceId: "workspace-primary",
+        version: 1,
+        name: "Project one",
+        slug: "project-one",
+        summary: "Bounded runtime project.",
+        kind: "internal_product",
+        status: "active",
+        defaultLocale: "en-US",
+        timeZone: "UTC",
+        dataRegion: "eu",
+        dataClassification: "confidential",
+        goals: ["Execute reviewed workflows"],
+        nonGoals: ["Autonomous external actions"],
+        tags: ["runtime"],
+        resources: [{
+          id: "repository-one",
+          kind: "code_repository",
+          label: "Repository one",
+          status: "connected",
+          connectionId: "connection-one",
+          resourceRef: "owner/repository-one",
+          capabilities: ["read_metadata"],
+        }],
+        allowedModelProfileIds: ["model-shared"],
+        knowledgeCollectionIds: [],
+        policy: {
+          externalActionMode: "approval_required",
+          dataEgressMode: "forbidden",
+          requiredApprovalActions: ["workflow-approval"],
+          forbiddenActions: [],
+        },
+        budget: budget(),
+      },
+      departmentManifests: [{
+        id: "department-one",
+        projectId: "project-one",
+        version: 1,
+        code: "development",
+        name: "Development",
+        summary: "Runtime department.",
+        status: "active",
+        operatingMode: "approval_gated",
+        goals: ["Execute bounded work"],
+        nonGoals: ["Deploy automatically"],
+        resourceGrants: [{ resourceId: "repository-one", capabilities: ["read_metadata"] }],
+        allowedModelProfileIds: ["model-shared"],
+        knowledgeCollectionIds: [],
+        enabledWorkflowIds: ["workflow-one"],
+        operatorRoleIds: ["role-owner"],
+        modelRouting: {
+          primaryModelProfileId: "model-shared",
+          fallbackModelProfileIds: [],
+          reviewerModelProfileId: null,
+          independentReviewRequired: false,
+        },
+        policy: {
+          externalActionMode: "approval_required",
+          dataEgressMode: "forbidden",
+          additionalRequiredApprovalActions: [],
+          additionalForbiddenActions: [],
+        },
+        budget: { ...budget(), maxConcurrentRuns: 3, maxAttemptsPerRun: 3, maxRunMinutes: 60 },
+      }],
+      bindings: [
+        ...agentIds.map((agentId) => subjectBinding("agent", agentId)),
+        subjectBinding("workflow", "workflow-one"),
+      ],
+    }],
+  };
+}
+
+function agent(agentId: string) {
+  return {
+    id: agentId,
+    projectId: "project-one",
+    departmentId: "department-one",
+    version: 1,
+    roleCode: "developer",
+    name: `Agent ${agentId}`,
+    summary: "Executes one factual workflow step.",
+    status: "active",
+    instructionProfileId: `instructions-${agentId}`,
+    goals: ["Produce a patch"],
+    nonGoals: ["Deploy"],
+    outputTypes: ["patch"],
+    allowedWorkflowIds: ["workflow-one"],
+    allowedToolIds: [],
+    allowedModelProfileIds: ["model-shared"],
+    knowledgeCollectionIds: [],
+    modelRouting: {
+      primaryModelProfileId: "model-shared",
+      fallbackModelProfileIds: [],
+      reviewerModelProfileId: null,
+      independentReviewRequired: false,
+    },
+    additionalRequiredApprovalActions: [],
+    additionalForbiddenActions: [],
+  };
+}
+
+function agentStep(id: string, agentId: string, dependsOnStepIds: readonly string[], maxAttempts = 2) {
+  return {
+    id,
+    kind: "agent_task",
+    name: `Execute ${id}`,
+    dependsOnStepIds,
+    agentId,
+    agentBindingId: `${agentId}-binding`,
+    outputType: "patch",
+    requestedResources: [{ resourceId: "repository-one", capabilities: ["read_metadata"] }],
+    modelProfileId: "model-shared",
+    knowledgeCollectionIds: [],
+    toolIds: [],
+    maxAttempts,
+    timeoutMinutes: 30,
+    actionMode: "proposal_only",
+    requiredApprovalAction: null,
+  };
+}
+
+function workflow(kind: "linear" | "branched" | "single" = "linear") {
+  const steps = kind === "linear"
+    ? [
+        agentStep("step-a", "agent-a", ["approval-one"]),
+        agentStep("step-b", "agent-b", ["step-a"]),
+        {
+          id: "approval-one",
+          kind: "approval_gate",
+          name: "Owner approval",
+          dependsOnStepIds: [],
+          approvalAction: "workflow-approval",
+        },
+      ]
+    : kind === "branched"
+      ? [
+          agentStep("step-d", "agent-d", ["step-b", "step-c"]),
+          agentStep("step-c", "agent-c", ["step-a"]),
+          agentStep("step-b", "agent-b", ["step-a"]),
+          agentStep("step-a", "agent-a", []),
+        ]
+      : [agentStep("step-a", "agent-a", [])];
+  return {
+    id: "workflow-one",
+    projectId: "project-one",
+    departmentId: "department-one",
+    version: 1,
+    name: "Workflow one",
+    summary: "Canonical runtime workflow.",
+    status: "active",
+    triggerMode: "manual",
+    goals: ["Produce reviewed output"],
+    nonGoals: ["Deploy"],
+    steps,
+    finalStepIds: kind === "linear" ? ["step-b"] : kind === "branched" ? ["step-d"] : ["step-a"],
+    additionalRequiredApprovalActions: [],
+    additionalForbiddenActions: [],
+  };
+}
+
+function creation(kind: "linear" | "branched" | "single" = "linear") {
+  const agentIds = kind === "linear"
+    ? ["agent-a", "agent-b"]
+    : kind === "branched"
+      ? ["agent-a", "agent-b", "agent-c", "agent-d"]
+      : ["agent-a"];
+  const registry = projectRegistry(agentIds);
+  return {
+    runId: "run-one",
+    requestId: "request-one",
+    createdAt: "2026-08-30T10:00:00.000Z",
+    schedulerInput: {
+      registry: clone(registry),
+      policy: {
+        workspaceId: "workspace-primary",
+        status: "active",
+        maxConcurrentRuns: 8,
+        maxQueuedRuns: 512,
+        projectPolicies: [{
+          projectId: "project-one",
+          status: "active",
+          maxQueuedRuns: 256,
+          allowedPriorities: ["P0", "P1", "P2", "P3", "P4"],
+        }],
+      },
+      queuedRequests: [{
+        id: "request-one",
+        workspaceId: "workspace-primary",
+        projectId: "project-one",
+        bindingId: "workflow-one-binding",
+        modelProfileId: "model-shared",
+        idempotencyKey: "idempotency-one",
+        priority: "P2",
+        sequence: 1,
+      }],
+      runningRuns: [],
+      lastDispatchedProjectId: null,
+    },
+    workflowCatalog: {
+      registry,
+      agents: agentIds.map((agentId) => ({
+        bindingId: `${agentId}-binding`,
+        agentManifest: agent(agentId),
+      })),
+      workflows: [{ bindingId: "workflow-one-binding", workflowManifest: workflow(kind) }],
+    },
+  };
+}
+
+function modelProviderRegistry() {
+  return {
+    workspaceId: "workspace-primary",
+    version: 1,
+    providers: [{
+      id: "provider-mock",
+      kind: "mock",
+      status: "active",
+      deploymentMode: "local",
+      supportedDataRegions: ["eu"],
+      supportedDataEgressModes: ["forbidden"],
+      capabilities: ["messages"],
+    }],
+    deployments: [{
+      id: "deployment-mock",
+      providerId: "provider-mock",
+      status: "active",
+      providerModelId: "mock/model:v1",
+      providerModelVersion: "version-1",
+      capabilities: ["messages"],
+      supportedOutputTypes: ["patch"],
+      maxInputTokens: 128_000,
+      maxOutputTokens: 16_000,
+      inputCostUsdMicrosPerMillionTokens: 1_000_000,
+      outputCostUsdMicrosPerMillionTokens: 2_000_000,
+      latencyClass: "standard",
+      qualityTier: "reasoning",
+    }],
+    modelProfiles: [{
+      modelProfileId: "model-shared",
+      status: "active",
+      requiredCapabilities: ["messages"],
+      supportedOutputTypes: ["patch"],
+      candidates: [{ deploymentId: "deployment-mock", priority: 1 }],
+    }],
+  };
+}
+
+function initialState(kind: "linear" | "branched" | "single" = "linear"): RuntimeState {
+  const input = creation(kind);
+  const created = createWorkflowRunSnapshot(input);
+  assert.equal(created.verdict, "allow", JSON.stringify(created.reasons));
+  assert.ok(created.snapshot);
+  return {
+    snapshot: created.snapshot,
+    projectRegistry: input.workflowCatalog.registry,
+    modelProviderRegistry: modelProviderRegistry(),
+    existingRequests: [],
+    pause: null,
+  };
+}
+
+class FakeStore implements RuntimeStore {
+  state: RuntimeState;
+  claims = new Map<string, { claimId: string; executionId: string }>();
+  commands = new Map<string, { fingerprint: string; response: RuntimeResponse | null }>();
+  casConflicts = 0;
+  compareAndSwapThrows = 0;
+  releaseClaimThrows = 0;
+  completeCommandThrows = 0;
+  abandonCommandThrows = 0;
+  releaseAttempts = 0;
+  completeAttempts = 0;
+  abandonAttempts = 0;
+  loadAttempts = 0;
+
+  constructor(state: RuntimeState) {
+    this.state = clone(state);
+  }
+
+  async load({ runId }: { runId: string }) {
+    this.loadAttempts += 1;
+    return runId === this.state.snapshot.runId ? clone(this.state) : null;
+  }
+
+  async beginCommand(input: CommandBeginInput) {
+    const existing = this.commands.get(input.commandId);
+    if (!existing) {
+      this.commands.set(input.commandId, { fingerprint: input.fingerprint, response: null });
+      return { status: "acquired" as const };
+    }
+    if (existing.fingerprint !== input.fingerprint) return { status: "conflict" as const };
+    return existing.response
+      ? { status: "replay" as const, response: clone(existing.response) }
+      : { status: "in_progress" as const };
+  }
+
+  async completeCommand(input: {
+    commandId: string;
+    fingerprint: string;
+    response: RuntimeResponse;
+  }) {
+    this.completeAttempts += 1;
+    if (this.completeCommandThrows > 0) {
+      this.completeCommandThrows -= 1;
+      throw new Error("sensitive completeCommand failure");
+    }
+    this.commands.set(input.commandId, {
+      fingerprint: input.fingerprint,
+      response: clone(input.response),
+    });
+  }
+
+  async abandonCommand(input: CommandBeginInput) {
+    this.abandonAttempts += 1;
+    if (this.abandonCommandThrows > 0) {
+      this.abandonCommandThrows -= 1;
+      throw new Error("sensitive abandonCommand failure");
+    }
+    const current = this.commands.get(input.commandId);
+    if (current?.fingerprint === input.fingerprint && current.response === null) {
+      this.commands.delete(input.commandId);
+    }
+  }
+
+  async claim(input: ClaimInput) {
+    const key = `${input.runId}:${input.stepId}:${input.attemptNumber}:${input.expectedRevision}`;
+    const existing = this.claims.get(key);
+    if (existing) {
+      return {
+        status: existing.executionId === input.executionId ? "idempotent" as const : "conflict" as const,
+        claimId: null,
+      };
+    }
+    const claimId = `claim-${this.claims.size + 1}`;
+    this.claims.set(key, { claimId, executionId: input.executionId });
+    return { status: "acquired" as const, claimId };
+  }
+
+  async compareAndSwap(input: CompareAndSwapInput) {
+    if (this.compareAndSwapThrows > 0) {
+      this.compareAndSwapThrows -= 1;
+      throw new Error("sensitive compareAndSwap failure");
+    }
+    if (this.casConflicts > 0) {
+      this.casConflicts -= 1;
+      return { status: "conflict" as const, state: clone(this.state) };
+    }
+    if (this.state.snapshot.revision !== input.expectedRevision) {
+      return { status: "conflict" as const, state: clone(this.state) };
+    }
+    if (input.claimId && ![...this.claims.values()].some((claim) => claim.claimId === input.claimId)) {
+      return { status: "conflict" as const, state: clone(this.state) };
+    }
+    this.state = clone(input.nextState);
+    return { status: "committed" as const, state: clone(this.state) };
+  }
+
+  async releaseClaim({ claimId }: { runId: string; claimId: string }) {
+    this.releaseAttempts += 1;
+    if (this.releaseClaimThrows > 0) {
+      this.releaseClaimThrows -= 1;
+      throw new Error("sensitive releaseClaim failure");
+    }
+    for (const [key, claim] of this.claims) if (claim.claimId === claimId) this.claims.delete(key);
+  }
+}
+
+function capability(taskClass = "analysis", requestedCapability = "reasoning") {
+  return {
+    taskClass,
+    requestedCapability,
+    riskLevel: "medium",
+    requiresModel: requestedCapability !== "deterministic",
+    requiresRepositoryRead: true,
+    requiresRepositoryWrite: requestedCapability === "coding",
+    requiresCommandExecution: requestedCapability === "coding",
+    requiresNetwork: false,
+    budget: { maxInputTokens: 16_000, maxOutputTokens: 4_000, maxCostUsdMicros: 500_000 },
+  };
+}
+
+function provider(options: {
+  healthStatuses?: string[];
+  throwHealth?: boolean;
+  pendingHealth?: Promise<unknown>;
+  onHealth?: () => void;
+  onRun?: (stepId: string, agentId: string) => void;
+} = {}) {
+  let healthCalls = 0;
+  let runCalls = 0;
+  const adapter = {
+      identity: {
+        providerId: "provider-mock",
+        providerKind: "mock",
+        deploymentId: "deployment-mock",
+        providerModelId: "mock/model:v1",
+        providerModelVersion: "version-1",
+      },
+      async health() {
+        healthCalls += 1;
+        options.onHealth?.();
+        if (options.throwHealth) throw new Error("transient provider exception");
+        if (options.pendingHealth) return options.pendingHealth;
+        return validateAndNormalizeModelProviderHealth({
+          providerId: "provider-mock",
+          deploymentId: "deployment-mock",
+          status: options.healthStatuses?.shift() ?? "healthy",
+          observedAt: "2026-08-30T10:00:10.000Z",
+          latencyMs: 1,
+          detailCode: null,
+        });
+      },
+      async run(input: unknown) {
+        runCalls += 1;
+        const requestDecision = validateAndNormalizeModelInvocationRequest(input);
+        assert.ok(requestDecision.normalizedRequest);
+        const request = requestDecision.normalizedRequest;
+        options.onRun?.(request.stepId, request.agentId);
+        const normalizedResult = {
+          invocationId: request.invocationId,
+          outcome: "succeeded",
+          finishReason: "stop",
+          providerId: "provider-mock",
+          providerModelId: "mock/model:v1",
+          providerModelVersion: "version-1",
+          outputText: `Output for ${request.stepId}`,
+          structuredOutput: null,
+          toolCallProposals: [],
+          usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+          latencyMs: 5,
+          costUsdMicros: 0,
+          error: null,
+        };
+        const resultDecision = validateAndNormalizeModelInvocationResult(normalizedResult);
+        return { verdict: "allow", reasons: [], requestDecision, resultDecision, normalizedResult };
+      },
+    } as ModelProvider;
+  return {
+    adapter,
+    counts: () => ({ health: healthCalls, run: runCalls }),
+  };
+}
+
+function dependencies(
+  store: FakeStore,
+  runtimeProvider: ReturnType<typeof provider>,
+  options: {
+    authorize?: boolean;
+    requirements?: (stepId: string) => Record<string, unknown>;
+    observedRequirements?: Array<{ stepId: string; agentId: string }>;
+  } = {},
+): RuntimeDependencies {
+  return {
+    store,
+    authorizer: {
+      async authorize(input: AuthorizationInput) {
+        return options.authorize ?? input.actorId === "owner-one";
+      },
+    },
+    providers: [runtimeProvider.adapter],
+    requirementsResolver: {
+      async resolve(input: any) {
+        options.observedRequirements?.push({ stepId: input.stepId, agentId: input.agentId });
+        return options.requirements?.(input.stepId) ?? capability();
+      },
+    },
+    runtimeContext: { now: () => "2026-08-30T10:00:10.000Z" },
+  };
+}
+
+function draft(stepId: string, suffix = "one"): InvocationDraft {
+  return {
+    invocationId: `invocation-${stepId}-${suffix}`,
+    invocationSequence: suffix === "two" ? 2 : 1,
+    stepId,
+    messages: [
+      { role: "system", content: "Follow bounded instructions.", toolCallId: null },
+      { role: "user", content: `Execute ${stepId}.`, toolCallId: null },
+    ],
+    contextArtifactIds: [],
+  };
+}
+
+function advanceCommand(
+  revision: number,
+  stepIds: readonly string[],
+  commandId = "advance-one",
+  suffix = "one",
+): AdvanceCommand {
+  return {
+    kind: "advance" as const,
+    commandId,
+    runId: "run-one",
+    expectedRevision: revision,
+    actorId: "owner-one",
+    agentInputs: stepIds.map((stepId) => ({
+      stepId,
+      executionId: `execution-${stepId}-${suffix}`,
+      invocationDraft: draft(stepId, suffix),
+    })),
+  };
+}
+
+async function start(service: RuntimeService, commandId = "start-one") {
+  return service.start({
+    kind: "start",
+    commandId,
+    runId: "run-one",
+    expectedRevision: 0,
+    actorId: "owner-one",
+  });
+}
+
+test("linear multi-agent workflow pauses, approves, resumes, and completes canonically", async () => {
+  const store = new FakeStore(initialState("linear"));
+  const runtimeProvider = provider();
+  const observed: Array<{ stepId: string; agentId: string }> = [];
+  const service = createWorkflowRuntimeService(dependencies(store, runtimeProvider, {
+    observedRequirements: observed,
+  }));
+  assert.equal((await start(service)).status, "running");
+  const waiting = await service.advance(advanceCommand(1, ["step-a", "step-b"]));
+  assert.equal(waiting.status, "waiting_approval");
+  assert.equal(waiting.waitingApproval?.stepId, "approval-one");
+  assert.equal(runtimeProvider.counts().run, 0);
+  const approved = await service.approve({
+    kind: "approve",
+    commandId: "approve-one",
+    runId: "run-one",
+    expectedRevision: waiting.revision!,
+    actorId: "owner-one",
+    stepId: "approval-one",
+    approvalRequestId: waiting.waitingApproval!.approvalRequestId!,
+  });
+  assert.equal(approved.status, "running");
+  const completed = await service.advance(advanceCommand(approved.revision!, ["step-a", "step-b"], "advance-two"));
+  assert.equal(completed.status, "completed", JSON.stringify(completed.reasons));
+  assert.equal(completed.workflowStatus, "completed");
+  assert.deepEqual(observed, [
+    { stepId: "step-a", agentId: "agent-a" },
+    { stepId: "step-b", agentId: "agent-b" },
+  ]);
+  assert.deepEqual(runtimeProvider.counts(), { health: 2, run: 2 });
+  assert.equal(frozen(completed), true);
+});
+
+test("branched DAG executes simultaneous ready steps sequentially in canonical order", async () => {
+  const store = new FakeStore(initialState("branched"));
+  const order: string[] = [];
+  const identities: string[] = [];
+  const runtimeProvider = provider({ onRun: (stepId, agentId) => { order.push(stepId); identities.push(agentId); } });
+  const service = createWorkflowRuntimeService(dependencies(store, runtimeProvider));
+  await start(service);
+  const result = await service.advance(advanceCommand(1, ["step-d", "step-c", "step-b", "step-a"]));
+  assert.equal(result.status, "completed", JSON.stringify(result.reasons));
+  assert.deepEqual(order, ["step-a", "step-b", "step-c", "step-d"]);
+  assert.deepEqual(identities, ["agent-a", "agent-b", "agent-c", "agent-d"]);
+});
+
+test("missing Agent input produces bounded no-progress without synthetic success", async () => {
+  const store = new FakeStore(initialState("single"));
+  const runtimeProvider = provider();
+  const service = createWorkflowRuntimeService(dependencies(store, runtimeProvider));
+  await start(service);
+  const result = await service.advance(advanceCommand(1, []));
+  assert.equal(result.status, "no_progress");
+  assert.equal(result.workflowStatus, "running");
+  assert.equal(result.reasons[0]?.code, "agent_input_missing");
+  assert.deepEqual(runtimeProvider.counts(), { health: 0, run: 0 });
+});
+
+test("transient provider failure commits retry-ready state and later advance owns attempt two", async () => {
+  const store = new FakeStore(initialState("single"));
+  const runtimeProvider = provider({ healthStatuses: ["unavailable", "healthy"] });
+  const service = createWorkflowRuntimeService(dependencies(store, runtimeProvider));
+  await start(service);
+  const retry = await service.advance(advanceCommand(1, ["step-a"]));
+  assert.equal(retry.status, "retry_pending");
+  assert.equal(retry.retryPending?.attemptCount, 1);
+  assert.deepEqual(runtimeProvider.counts(), { health: 1, run: 0 });
+  const completed = await service.advance(
+    advanceCommand(retry.revision!, ["step-a"], "advance-two", "two"),
+  );
+  assert.equal(completed.status, "completed", JSON.stringify(completed.reasons));
+  assert.deepEqual(runtimeProvider.counts(), { health: 2, run: 1 });
+  assert.equal(store.state.snapshot.stepStates[0]?.attemptCount, 2);
+});
+
+test("permanent AI-029 provider failure commits canonical Workflow failure", async () => {
+  const store = new FakeStore(initialState("single"));
+  const runtimeProvider = provider();
+  const deps = dependencies(store, runtimeProvider);
+  const service = createWorkflowRuntimeService({ ...deps, providers: [] });
+  await start(service);
+  const result = await service.advance(advanceCommand(1, ["step-a"]));
+  assert.equal(result.status, "failed");
+  assert.equal(result.workflowStatus, "failed");
+  assert.deepEqual(runtimeProvider.counts(), { health: 0, run: 0 });
+});
+
+test("AI-029 risk approval creates a runtime pause without fabricating a Workflow status", async () => {
+  const store = new FakeStore(initialState("single"));
+  const runtimeProvider = provider();
+  const service = createWorkflowRuntimeService(dependencies(store, runtimeProvider, {
+    requirements: () => ({
+      ...capability("security_analysis", "advanced_reasoning"),
+      riskLevel: "high",
+    }),
+  }));
+  await start(service);
+  const paused = await service.advance(advanceCommand(1, ["step-a"]));
+  assert.equal(paused.status, "approval_required");
+  assert.equal(paused.workflowStatus, "running");
+  assert.deepEqual(paused.waitingApproval, {
+    kind: "runtime_risk",
+    stepId: "step-a",
+    approvalRequestId: null,
+  });
+  assert.deepEqual(runtimeProvider.counts(), { health: 0, run: 0 });
+  assert.equal(store.state.pause?.kind, "risk_approval");
+  assert.equal(store.state.snapshot.revision, 1);
+  const repeatedAdvance = await service.advance(
+    advanceCommand(1, ["step-a"], "advance-after-risk-pause"),
+  );
+  assert.equal(repeatedAdvance.status, "approval_required");
+  assert.deepEqual(runtimeProvider.counts(), { health: 0, run: 0 });
+});
+
+for (const [taskClass, requestedCapability] of [
+  ["deterministic_operation", "deterministic"],
+  ["implementation", "coding"],
+] as const) {
+  test(`${requestedCapability} stops as unsupported without model execution`, async () => {
+    const store = new FakeStore(initialState("single"));
+    const runtimeProvider = provider();
+    const service = createWorkflowRuntimeService(dependencies(store, runtimeProvider, {
+      requirements: () => capability(taskClass, requestedCapability),
+    }));
+    await start(service);
+    const result = await service.advance(advanceCommand(1, ["step-a"]));
+    assert.equal(result.status, "unsupported_runtime");
+    assert.equal(result.workflowStatus, "running");
+    assert.deepEqual(runtimeProvider.counts(), { health: 0, run: 0 });
+  });
+}
+
+test("approval reject and mismatched/stale approval commands fail closed", async () => {
+  const store = new FakeStore(initialState("linear"));
+  const runtimeProvider = provider();
+  const service = createWorkflowRuntimeService(dependencies(store, runtimeProvider));
+  await start(service);
+  const waiting = await service.advance(advanceCommand(1, ["step-a", "step-b"]));
+  const wrong = await service.approve({
+    kind: "approve",
+    commandId: "approve-wrong",
+    runId: "run-one",
+    expectedRevision: waiting.revision!,
+    actorId: "owner-one",
+    stepId: "approval-one",
+    approvalRequestId: "approval-wrong",
+  });
+  assert.equal(wrong.reasons[0]?.code, "approval_mismatch");
+  const stale = await service.approve({
+    kind: "approve",
+    commandId: "approve-stale",
+    runId: "run-one",
+    expectedRevision: 0,
+    actorId: "owner-one",
+    stepId: "approval-one",
+    approvalRequestId: waiting.waitingApproval!.approvalRequestId!,
+  });
+  assert.equal(stale.reasons[0]?.code, "stale_revision");
+  const rejected = await service.reject({
+    kind: "reject",
+    commandId: "reject-one",
+    runId: "run-one",
+    expectedRevision: waiting.revision!,
+    actorId: "owner-one",
+    stepId: "approval-one",
+    approvalRequestId: waiting.waitingApproval!.approvalRequestId!,
+    reason: "Owner rejected the external action.",
+  });
+  assert.equal(rejected.status, "failed");
+  assert.equal(rejected.workflowStatus, "blocked");
+});
+
+test("caller identity is only a needle and cannot self-authorize privileged commands", async () => {
+  const store = new FakeStore(initialState("single"));
+  const runtimeProvider = provider();
+  const service = createWorkflowRuntimeService(dependencies(store, runtimeProvider));
+  const result = await service.start({
+    kind: "start",
+    commandId: "start-denied",
+    runId: "run-one",
+    expectedRevision: 0,
+    actorId: "self-asserted-owner",
+  });
+  assert.equal(result.reasons[0]?.code, "authorization_denied");
+  assert.equal(store.state.snapshot.status, "queued");
+});
+
+test("every direct service entrypoint uses the same exact hostile-safe command boundary", async () => {
+  const store = new FakeStore(initialState("single"));
+  const runtimeProvider = provider();
+  const service = createWorkflowRuntimeService(dependencies(store, runtimeProvider));
+  let getterReads = 0;
+  const getterAdvance = Object.defineProperty({
+    kind: "advance",
+    commandId: "advance-getter",
+    runId: "run-one",
+    expectedRevision: 0,
+    actorId: "owner-one",
+  }, "agentInputs", {
+    enumerable: true,
+    get() { getterReads += 1; return []; },
+  });
+  const proxiedAdvance = new Proxy(advanceCommand(0, [], "advance-proxy"), {});
+  const invalidCalls = [
+    () => (service.start as any)({
+      kind: "start", commandId: "start-extra", runId: "run-one",
+      expectedRevision: 0, actorId: "owner-one", extra: true,
+    }),
+    () => (service.advance as any)(getterAdvance),
+    () => (service.advance as any)(proxiedAdvance),
+    () => (service.approve as any)({
+      kind: "approve", commandId: "approve-extra", runId: "run-one",
+      expectedRevision: 0, actorId: "owner-one", stepId: "approval-one",
+      approvalRequestId: "approval-one", extra: true,
+    }),
+    () => (service.reject as any)({
+      kind: "reject", commandId: "reject-extra", runId: "run-one",
+      expectedRevision: 0, actorId: "owner-one", stepId: "approval-one",
+      approvalRequestId: "approval-one", reason: "No.", extra: true,
+    }),
+    () => (service.cancel as any)({
+      kind: "cancel", commandId: "cancel-extra", runId: "run-one",
+      expectedRevision: 0, actorId: "owner-one", extra: true,
+    }),
+    () => (service.get as any)({ kind: "get", runId: "run-one", actorId: "owner-one", extra: true }),
+    () => (service.execute as any)({ kind: "unknown", runId: "run-one", actorId: "owner-one" }),
+  ];
+  for (const call of invalidCalls) {
+    const result = await call();
+    assert.equal(result.verdict, "deny");
+    assert.equal(result.reasons[0]?.code, "invalid_command");
+  }
+  assert.equal(getterReads, 0);
+  assert.equal(store.loadAttempts, 0);
+  assert.equal(store.commands.size, 0);
+});
+
+test("canonical handler and direct service execution return equivalent valid decisions", async () => {
+  const directStore = new FakeStore(initialState("single"));
+  const handlerStore = new FakeStore(initialState("single"));
+  const directService = createWorkflowRuntimeService(dependencies(directStore, provider()));
+  const handlerService = createWorkflowRuntimeService(dependencies(handlerStore, provider()));
+  const command = {
+    kind: "start" as const,
+    commandId: "start-equivalent",
+    runId: "run-one",
+    expectedRevision: 0,
+    actorId: "owner-one",
+  };
+  const direct = await directService.start(command);
+  const handled = await handleWorkflowRuntimeCommand(clone(command), handlerService);
+  assert.deepEqual(handled, direct);
+  assert.equal(frozen(direct), true);
+  assert.equal(frozen(handled), true);
+});
+
+test("command replay is idempotent while same commandId with changed payload conflicts", async () => {
+  const store = new FakeStore(initialState("single"));
+  const runtimeProvider = provider();
+  const service = createWorkflowRuntimeService(dependencies(store, runtimeProvider));
+  const command = {
+    kind: "start" as const,
+    commandId: "start-one",
+    runId: "run-one",
+    expectedRevision: 0,
+    actorId: "owner-one",
+  };
+  const first = await service.start(command);
+  const replay = await service.start(clone(command));
+  assert.equal(first.status, "running");
+  assert.equal(replay.verdict, "idempotent");
+  assert.equal(replay.revision, first.revision);
+  const conflict = await service.start({ ...command, expectedRevision: 1 });
+  assert.equal(conflict.reasons[0]?.code, "idempotency_conflict");
+});
+
+test("one factual attempt claim prevents a concurrent second AI-029/provider call", async () => {
+  const store = new FakeStore(initialState("single"));
+  let releaseHealth: (value: unknown) => void = () => { throw new Error("not ready"); };
+  const pendingHealth = new Promise<unknown>((resolve) => { releaseHealth = resolve; });
+  let notifyHealth: () => void = () => { throw new Error("not ready"); };
+  const healthStarted = new Promise<void>((resolve) => { notifyHealth = resolve; });
+  const runtimeProvider = provider({ pendingHealth, onHealth: notifyHealth });
+  const service = createWorkflowRuntimeService(dependencies(store, runtimeProvider));
+  await start(service);
+  const first = service.advance(advanceCommand(1, ["step-a"], "advance-first"));
+  await healthStarted;
+  const second = await service.advance(advanceCommand(1, ["step-a"], "advance-second"));
+  assert.equal(second.status, "conflict");
+  assert.equal(second.reasons[0]?.code, "claim_conflict");
+  assert.deepEqual(runtimeProvider.counts(), { health: 1, run: 0 });
+  releaseHealth(validateAndNormalizeModelProviderHealth({
+    providerId: "provider-mock",
+    deploymentId: "deployment-mock",
+    status: "healthy",
+    observedAt: "2026-08-30T10:00:10.000Z",
+    latencyMs: 1,
+    detailCode: null,
+  }));
+  assert.equal((await first).status, "completed");
+  assert.deepEqual(runtimeProvider.counts(), { health: 1, run: 1 });
+});
+
+test("CAS conflict discards a completed model result without overwriting newer state", async () => {
+  const store = new FakeStore(initialState("single"));
+  const runtimeProvider = provider();
+  const service = createWorkflowRuntimeService(dependencies(store, runtimeProvider));
+  await start(service);
+  store.casConflicts = 1;
+  const result = await service.advance(advanceCommand(1, ["step-a"]));
+  assert.equal(result.status, "conflict");
+  assert.equal(result.reasons[0]?.code, "state_conflict");
+  assert.equal(store.state.snapshot.revision, 1);
+  assert.deepEqual(runtimeProvider.counts(), { health: 1, run: 1 });
+});
+
+test("compareAndSwap exception fails closed, releases the claim, and never retries the provider", async () => {
+  const store = new FakeStore(initialState("single"));
+  const runtimeProvider = provider();
+  const service = createWorkflowRuntimeService(dependencies(store, runtimeProvider));
+  await start(service);
+  store.compareAndSwapThrows = 1;
+  const result = await service.advance(advanceCommand(1, ["step-a"]));
+  assert.equal(result.verdict, "deny");
+  assert.equal(result.status, "denied");
+  assert.equal(result.reasons.some((reason) => (
+    reason.code === "state_store_failed" && reason.path === "store.compareAndSwap"
+  )), true);
+  assert.equal(JSON.stringify(result).includes("sensitive compareAndSwap failure"), false);
+  assert.equal(store.releaseAttempts, 1);
+  assert.equal(store.claims.size, 0);
+  assert.deepEqual(runtimeProvider.counts(), { health: 1, run: 1 });
+});
+
+test("claim release is attempted after CAS conflict and after successful AI-029 commit", async () => {
+  const conflictStore = new FakeStore(initialState("single"));
+  const conflictProvider = provider();
+  const conflictService = createWorkflowRuntimeService(dependencies(conflictStore, conflictProvider));
+  await start(conflictService);
+  conflictStore.casConflicts = 1;
+  assert.equal((await conflictService.advance(advanceCommand(1, ["step-a"]))).status, "conflict");
+  assert.equal(conflictStore.releaseAttempts, 1);
+  assert.equal(conflictStore.claims.size, 0);
+
+  const successStore = new FakeStore(initialState("single"));
+  const successProvider = provider();
+  const successService = createWorkflowRuntimeService(dependencies(successStore, successProvider));
+  await start(successService);
+  assert.equal((await successService.advance(advanceCommand(1, ["step-a"]))).status, "completed");
+  assert.equal(successStore.releaseAttempts, 1);
+  assert.equal(successStore.claims.size, 0);
+  assert.deepEqual(successProvider.counts(), { health: 1, run: 1 });
+});
+
+test("AI-029 dependency exception still reaches the single claim-release path", async () => {
+  const store = new FakeStore(initialState("single"));
+  const runtimeProvider = provider();
+  const base = dependencies(store, runtimeProvider);
+  const service = createWorkflowRuntimeService({
+    ...base,
+    requirementsResolver: {
+      async resolve() {
+        throw new Error("sensitive requirements failure");
+      },
+    },
+  });
+  await start(service);
+  const result = await service.advance(advanceCommand(1, ["step-a"]));
+  assert.equal(result.verdict, "deny");
+  assert.equal(store.releaseAttempts, 1);
+  assert.equal(store.claims.size, 0);
+  assert.equal(JSON.stringify(result).includes("sensitive requirements failure"), false);
+  assert.deepEqual(runtimeProvider.counts(), { health: 0, run: 0 });
+});
+
+test("releaseClaim exception is audit-safe after a committed at-most-once Agent result", async () => {
+  const store = new FakeStore(initialState("single"));
+  const runtimeProvider = provider();
+  const service = createWorkflowRuntimeService(dependencies(store, runtimeProvider));
+  await start(service);
+  store.releaseClaimThrows = 1;
+  const result = await service.advance(advanceCommand(1, ["step-a"]));
+  assert.equal(result.verdict, "deny");
+  assert.equal(result.status, "denied");
+  assert.equal(result.revision, 3);
+  assert.equal(result.reasons.some((reason) => (
+    reason.code === "state_store_failed" && reason.path === "store.releaseClaim"
+  )), true);
+  assert.equal(JSON.stringify(result).includes("sensitive releaseClaim failure"), false);
+  assert.equal(store.releaseAttempts, 1);
+  assert.deepEqual(runtimeProvider.counts(), { health: 1, run: 1 });
+});
+
+test("completeCommand exception returns store failure and abandons recoverable in-progress command", async () => {
+  const store = new FakeStore(initialState("single"));
+  const runtimeProvider = provider();
+  const service = createWorkflowRuntimeService(dependencies(store, runtimeProvider));
+  store.completeCommandThrows = 1;
+  const first = await start(service);
+  assert.equal(first.verdict, "deny");
+  assert.equal(first.revision, 1);
+  assert.equal(first.reasons.some((reason) => (
+    reason.code === "state_store_failed" && reason.path === "store.completeCommand"
+  )), true);
+  assert.equal(JSON.stringify(first).includes("sensitive completeCommand failure"), false);
+  assert.equal(store.abandonAttempts, 1);
+  assert.equal(store.commands.has("start-one"), false);
+  const repeated = await start(service);
+  assert.notEqual(repeated.reasons[0]?.code, "command_in_progress");
+  assert.equal(store.completeAttempts, 2);
+  assert.deepEqual(runtimeProvider.counts(), { health: 0, run: 0 });
+});
+
+test("abandonCommand exception is reported separately without exposing store text", async () => {
+  const store = new FakeStore(initialState("single"));
+  const runtimeProvider = provider();
+  const service = createWorkflowRuntimeService(dependencies(store, runtimeProvider));
+  store.completeCommandThrows = 1;
+  store.abandonCommandThrows = 1;
+  const result = await start(service);
+  assert.equal(result.verdict, "deny");
+  assert.deepEqual(
+    result.reasons.filter((reason) => reason.code === "state_store_failed").map((reason) => reason.path),
+    ["store.completeCommand", "store.abandonCommand"],
+  );
+  assert.equal(JSON.stringify(result).includes("sensitive abandonCommand failure"), false);
+  assert.equal(store.abandonAttempts, 1);
+});
+
+test("cancellation wins a race and late AI-029 completion cannot overwrite it", async () => {
+  const store = new FakeStore(initialState("single"));
+  let releaseHealth: (value: unknown) => void = () => { throw new Error("not ready"); };
+  const pendingHealth = new Promise<unknown>((resolve) => { releaseHealth = resolve; });
+  let notifyHealth: () => void = () => { throw new Error("not ready"); };
+  const healthStarted = new Promise<void>((resolve) => { notifyHealth = resolve; });
+  const runtimeProvider = provider({ pendingHealth, onHealth: notifyHealth });
+  const service = createWorkflowRuntimeService(dependencies(store, runtimeProvider));
+  await start(service);
+  const advance = service.advance(advanceCommand(1, ["step-a"]));
+  await healthStarted;
+  const cancelled = await service.cancel({
+    kind: "cancel",
+    commandId: "cancel-one",
+    runId: "run-one",
+    expectedRevision: 1,
+    actorId: "owner-one",
+  });
+  assert.equal(cancelled.status, "cancelled");
+  releaseHealth(validateAndNormalizeModelProviderHealth({
+    providerId: "provider-mock",
+    deploymentId: "deployment-mock",
+    status: "healthy",
+    observedAt: "2026-08-30T10:00:10.000Z",
+    latencyMs: 1,
+    detailCode: null,
+  }));
+  const late = await advance;
+  assert.equal(late.status, "conflict");
+  assert.equal(store.state.snapshot.status, "cancelled");
+  const blockedAdvance = await service.advance(
+    advanceCommand(store.state.snapshot.revision, ["step-a"], "advance-after-cancel"),
+  );
+  assert.equal(blockedAdvance.status, "cancelled");
+});
+
+test("duplicate cancellation is idempotent and never creates another event", async () => {
+  const store = new FakeStore(initialState("single"));
+  const runtimeProvider = provider();
+  const service = createWorkflowRuntimeService(dependencies(store, runtimeProvider));
+  await start(service);
+  const first = await service.cancel({
+    kind: "cancel",
+    commandId: "cancel-one",
+    runId: "run-one",
+    expectedRevision: 1,
+    actorId: "owner-one",
+  });
+  const eventCount = store.state.snapshot.events.length;
+  const second = await service.cancel({
+    kind: "cancel",
+    commandId: "cancel-two",
+    runId: "run-one",
+    expectedRevision: 1,
+    actorId: "owner-one",
+  });
+  assert.equal(first.status, "cancelled");
+  assert.equal(second.verdict, "idempotent");
+  assert.equal(store.state.snapshot.events.length, eventCount);
+});
+
+test("get returns an audit-safe view without trusted registries, history, or raw output", async () => {
+  const store = new FakeStore(initialState("single"));
+  const runtimeProvider = provider();
+  const service = createWorkflowRuntimeService(dependencies(store, runtimeProvider));
+  const result = await service.get({ kind: "get", runId: "run-one", actorId: "owner-one" });
+  assert.equal(result.status, "running");
+  assert.equal(JSON.stringify(result).includes("projectRegistry"), false);
+  assert.equal(JSON.stringify(result).includes("modelProviderRegistry"), false);
+  assert.equal(JSON.stringify(result).includes("existingRequests"), false);
+  assert.equal(frozen(result), true);
+});
+
+test("source uses AI-029 once and contains no persistence, network, fallback, parallel, or retry loop", () => {
+  const source = readFileSync(
+    new URL("../lib/workflows/workflow-runtime-service.ts", import.meta.url),
+    "utf8",
+  );
+  assert.equal((source.match(/executeAgentStep\(/gu) ?? []).length, 1);
+  for (const token of [
+    "Open" + "AI", "Anth" + "ropic", "Q" + "wen", "Cod" + "ex", "fetch(",
+    "http://", "https://", "node:fs", "child_process", "process.env", "writeFile",
+    "prisma", "postgres", "Redis", "BullMQ", "Promise.all", "plan." + "fallbacks",
+    "while (true)", "for (;;)", "setTimeout", "setInterval",
+  ]) assert.equal(source.includes(token), false, token);
+});
