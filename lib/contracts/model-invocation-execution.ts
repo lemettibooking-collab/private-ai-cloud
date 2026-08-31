@@ -1,4 +1,5 @@
 import type {
+  ModelInvocationMessage,
   ModelInvocationReason,
   ModelInvocationRequest,
   ModelInvocationRequestValidationDecision,
@@ -7,6 +8,7 @@ import type {
   ModelInvocationResultValidationDecision,
 } from "./model-invocation";
 import type {
+  ModelDataHandlingRequirement,
   ModelInvocationRouteCandidate,
   ModelInvocationRouteResolutionDecision,
 } from "./model-provider-registry";
@@ -16,6 +18,10 @@ import type {
   ModelProviderHealthValidationDecision,
   ModelProviderIdentity,
 } from "./model-provider-adapter";
+import type {
+  ModelInvocationDataHandlingDecision,
+  ModelInvocationDataHandlingPermit,
+} from "./model-invocation-data-handling";
 // @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
 import { evaluateModelInvocationResult } from "./model-invocation.ts";
 // @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
@@ -42,6 +48,10 @@ import { snapshotModelProviderAdapterInput } from "./model-provider-adapter.ts";
 import { validateAndNormalizeModelProviderHealth } from "./model-provider-adapter.ts";
 // @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
 import { validateAndNormalizeModelProviderIdentity } from "./model-provider-adapter.ts";
+// @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
+import { createModelInvocationRequestFingerprint } from "./model-invocation-data-handling.ts";
+// @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
+import { evaluateModelInvocationDataHandling } from "./model-invocation-data-handling.ts";
 
 export const modelInvocationExecutionVerdicts = Object.freeze(["allow", "deny"] as const);
 export type ModelInvocationExecutionVerdict = (typeof modelInvocationExecutionVerdicts)[number];
@@ -67,6 +77,10 @@ export type ModelInvocationExecutionReasonCode =
   | "provider_not_registered"
   | "provider_identity_mismatch"
   | "data_handling_not_executable"
+  | "data_handling_evidence_source_unavailable"
+  | "data_handling_evidence_resolution_failed"
+  | "data_handling_denied"
+  | "data_handling_invariant_violation"
   | "invalid_health_decision"
   | "provider_unavailable"
   | "no_available_provider"
@@ -87,16 +101,65 @@ export type ModelInvocationExecutionReason = Readonly<{
   deploymentId: string | null;
 }>;
 
+export type ModelInvocationExecutionRouteDecision = Readonly<Pick<
+  ModelInvocationRouteResolutionDecision,
+  "verdict" | "reasons" | "routePlan"
+>>;
+
+export type ModelInvocationExecutionInput = Readonly<{
+  routeInput: unknown;
+  candidateIdentity: unknown;
+}>;
+
+export interface ModelInvocationExecutionRuntimeContext {
+  now(): string;
+}
+
+type ModelInvocationDataHandlingEvidenceResolverInputCommon = Readonly<{
+  requirement: "redaction_required" | "approval_required";
+  workspaceId: string;
+  projectId: string;
+  runId: string;
+  invocationId: string;
+  runRevision: number;
+  stepId: string;
+  attemptNumber: number;
+  modelProfileId: string;
+  candidateIdentity: ModelProviderIdentity;
+  evaluatedAt: string;
+  sourceRequestFingerprint: string;
+}>;
+
+export type ModelInvocationRedactionEvidenceResolverInput =
+  ModelInvocationDataHandlingEvidenceResolverInputCommon & Readonly<{
+    requirement: "redaction_required";
+    messages: readonly ModelInvocationMessage[];
+  }>;
+
+export type ModelInvocationApprovalEvidenceResolverInput =
+  ModelInvocationDataHandlingEvidenceResolverInputCommon & Readonly<{
+    requirement: "approval_required";
+  }>;
+
+export type ModelInvocationDataHandlingEvidenceResolverInput =
+  | ModelInvocationRedactionEvidenceResolverInput
+  | ModelInvocationApprovalEvidenceResolverInput;
+
+export interface ModelInvocationDataHandlingEvidenceResolver {
+  resolve(input: ModelInvocationDataHandlingEvidenceResolverInput): Promise<unknown | null>;
+}
+
 export type ModelInvocationExecutionDecision = Readonly<{
   verdict: ModelInvocationExecutionVerdict;
   status: ModelInvocationExecutionStatus;
   reasons: readonly ModelInvocationExecutionReason[];
-  routeDecision: ModelInvocationRouteResolutionDecision;
+  routeDecision: ModelInvocationExecutionRouteDecision;
   selectedCandidate: ModelInvocationRouteCandidate | null;
   healthDecision: ModelProviderHealthValidationDecision | null;
   providerDecision: ModelProviderAdapterRunDecision | null;
   resultDecision: ModelInvocationResultDecision | null;
   normalizedResult: ModelInvocationResult | null;
+  dataHandlingPermit: ModelInvocationDataHandlingPermit | null;
 }>;
 
 type MutableReasons = ModelInvocationExecutionReason[];
@@ -107,6 +170,14 @@ type CapturedProvider = Readonly<{
   identity: ModelProviderIdentity;
   health: () => unknown | Promise<unknown>;
   run: (input: unknown) => unknown | Promise<unknown>;
+}>;
+
+type CapturedEvidenceResolver = Readonly<{
+  resolve: (input: ModelInvocationDataHandlingEvidenceResolverInput) => Promise<unknown | null>;
+}>;
+
+type CapturedRuntimeContext = Readonly<{
+  now: () => unknown;
 }>;
 
 type HealthNormalization =
@@ -151,6 +222,18 @@ const invocationReasonFields = Object.freeze([
   "stepId",
   "attemptNumber",
 ] as const);
+const executionInputFields = Object.freeze([
+  "routeInput",
+  "candidateIdentity",
+] as const);
+const legacyRouteInputFields = Object.freeze([
+  "projectRegistry",
+  "modelProviderRegistry",
+  "invocationAdmission",
+] as const);
+const evidenceResolverFields = Object.freeze(["resolve"] as const);
+const runtimeContextFields = Object.freeze(["now"] as const);
+const canonicalTimestampPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
 
 function includes<T>(values: readonly T[], input: unknown): input is T {
   return values.some((value) => value === input);
@@ -258,6 +341,16 @@ function cloneDecisionPart<T>(input: T): T {
   return cloneModelProviderAdapterData(input);
 }
 
+function auditSafeRouteDecision(
+  input: ModelInvocationRouteResolutionDecision,
+): ModelInvocationExecutionRouteDecision {
+  return {
+    verdict: input.verdict,
+    reasons: cloneDecisionPart(input.reasons),
+    routePlan: input.routePlan ? cloneDecisionPart(input.routePlan) : null,
+  };
+}
+
 function executionDeny(
   routeDecision: ModelInvocationRouteResolutionDecision,
   reasons: readonly ModelInvocationExecutionReason[],
@@ -269,12 +362,13 @@ function executionDeny(
     verdict: "deny",
     status: "denied",
     reasons: cloneDecisionPart(reasons),
-    routeDecision: cloneDecisionPart(routeDecision),
+    routeDecision: auditSafeRouteDecision(routeDecision),
     selectedCandidate: null,
     healthDecision: healthDecision ? cloneDecisionPart(healthDecision) : null,
     providerDecision: providerDecision ? cloneDecisionPart(providerDecision) : null,
     resultDecision: resultDecision ? cloneDecisionPart(resultDecision) : null,
     normalizedResult: null,
+    dataHandlingPermit: null,
   });
 }
 
@@ -285,17 +379,19 @@ function executionAllow(
   providerDecision: ModelProviderAdapterRunDecision,
   resultDecision: ModelInvocationResultDecision,
   result: ModelInvocationResult,
+  permit: ModelInvocationDataHandlingPermit,
 ): ModelInvocationExecutionDecision {
   return freezeModelProviderAdapterData({
     verdict: "allow",
     status: "completed",
     reasons: [],
-    routeDecision: cloneDecisionPart(routeDecision),
+    routeDecision: auditSafeRouteDecision(routeDecision),
     selectedCandidate: cloneDecisionPart(candidate),
     healthDecision: cloneDecisionPart(healthDecision),
     providerDecision: cloneDecisionPart(providerDecision),
     resultDecision: cloneDecisionPart(resultDecision),
     normalizedResult: cloneDecisionPart(result),
+    dataHandlingPermit: cloneDecisionPart(permit),
   });
 }
 
@@ -305,6 +401,169 @@ function ownDataDescriptor(
 ): PropertyDescriptor | null {
   const descriptor = Object.getOwnPropertyDescriptor(input, key);
   return descriptor && Object.hasOwn(descriptor, "value") ? descriptor : null;
+}
+
+function deniedRouteDecision(): ModelInvocationRouteResolutionDecision {
+  return resolveModelInvocationRoute({});
+}
+
+function canonicalTimestamp(input: unknown): string | null {
+  if (typeof input !== "string" || !canonicalTimestampPattern.test(input)) return null;
+  try {
+    return new Date(input).toISOString() === input ? input : null;
+  } catch {
+    return null;
+  }
+}
+
+function captureEvidenceResolver(
+  input: unknown,
+  routeDecision: ModelInvocationRouteResolutionDecision,
+  reasons: MutableReasons,
+): CapturedEvidenceResolver | null {
+  if (input === undefined) return null;
+  try {
+    if (!isPlainRecord(input)) {
+      addReason(
+        reasons,
+        "invalid_input",
+        "evidenceResolver",
+        "Trusted evidence resolver must be an ordinary object.",
+        routeDecision,
+      );
+      return null;
+    }
+    const ownKeys = Reflect.ownKeys(input);
+    if (ownKeys.some((key) => typeof key !== "string")
+      || ownKeys.length !== evidenceResolverFields.length
+      || !evidenceResolverFields.every((field) => ownKeys.includes(field))) {
+      addReason(
+        reasons,
+        "invalid_input",
+        "evidenceResolver",
+        "Trusted evidence resolver must contain exactly one resolve data property.",
+        routeDecision,
+      );
+      return null;
+    }
+    const resolveDescriptor = ownDataDescriptor(input, "resolve");
+    if (!resolveDescriptor || typeof resolveDescriptor.value !== "function") {
+      addReason(
+        reasons,
+        "invalid_input",
+        "evidenceResolver.resolve",
+        "Trusted evidence resolver resolve must be an own callable data property.",
+        routeDecision,
+      );
+      return null;
+    }
+    return {
+      resolve: resolveDescriptor.value as CapturedEvidenceResolver["resolve"],
+    };
+  } catch {
+    addReason(
+      reasons,
+      "invalid_input",
+      "evidenceResolver",
+      "Trusted evidence resolver could not be safely captured.",
+      routeDecision,
+    );
+    return null;
+  }
+}
+
+function captureRuntimeContext(
+  input: unknown,
+  routeDecision: ModelInvocationRouteResolutionDecision,
+  reasons: MutableReasons,
+): CapturedRuntimeContext | null {
+  try {
+    if (!isPlainRecord(input)) {
+      addReason(
+        reasons,
+        "invalid_input",
+        "runtimeContext",
+        "Trusted runtime context must be an ordinary object.",
+        routeDecision,
+      );
+      return null;
+    }
+    const ownKeys = Reflect.ownKeys(input);
+    if (ownKeys.some((key) => typeof key !== "string")
+      || ownKeys.length !== runtimeContextFields.length
+      || !runtimeContextFields.every((field) => ownKeys.includes(field))) {
+      addReason(
+        reasons,
+        "invalid_input",
+        "runtimeContext",
+        "Trusted runtime context must contain exactly one now data property.",
+        routeDecision,
+      );
+      return null;
+    }
+    const nowDescriptor = ownDataDescriptor(input, "now");
+    if (!nowDescriptor || typeof nowDescriptor.value !== "function") {
+      addReason(
+        reasons,
+        "invalid_input",
+        "runtimeContext.now",
+        "Trusted runtime context now must be an own callable data property.",
+        routeDecision,
+      );
+      return null;
+    }
+    return { now: nowDescriptor.value as CapturedRuntimeContext["now"] };
+  } catch {
+    addReason(
+      reasons,
+      "invalid_input",
+      "runtimeContext",
+      "Trusted runtime context could not be safely captured.",
+      routeDecision,
+    );
+    return null;
+  }
+}
+
+function identityForCandidate(candidate: ModelInvocationRouteCandidate): ModelProviderIdentity {
+  return {
+    providerId: candidate.providerId,
+    providerKind: candidate.providerKind,
+    deploymentId: candidate.deploymentId,
+    providerModelId: candidate.providerModelId,
+    providerModelVersion: candidate.providerModelVersion,
+  };
+}
+
+function requirementMatchesDeployment(candidate: ModelInvocationRouteCandidate): boolean {
+  return (candidate.dataHandlingRequirement === "local_only" && candidate.deploymentMode === "local")
+    || (candidate.dataHandlingRequirement !== "local_only" && candidate.deploymentMode === "remote");
+}
+
+function evidenceResolverInput(
+  requirement: Exclude<ModelDataHandlingRequirement, "local_only">,
+  request: ModelInvocationRequest,
+  identity: ModelProviderIdentity,
+  evaluatedAt: string,
+  sourceRequestFingerprint: string,
+): ModelInvocationDataHandlingEvidenceResolverInput {
+  const common = {
+    requirement,
+    workspaceId: request.workspaceId,
+    projectId: request.projectId,
+    runId: request.runId,
+    invocationId: request.invocationId,
+    runRevision: request.runRevision,
+    stepId: request.stepId,
+    attemptNumber: request.attemptNumber,
+    modelProfileId: request.modelProfileId,
+    candidateIdentity: cloneDecisionPart(identity),
+    evaluatedAt,
+    sourceRequestFingerprint,
+  };
+  return freezeModelProviderAdapterData(requirement === "redaction_required"
+    ? { ...common, requirement, messages: cloneDecisionPart(request.messages) }
+    : { ...common, requirement });
 }
 
 function captureProvider(
@@ -515,6 +774,50 @@ function candidateMatchesIdentity(
     && candidate.providerModelVersion === identity.providerModelVersion;
 }
 
+function dataHandlingInvariantHolds(
+  decision: ModelInvocationDataHandlingDecision,
+  request: ModelInvocationRequest,
+  candidate: ModelInvocationRouteCandidate,
+  identity: ModelProviderIdentity,
+  evaluatedAt: string,
+  sourceRequestFingerprint: string,
+): boolean {
+  if (decision.verdict !== "allow" || decision.status !== "ready"
+    || decision.reasons.length !== 0 || !decision.routeReceipt
+    || !decision.permit || !decision.preparedRequest) return false;
+  const receipt = decision.routeReceipt;
+  const permit = decision.permit;
+  const preparedDecision = validateAndNormalizeModelInvocationRequest(decision.preparedRequest);
+  if (preparedDecision.verdict !== "allow" || !preparedDecision.normalizedRequest
+    || !sameData(preparedDecision.normalizedRequest, decision.preparedRequest)) return false;
+  const preparedRequestFingerprint = createModelInvocationRequestFingerprint(
+    preparedDecision.normalizedRequest,
+  );
+  if (!preparedRequestFingerprint) return false;
+  return sameData(receipt.candidateIdentity, identity)
+    && receipt.workspaceId === request.workspaceId
+    && receipt.projectId === request.projectId
+    && receipt.runId === request.runId
+    && receipt.invocationId === request.invocationId
+    && receipt.modelProfileId === request.modelProfileId
+    && receipt.deploymentMode === candidate.deploymentMode
+    && receipt.requirement === candidate.dataHandlingRequirement
+    && receipt.priority === candidate.priority
+    && sameData(permit.candidateIdentity, identity)
+    && permit.requirement === candidate.dataHandlingRequirement
+    && permit.workspaceId === request.workspaceId
+    && permit.projectId === request.projectId
+    && permit.runId === request.runId
+    && permit.invocationId === request.invocationId
+    && permit.runRevision === request.runRevision
+    && permit.stepId === request.stepId
+    && permit.attemptNumber === request.attemptNumber
+    && permit.modelProfileId === request.modelProfileId
+    && permit.evaluatedAt === evaluatedAt
+    && permit.sourceRequestFingerprint === sourceRequestFingerprint
+    && permit.preparedRequestFingerprint === preparedRequestFingerprint;
+}
+
 function providerForCandidate(
   providers: readonly CapturedProvider[],
   candidate: ModelInvocationRouteCandidate,
@@ -692,40 +995,100 @@ function normalizeProviderDecision(
   };
 }
 
-function candidateIsExecutable(candidate: ModelInvocationRouteCandidate): boolean {
-  return candidate.dataHandlingRequirement === "local_only"
-    && candidate.deploymentMode === "local";
-}
-
-function preflightIdentityLinkage(
-  candidates: readonly ModelInvocationRouteCandidate[],
-  providers: readonly CapturedProvider[],
-  routeDecision: ModelInvocationRouteResolutionDecision,
-  reasons: MutableReasons,
-): boolean {
-  for (const candidate of candidates) {
-    const provider = providerForCandidate(providers, candidate);
-    if (provider && !candidateMatchesIdentity(candidate, provider.identity)) {
-      addReason(
-        reasons,
-        "provider_identity_mismatch",
-        `${provider.path}.identity`,
-        "Runtime provider identity does not exactly match its factual route candidate.",
-        routeDecision,
-        candidate,
-      );
-      return false;
-    }
-  }
-  return true;
-}
-
 export async function executeModelInvocation(
-  routeInput: unknown,
+  input: unknown,
   providers: unknown,
+  evidenceResolver?: unknown,
+  runtimeContext?: unknown,
 ): Promise<ModelInvocationExecutionDecision> {
-  const routeDecision = resolveModelInvocationRoute(routeInput);
   const reasons: MutableReasons = [];
+  const preflightRouteDecision = deniedRouteDecision();
+  const executionSnapshot = snapshotModelProviderAdapterInput(input);
+  if (!executionSnapshot.ok) {
+    addReason(
+      reasons,
+      executionSnapshot.limited ? "limit_exceeded" : "invalid_input",
+      "$",
+      executionSnapshot.limited
+        ? "Execution input exceeds bounded inspection limits."
+        : "Execution input could not be safely inspected.",
+      preflightRouteDecision,
+    );
+    return executionDeny(preflightRouteDecision, reasons);
+  }
+  if (!isPlainRecord(executionSnapshot.value)
+    || !hasExactFields(executionSnapshot.value, executionInputFields)) {
+    if (isPlainRecord(executionSnapshot.value)
+      && hasExactFields(executionSnapshot.value, legacyRouteInputFields)) {
+      const legacyRouteDecision = resolveModelInvocationRoute(executionSnapshot.value);
+      const legacyCandidate = legacyRouteDecision.routePlan?.primary ?? null;
+      if (legacyRouteDecision.verdict === "allow" && legacyCandidate
+        && legacyCandidate.dataHandlingRequirement !== "local_only") {
+        addReason(
+          reasons,
+          "data_handling_not_executable",
+          "routeDecision.routePlan.primary.dataHandlingRequirement",
+          "Legacy AI-025 input cannot authorize remote data handling.",
+          legacyRouteDecision,
+          legacyCandidate,
+        );
+        return executionDeny(legacyRouteDecision, reasons);
+      }
+    }
+    addReason(
+      reasons,
+      "invalid_input",
+      "$",
+      "Execution input must contain exactly routeInput and candidateIdentity.",
+      preflightRouteDecision,
+    );
+    return executionDeny(preflightRouteDecision, reasons);
+  }
+
+  const captures = captureProviders(providers, preflightRouteDecision, reasons);
+  if (!captures) return executionDeny(preflightRouteDecision, reasons);
+  const capturedResolver = captureEvidenceResolver(
+    evidenceResolver,
+    preflightRouteDecision,
+    reasons,
+  );
+  if (evidenceResolver !== undefined && !capturedResolver) {
+    return executionDeny(preflightRouteDecision, reasons);
+  }
+  const capturedRuntimeContext = captureRuntimeContext(
+    runtimeContext,
+    preflightRouteDecision,
+    reasons,
+  );
+  if (!capturedRuntimeContext) return executionDeny(preflightRouteDecision, reasons);
+
+  let rawEvaluatedAt: unknown;
+  try {
+    rawEvaluatedAt = capturedRuntimeContext.now();
+  } catch {
+    addReason(
+      reasons,
+      "invalid_input",
+      "runtimeContext.now",
+      "Trusted runtime evaluation time could not be captured.",
+      preflightRouteDecision,
+    );
+    return executionDeny(preflightRouteDecision, reasons);
+  }
+  const evaluatedAt = canonicalTimestamp(rawEvaluatedAt);
+  if (!evaluatedAt) {
+    addReason(
+      reasons,
+      "invalid_input",
+      "runtimeContext.now",
+      "Trusted runtime evaluation time must be a canonical UTC timestamp.",
+      preflightRouteDecision,
+    );
+    return executionDeny(preflightRouteDecision, reasons);
+  }
+
+  const routeInput = executionSnapshot.value.routeInput;
+  const routeDecision = resolveModelInvocationRoute(routeInput);
   if (routeDecision.verdict !== "allow" || !routeDecision.routePlan
     || !routeDecision.invocationAdmissionDecision?.normalizedRequest
     || !routeDecision.invocationAdmissionDecision.snapshotDecision?.normalizedSnapshot) {
@@ -739,146 +1102,233 @@ export async function executeModelInvocation(
     return executionDeny(routeDecision, reasons);
   }
 
-  const captures = captureProviders(providers, routeDecision, reasons);
-  if (!captures) return executionDeny(routeDecision, reasons);
-
   const plan = routeDecision.routePlan;
-  const candidates = [plan.primary, ...plan.fallbacks];
-  if (!candidateIsExecutable(plan.primary)) {
+  const request = routeDecision.invocationAdmissionDecision.normalizedRequest;
+  const candidateIdentityDecision = validateAndNormalizeModelProviderIdentity(
+    executionSnapshot.value.candidateIdentity,
+  );
+  if (candidateIdentityDecision.verdict !== "allow"
+    || !candidateIdentityDecision.normalizedIdentity) {
+    addReason(
+      reasons,
+      "invalid_input",
+      "candidateIdentity",
+      "Execution candidate identity failed factual AI-024 validation.",
+      routeDecision,
+    );
+    return executionDeny(routeDecision, reasons);
+  }
+  const candidate = plan.primary;
+  if (!candidateMatchesIdentity(
+    candidate,
+    candidateIdentityDecision.normalizedIdentity as ModelProviderIdentity,
+  )) {
+    addReason(
+      reasons,
+      "provider_not_registered",
+      "candidateIdentity",
+      "Execution candidate does not exactly identify the factual primary route candidate.",
+      routeDecision,
+    );
+    return executionDeny(routeDecision, reasons);
+  }
+  const factualIdentity = identityForCandidate(candidate);
+  const captured = providerForCandidate(captures, candidate);
+  if (!captured) {
+    addReason(
+      reasons,
+      "provider_not_registered",
+      "providers",
+      "No exact runtime provider is registered for the factual execution candidate.",
+      routeDecision,
+      candidate,
+    );
+    return executionDeny(routeDecision, reasons);
+  }
+  if (!candidateMatchesIdentity(candidate, captured.identity)) {
+    addReason(
+      reasons,
+      "provider_identity_mismatch",
+      `${captured.path}.identity`,
+      "Runtime provider identity does not exactly match the factual execution candidate.",
+      routeDecision,
+      candidate,
+    );
+    return executionDeny(routeDecision, reasons);
+  }
+
+  if (!requirementMatchesDeployment(candidate)) {
     addReason(
       reasons,
       "data_handling_not_executable",
-      "routeDecision.routePlan.primary.dataHandlingRequirement",
-      "AI-025 can execute only local_only candidates on local deployments.",
+      "candidateIdentity",
+      "Factual deployment mode and data-handling requirement are incompatible.",
       routeDecision,
-      plan.primary,
+      candidate,
     );
     return executionDeny(routeDecision, reasons);
   }
-
-  if (!preflightIdentityLinkage(candidates, captures, routeDecision, reasons)) {
-    return executionDeny(routeDecision, reasons);
-  }
-
-  let selected: Readonly<{
-    candidate: ModelInvocationRouteCandidate;
-    capture: CapturedProvider;
-    healthDecision: ModelProviderHealthValidationDecision;
-  }> | null = null;
-  let lastHealthDecision: ModelProviderHealthValidationDecision | null = null;
-  const availabilityReasons: MutableReasons = [];
-
-  for (const candidate of candidates) {
-    if (!candidateIsExecutable(candidate)) {
-      addReason(
-        reasons,
-        "data_handling_not_executable",
-        "routeDecision.routePlan.fallbacks.dataHandlingRequirement",
-        "AI-025 cannot execute a remote data-handling candidate.",
-        routeDecision,
-        candidate,
-      );
-      return executionDeny(routeDecision, reasons, lastHealthDecision);
-    }
-    const captured = providerForCandidate(captures, candidate);
-    if (!captured) {
-      addReason(
-        availabilityReasons,
-        "provider_not_registered",
-        "providers",
-        "No exact runtime provider is registered for the route candidate.",
-        routeDecision,
-        candidate,
-      );
-      continue;
-    }
-
-    let rawHealthDecision: unknown;
-    try {
-      rawHealthDecision = await captured.health();
-    } catch {
-      addReason(
-        availabilityReasons,
-        "provider_exception",
-        `${captured.path}.health`,
-        "Provider health call failed closed.",
-        routeDecision,
-        candidate,
-      );
-      continue;
-    }
-    const healthNormalization = normalizeHealthDecision(rawHealthDecision, candidate);
-    if (healthNormalization.kind === "identity_mismatch") {
-      addReason(
-        reasons,
-        "invalid_health_decision",
-        `${captured.path}.health.normalizedHealth`,
-        "Provider health identity does not match the route candidate.",
-        routeDecision,
-        candidate,
-      );
-      return executionDeny(routeDecision, reasons, healthNormalization.decision);
-    }
-    if (healthNormalization.kind === "invalid") {
-      addReason(
-        availabilityReasons,
-        "invalid_health_decision",
-        `${captured.path}.health`,
-        "Provider health returned an invalid decision.",
-        routeDecision,
-        candidate,
-      );
-      continue;
-    }
-    lastHealthDecision = healthNormalization.decision;
-    if (healthNormalization.decision.verdict !== "allow"
-      || !healthNormalization.decision.normalizedHealth) {
-      addReason(
-        availabilityReasons,
-        "invalid_health_decision",
-        `${captured.path}.health`,
-        "Provider health decision denied candidate use.",
-        routeDecision,
-        candidate,
-      );
-      continue;
-    }
-    if (healthNormalization.decision.normalizedHealth.status === "unavailable") {
-      addReason(
-        availabilityReasons,
-        "provider_unavailable",
-        `${captured.path}.health.normalizedHealth.status`,
-        "Provider reported unavailable health.",
-        routeDecision,
-        candidate,
-      );
-      continue;
-    }
-    selected = {
-      candidate,
-      capture: captured,
-      healthDecision: healthNormalization.decision,
-    };
-    break;
-  }
-
-  if (!selected) {
-    reasons.push(...availabilityReasons.slice(0, modelInvocationExecutionLimits.maxReasons - 1));
+  const sourceRequestFingerprint = createModelInvocationRequestFingerprint(request);
+  if (!sourceRequestFingerprint) {
     addReason(
       reasons,
-      "no_available_provider",
-      "providers",
-      "No factual route candidate has an available runtime provider.",
+      "data_handling_invariant_violation",
+      "routeDecision.invocationAdmissionDecision.normalizedRequest",
+      "Factual invocation request fingerprint could not be created.",
       routeDecision,
+      candidate,
     );
-    return executionDeny(routeDecision, reasons, lastHealthDecision);
+    return executionDeny(routeDecision, reasons);
   }
 
-  const request = routeDecision.invocationAdmissionDecision.normalizedRequest;
-  const captured = selected.capture;
+  let evidence: unknown | null = null;
+  if (candidate.dataHandlingRequirement !== "local_only") {
+    if (!capturedResolver) {
+      addReason(
+        reasons,
+        "data_handling_evidence_source_unavailable",
+        "evidenceResolver",
+        "Remote data handling requires a trusted evidence resolver.",
+        routeDecision,
+        candidate,
+      );
+      return executionDeny(routeDecision, reasons);
+    }
+    const resolverInput = evidenceResolverInput(
+      candidate.dataHandlingRequirement,
+      request,
+      factualIdentity,
+      evaluatedAt,
+      sourceRequestFingerprint,
+    );
+    try {
+      evidence = await capturedResolver.resolve(resolverInput);
+    } catch {
+      addReason(
+        reasons,
+        "data_handling_evidence_resolution_failed",
+        "evidenceResolver.resolve",
+        "Trusted evidence resolution failed closed.",
+        routeDecision,
+        candidate,
+      );
+      return executionDeny(routeDecision, reasons);
+    }
+    if (evidence === null) {
+      addReason(
+        reasons,
+        "data_handling_evidence_source_unavailable",
+        "evidenceResolver.resolve",
+        "Trusted evidence resolver returned no evidence.",
+        routeDecision,
+        candidate,
+      );
+      return executionDeny(routeDecision, reasons);
+    }
+  }
+
+  const dataHandlingDecision = evaluateModelInvocationDataHandling({
+    routeInput,
+    candidateIdentity: factualIdentity,
+    evidence,
+    evaluatedAt,
+  });
+  if (dataHandlingDecision.verdict !== "allow") {
+    addReason(
+      reasons,
+      "data_handling_denied",
+      "dataHandling",
+      "Factual AI-027 data-handling evaluation denied execution.",
+      routeDecision,
+      candidate,
+    );
+    return executionDeny(routeDecision, reasons);
+  }
+  if (!dataHandlingInvariantHolds(
+    dataHandlingDecision,
+    request,
+    candidate,
+    factualIdentity,
+    evaluatedAt,
+    sourceRequestFingerprint,
+  )) {
+    addReason(
+      reasons,
+      "data_handling_invariant_violation",
+      "dataHandling",
+      "AI-027 data-handling output failed execution invariants.",
+      routeDecision,
+      candidate,
+    );
+    return executionDeny(routeDecision, reasons);
+  }
+  const preparedRequest = dataHandlingDecision.preparedRequest as ModelInvocationRequest;
+  const permit = dataHandlingDecision.permit as ModelInvocationDataHandlingPermit;
+
+  let rawHealthDecision: unknown;
+  try {
+    rawHealthDecision = await captured.health();
+  } catch {
+    addReason(
+      reasons,
+      "provider_exception",
+      `${captured.path}.health`,
+      "Provider health call failed closed.",
+      routeDecision,
+      candidate,
+    );
+    return executionDeny(routeDecision, reasons);
+  }
+  const healthNormalization = normalizeHealthDecision(rawHealthDecision, candidate);
+  if (healthNormalization.kind === "identity_mismatch") {
+    addReason(
+      reasons,
+      "invalid_health_decision",
+      `${captured.path}.health.normalizedHealth`,
+      "Provider health identity does not match the factual execution candidate.",
+      routeDecision,
+      candidate,
+    );
+    return executionDeny(routeDecision, reasons, healthNormalization.decision);
+  }
+  if (healthNormalization.kind === "invalid") {
+    addReason(
+      reasons,
+      "invalid_health_decision",
+      `${captured.path}.health`,
+      "Provider health returned an invalid decision.",
+      routeDecision,
+      candidate,
+    );
+    return executionDeny(routeDecision, reasons);
+  }
+  const healthDecision = healthNormalization.decision;
+  if (healthDecision.verdict !== "allow" || !healthDecision.normalizedHealth) {
+    addReason(
+      reasons,
+      "invalid_health_decision",
+      `${captured.path}.health`,
+      "Provider health decision denied candidate use.",
+      routeDecision,
+      candidate,
+    );
+    return executionDeny(routeDecision, reasons, healthDecision);
+  }
+  if (healthDecision.normalizedHealth.status === "unavailable") {
+    addReason(
+      reasons,
+      "provider_unavailable",
+      `${captured.path}.health.normalizedHealth.status`,
+      "Provider reported unavailable health.",
+      routeDecision,
+      candidate,
+    );
+    return executionDeny(routeDecision, reasons, healthDecision);
+  }
+
   let rawProviderDecision: unknown;
   try {
-    const providerRequest = freezeModelProviderAdapterData(cloneDecisionPart(request));
+    const providerRequest = freezeModelProviderAdapterData(cloneDecisionPart(preparedRequest));
     rawProviderDecision = await captured.run(providerRequest);
   } catch {
     addReason(
@@ -887,15 +1337,15 @@ export async function executeModelInvocation(
       `${captured.path}.run`,
       "Provider run failed closed.",
       routeDecision,
-      selected.candidate,
+      candidate,
     );
-    return executionDeny(routeDecision, reasons, selected.healthDecision);
+    return executionDeny(routeDecision, reasons, healthDecision);
   }
 
   const providerNormalization = normalizeProviderDecision(
     rawProviderDecision,
-    request,
-    selected.candidate,
+    preparedRequest,
+    candidate,
   );
   if (providerNormalization.kind === "invalid") {
     addReason(
@@ -904,9 +1354,9 @@ export async function executeModelInvocation(
       `${captured.path}.run`,
       "Provider returned an invalid or inconsistent run decision.",
       routeDecision,
-      selected.candidate,
+      candidate,
     );
-    return executionDeny(routeDecision, reasons, selected.healthDecision);
+    return executionDeny(routeDecision, reasons, healthDecision);
   }
 
   const providerDecision = providerNormalization.decision;
@@ -917,19 +1367,19 @@ export async function executeModelInvocation(
       `${captured.path}.run`,
       "Provider run decision denied execution.",
       routeDecision,
-      selected.candidate,
+      candidate,
     );
     return executionDeny(
       routeDecision,
       reasons,
-      selected.healthDecision,
+      healthDecision,
       providerDecision,
     );
   }
 
   const resultDecision = evaluateModelInvocationResult({
     snapshot: routeDecision.invocationAdmissionDecision.snapshotDecision.normalizedSnapshot,
-    request,
+    request: preparedRequest,
     result: providerDecision.normalizedResult,
   });
   if (resultDecision.verdict !== "allow" || !resultDecision.normalizedResult) {
@@ -939,12 +1389,12 @@ export async function executeModelInvocation(
       "providerDecision.normalizedResult",
       "Factual AI-022 result evaluation denied provider output.",
       routeDecision,
-      selected.candidate,
+      candidate,
     );
     return executionDeny(
       routeDecision,
       reasons,
-      selected.healthDecision,
+      healthDecision,
       providerDecision,
       resultDecision,
     );
@@ -952,10 +1402,11 @@ export async function executeModelInvocation(
 
   return executionAllow(
     routeDecision,
-    selected.candidate,
-    selected.healthDecision,
+    candidate,
+    healthDecision,
     providerDecision,
     resultDecision,
     resultDecision.normalizedResult,
+    permit,
   );
 }
