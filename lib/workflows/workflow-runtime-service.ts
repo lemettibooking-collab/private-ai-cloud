@@ -26,6 +26,7 @@ export const workflowRuntimeServiceStatuses = Object.freeze([
   "approval_required",
   "retry_pending",
   "unsupported_runtime",
+  "recovery_required",
   "no_progress",
   "conflict",
   "denied",
@@ -57,7 +58,9 @@ export type WorkflowRuntimeReasonCode =
   | "stale_revision"
   | "idempotency_conflict"
   | "command_in_progress"
+  | "command_recovery_required"
   | "claim_conflict"
+  | "execution_recovery_required"
   | "state_conflict"
   | "invalid_transition"
   | "agent_input_missing"
@@ -189,12 +192,14 @@ export type WorkflowRuntimeCommandBeginInput = Readonly<{
   runId: string;
   commandId: string;
   fingerprint: string;
+  expectedRevision: number;
 }>;
 
 export type WorkflowRuntimeCommandBeginDecision =
-  | Readonly<{ status: "acquired" }>
+  | Readonly<{ status: "acquired"; ownershipToken: string }>
   | Readonly<{ status: "replay"; response: WorkflowRuntimeResponse }>
   | Readonly<{ status: "in_progress" }>
+  | Readonly<{ status: "recovery_required" }>
   | Readonly<{ status: "conflict" }>;
 
 export type WorkflowRuntimeClaimInput = Readonly<{
@@ -203,22 +208,33 @@ export type WorkflowRuntimeClaimInput = Readonly<{
   attemptNumber: number;
   expectedRevision: number;
   executionId: string;
+  requestFingerprint: string;
 }>;
 
 export type WorkflowRuntimeClaimDecision =
   | Readonly<{ status: "acquired"; claimId: string }>
-  | Readonly<{ status: "conflict" | "idempotent"; claimId: null }>;
+  | Readonly<{ status: "conflict" | "idempotent" | "recovery_required"; claimId: null }>;
+
+export type WorkflowRuntimeExecutionStartDecision = Readonly<{
+  status: "started" | "conflict" | "recovery_required";
+}>;
 
 export type WorkflowRuntimeCompareAndSwapInput = Readonly<{
   runId: string;
   expectedRevision: number;
+  expectedPause: WorkflowRuntimePause | null;
   nextState: WorkflowRuntimeState;
   claimId: string | null;
 }>;
 
 export type WorkflowRuntimeCompareAndSwapDecision =
   | Readonly<{ status: "committed"; state: WorkflowRuntimeState }>
-  | Readonly<{ status: "conflict"; state: WorkflowRuntimeState | null }>;
+  | Readonly<{ status: "conflict"; state: WorkflowRuntimeState | null }>
+  | Readonly<{ status: "recovery_required"; state: null }>;
+
+export type WorkflowRuntimeCommandOwnershipInput = WorkflowRuntimeCommandBeginInput & Readonly<{
+  ownershipToken: string;
+}>;
 
 export interface WorkflowRuntimeStateStore {
   load(input: Readonly<{ runId: string }>): Promise<unknown>;
@@ -227,10 +243,20 @@ export interface WorkflowRuntimeStateStore {
     runId: string;
     commandId: string;
     fingerprint: string;
+    ownershipToken: string;
     response: WorkflowRuntimeResponse;
   }>): Promise<void>;
-  abandonCommand(input: WorkflowRuntimeCommandBeginInput): Promise<void>;
+  abandonCommand(input: WorkflowRuntimeCommandOwnershipInput): Promise<void>;
+  markCommandEffectful(input: WorkflowRuntimeCommandOwnershipInput): Promise<void>;
   claim(input: WorkflowRuntimeClaimInput): Promise<WorkflowRuntimeClaimDecision>;
+  startExecution(input: Readonly<{
+    runId: string;
+    claimId: string;
+  }>): Promise<WorkflowRuntimeExecutionStartDecision>;
+  recordKnownExecutionOutcome(input: Readonly<{
+    runId: string;
+    claimId: string;
+  }>): Promise<void>;
   compareAndSwap(input: WorkflowRuntimeCompareAndSwapInput): Promise<WorkflowRuntimeCompareAndSwapDecision>;
   releaseClaim(input: Readonly<{ runId: string; claimId: string }>): Promise<void>;
 }
@@ -257,7 +283,7 @@ export interface WorkflowRuntimeService {
 type MutableReasons = WorkflowRuntimeReason[];
 type PreparedMutation = Readonly<{
   state: WorkflowRuntimeState;
-  fingerprint: string;
+  ownership: WorkflowRuntimeCommandOwnershipInput;
 }>;
 
 const stableIdPattern = /^[a-z0-9][a-z0-9._-]{0,63}$/u;
@@ -429,7 +455,23 @@ function commandFingerprint(command: WorkflowRuntimeMutatingCommand): string {
   return createHash("sha256").update(canonicalData(command)).digest("hex");
 }
 
-function stateFromUnknown(input: unknown): WorkflowRuntimeState | null {
+function executionRequestFingerprint(
+  state: WorkflowRuntimeState,
+  stepId: string,
+  attemptNumber: number,
+  input: WorkflowRuntimeAgentInput,
+): string {
+  return createHash("sha256").update(canonicalData({
+    runId: state.snapshot.runId,
+    revision: state.snapshot.revision,
+    stepId,
+    attemptNumber,
+    executionId: input.executionId,
+    invocationDraft: input.invocationDraft,
+  })).digest("hex");
+}
+
+export function normalizeWorkflowRuntimeState(input: unknown): WorkflowRuntimeState | null {
   const boundary = snapshotModelProviderAdapterInput(input);
   if (!boundary.ok || !plainRecord(boundary.value)
     || !exactFields(boundary.value, [
@@ -619,7 +661,7 @@ export function createWorkflowRuntimeService(
         addReason(reasons, "run_not_found", "runId", "Workflow Run was not found.", runId);
         return null;
       }
-      const state = stateFromUnknown(raw);
+      const state = normalizeWorkflowRuntimeState(raw);
       if (!state || state.snapshot.runId !== runId) {
         addReason(reasons, "invalid_runtime_state", "store.load", "Trusted runtime state is invalid.", runId);
         return null;
@@ -667,7 +709,12 @@ export function createWorkflowRuntimeService(
     const fingerprint = commandFingerprint(command);
     let begin: WorkflowRuntimeCommandBeginDecision;
     try {
-      begin = await store.beginCommand({ runId: command.runId, commandId: command.commandId, fingerprint });
+      begin = await store.beginCommand({
+        runId: command.runId,
+        commandId: command.commandId,
+        fingerprint,
+        expectedRevision: command.expectedRevision,
+      });
     } catch {
       addReason(reasons, "state_store_failed", "store.beginCommand", "Command claim failed closed.", command.runId);
       return response("deny", "denied", reasons, state);
@@ -686,19 +733,39 @@ export function createWorkflowRuntimeService(
       addReason(reasons, "command_in_progress", "commandId", "An identical command is already in progress.", command.runId);
       return response("deny", "conflict", reasons, state);
     }
-    return { state, fingerprint };
+    if (begin.status === "recovery_required") {
+      addReason(
+        reasons,
+        "command_recovery_required",
+        "commandId",
+        "A stale durable command may have crossed an effect boundary and requires recovery.",
+        command.runId,
+      );
+      return response("deny", "recovery_required", reasons, state);
+    }
+    return {
+      state,
+      ownership: {
+        runId: command.runId,
+        commandId: command.commandId,
+        fingerprint,
+        expectedRevision: command.expectedRevision,
+        ownershipToken: begin.ownershipToken,
+      },
+    };
   }
 
   async function finish(
     command: WorkflowRuntimeMutatingCommand,
-    fingerprint: string,
+    ownership: WorkflowRuntimeCommandOwnershipInput,
     value: WorkflowRuntimeResponse,
   ): Promise<WorkflowRuntimeResponse> {
     try {
       await store.completeCommand({
         runId: command.runId,
         commandId: command.commandId,
-        fingerprint,
+        fingerprint: ownership.fingerprint,
+        ownershipToken: ownership.ownershipToken,
         response: value,
       });
       return value;
@@ -710,11 +777,7 @@ export function createWorkflowRuntimeService(
         "Command completion failed closed.",
       );
       try {
-        await store.abandonCommand({
-          runId: command.runId,
-          commandId: command.commandId,
-          fingerprint,
-        });
+        await store.abandonCommand(ownership);
       } catch {
         failed = failureFromResponse(
           failed,
@@ -738,6 +801,7 @@ export function createWorkflowRuntimeService(
       return await store.compareAndSwap({
         runId: state.snapshot.runId,
         expectedRevision: state.snapshot.revision,
+        expectedPause: state.pause,
         nextState: nextState(state, snapshot, pause),
         claimId,
       });
@@ -775,6 +839,69 @@ export function createWorkflowRuntimeService(
     }
   }
 
+  async function safeStartExecution(
+    runId: string,
+    claimId: string,
+    stepId: string,
+    reasons: MutableReasons,
+  ): Promise<WorkflowRuntimeExecutionStartDecision | null> {
+    try {
+      return await store.startExecution({ runId, claimId });
+    } catch {
+      addReason(
+        reasons,
+        "state_store_failed",
+        "store.startExecution",
+        "Durable execution intent start failed closed.",
+        runId,
+        stepId,
+      );
+      return { status: "recovery_required" };
+    }
+  }
+
+  async function safeMarkCommandEffectful(
+    command: WorkflowRuntimeMutatingCommand,
+    ownership: WorkflowRuntimeCommandOwnershipInput,
+    reasons: MutableReasons,
+  ): Promise<boolean> {
+    try {
+      await store.markCommandEffectful(ownership);
+      return true;
+    } catch {
+      addReason(
+        reasons,
+        "state_store_failed",
+        "store.markCommandEffectful",
+        "Command effect boundary failed closed.",
+        command.runId,
+      );
+      return false;
+    }
+  }
+
+  async function safeRecordKnownExecutionOutcome(
+    runId: string,
+    claimId: string,
+    stepId: string,
+    reasons: MutableReasons,
+  ): Promise<boolean> {
+    try {
+      await store.recordKnownExecutionOutcome({ runId, claimId });
+      return true;
+    } catch {
+      addReason(
+        reasons,
+        "state_store_failed",
+        "store.recordKnownExecutionOutcome",
+        "Known execution outcome could not be persisted.",
+        runId,
+        stepId,
+      );
+      return false;
+    }
+  }
+
   async function conflictResponse(
     runId: string,
     reasons: MutableReasons,
@@ -784,11 +911,27 @@ export function createWorkflowRuntimeService(
     return response("deny", "conflict", reasons, state);
   }
 
+  function casRecoveryResponse(
+    runId: string,
+    reasons: MutableReasons,
+    state: WorkflowRuntimeState,
+    result: WorkflowRuntimeLastStepResult | null = null,
+  ): WorkflowRuntimeResponse {
+    addReason(
+      reasons,
+      "state_store_failed",
+      "store.compareAndSwap",
+      "The durable CAS commit outcome could not be reconciled.",
+      runId,
+    );
+    return response("deny", "recovery_required", reasons, state, result);
+  }
+
   async function executeStart(command: WorkflowRuntimeStartCommand): Promise<WorkflowRuntimeResponse> {
     const reasons: MutableReasons = [];
     const prepared = await prepareMutation(command, reasons);
     if ("verdict" in prepared) return prepared;
-    const { state, fingerprint } = prepared;
+    const { state, ownership: fingerprint } = prepared;
     if (state.snapshot.revision !== command.expectedRevision) {
       addReason(reasons, "stale_revision", "expectedRevision", "Expected revision is stale.", command.runId);
       return finish(command, fingerprint, response("deny", "conflict", reasons, state));
@@ -810,9 +953,15 @@ export function createWorkflowRuntimeService(
       addReason(reasons, "invalid_transition", "run_started", "Canonical run start transition denied.", command.runId);
       return finish(command, fingerprint, response("deny", "denied", reasons, state));
     }
+    if (!await safeMarkCommandEffectful(command, fingerprint, reasons)) {
+      return finish(command, fingerprint, response("deny", "denied", reasons, state));
+    }
     const committed = await safeCompareAndSwap(state, transition.nextSnapshot, null, reasons, null);
     if (!committed) {
       return finish(command, fingerprint, response("deny", "denied", reasons, state));
+    }
+    if (committed.status === "recovery_required") {
+      return finish(command, fingerprint, casRecoveryResponse(command.runId, reasons, state));
     }
     if (committed.status === "conflict") {
       return finish(command, fingerprint, await conflictResponse(command.runId, reasons, committed.state));
@@ -825,7 +974,7 @@ export function createWorkflowRuntimeService(
     const prepared = await prepareMutation(command, reasons);
     if ("verdict" in prepared) return prepared;
     let { state } = prepared;
-    const { fingerprint } = prepared;
+    const { ownership: fingerprint } = prepared;
     if (state.snapshot.revision !== command.expectedRevision) {
       addReason(reasons, "stale_revision", "expectedRevision", "Expected revision is stale.", command.runId);
       return finish(command, fingerprint, response("deny", "conflict", reasons, state));
@@ -843,6 +992,9 @@ export function createWorkflowRuntimeService(
     if (state.snapshot.status === "queued") {
       addReason(reasons, "no_progress", "runId", "Queued Workflow Run must be started first.", command.runId);
       return finish(command, fingerprint, response("deny", "no_progress", reasons, state));
+    }
+    if (!await safeMarkCommandEffectful(command, fingerprint, reasons)) {
+      return finish(command, fingerprint, response("deny", "denied", reasons, state));
     }
 
     const agentInputs = new Map(command.agentInputs.map((input) => [input.stepId, input]));
@@ -868,6 +1020,13 @@ export function createWorkflowRuntimeService(
         const committed = await safeCompareAndSwap(state, completed.nextSnapshot, null, reasons, null);
         if (!committed) {
           return finish(command, fingerprint, response("deny", "denied", reasons, state, latestResult));
+        }
+        if (committed.status === "recovery_required") {
+          return finish(
+            command,
+            fingerprint,
+            casRecoveryResponse(command.runId, reasons, state, latestResult),
+          );
         }
         if (committed.status === "conflict") {
           return finish(command, fingerprint, await conflictResponse(command.runId, reasons, committed.state));
@@ -897,6 +1056,13 @@ export function createWorkflowRuntimeService(
           const committed = await safeCompareAndSwap(state, review.nextSnapshot, null, reasons, null);
           if (!committed) {
             return finish(command, fingerprint, response("deny", "denied", reasons, state, latestResult));
+          }
+          if (committed.status === "recovery_required") {
+            return finish(
+              command,
+              fingerprint,
+              casRecoveryResponse(command.runId, reasons, state, latestResult),
+            );
           }
           if (committed.status === "conflict") {
             return finish(command, fingerprint, await conflictResponse(command.runId, reasons, committed.state));
@@ -931,6 +1097,13 @@ export function createWorkflowRuntimeService(
         if (!committed) {
           return finish(command, fingerprint, response("deny", "denied", reasons, state, latestResult));
         }
+        if (committed.status === "recovery_required") {
+          return finish(
+            command,
+            fingerprint,
+            casRecoveryResponse(command.runId, reasons, state, latestResult),
+          );
+        }
         if (committed.status === "conflict") {
           return finish(command, fingerprint, await conflictResponse(command.runId, reasons, committed.state));
         }
@@ -956,95 +1129,147 @@ export function createWorkflowRuntimeService(
           attemptNumber,
           expectedRevision: state.snapshot.revision,
           executionId: agentInput.executionId,
+          requestFingerprint: executionRequestFingerprint(state, step.id, attemptNumber, agentInput),
         });
       } catch {
         addReason(reasons, "state_store_failed", "store.claim", "Attempt claim failed closed.", command.runId, step.id);
         return finish(command, fingerprint, response("deny", "denied", reasons, state, latestResult));
       }
       if (claim.status !== "acquired") {
-        addReason(reasons, "claim_conflict", "stepId", "Factual Agent attempt is already claimed.", command.runId, step.id);
-        return finish(command, fingerprint, response("deny", "conflict", reasons, state, latestResult));
+        const recoveryRequired = claim.status === "recovery_required";
+        addReason(
+          reasons,
+          recoveryRequired ? "execution_recovery_required" : "claim_conflict",
+          "stepId",
+          recoveryRequired
+            ? "A previous durable execution has an ambiguous outcome and requires recovery."
+            : "Factual Agent attempt is already claimed.",
+          command.runId,
+          step.id,
+        );
+        return finish(command, fingerprint, response(
+          "deny",
+          recoveryRequired ? "recovery_required" : "conflict",
+          reasons,
+          state,
+          latestResult,
+        ));
       }
 
       let claimedResponse: WorkflowRuntimeResponse | null = null;
       let claimedState = state;
       let committedAgentState: WorkflowRuntimeState | null = null;
       let committedAgentResult: WorkflowRuntimeLastStepResult | null = latestResult;
+      let executionOutcomeKnown = false;
       try {
-        const factualState = state;
-        const agentDecision: AgentStepRuntimeDecision = await executeAgentStep(
-          {
-            runId: command.runId,
-            stepId: step.id,
-            executionId: agentInput.executionId,
-            expectedRevision: state.snapshot.revision,
-            expectedAttemptNumber: attemptNumber,
-            invocationDraft: cloneModelProviderAdapterData(agentInput.invocationDraft),
-          },
-          {
-            async resolve(query: AgentStepRuntimeFactsQuery) {
-              if (query.runId !== factualState.snapshot.runId || query.stepId !== step.id) {
-                throw new Error("Factual Agent Step query mismatch.");
-              }
-              return {
-                snapshot: factualState.snapshot,
-                projectRegistry: factualState.projectRegistry,
-                modelProviderRegistry: factualState.modelProviderRegistry,
-                existingRequests: factualState.existingRequests,
-              };
-            },
-          },
-          providers,
-          requirementsResolver,
-          evidenceResolver,
-          runtimeContext,
+        const executionStart = await safeStartExecution(
+          command.runId,
+          claim.claimId,
+          step.id,
+          reasons,
         );
-        if (!agentDecision.previousSnapshot
-          || agentDecision.previousSnapshot.runId !== state.snapshot.runId
-          || agentDecision.previousSnapshot.revision !== state.snapshot.revision) {
-          addReason(reasons, "agent_result_mismatch", "previousSnapshot", "Agent result does not match the claimed factual revision.", command.runId, step.id);
-          claimedResponse = response("deny", "conflict", reasons, state, latestResult);
-        } else if (!agentDecision.nextSnapshot) {
-          if (agentDecision.status === "approval_required") {
+        if (!executionStart) {
+          claimedResponse = response("deny", "denied", reasons, state, latestResult);
+        } else if (executionStart.status !== "started") {
+          const recoveryRequired = executionStart.status === "recovery_required";
+          addReason(
+            reasons,
+            recoveryRequired ? "execution_recovery_required" : "claim_conflict",
+            "stepId",
+            recoveryRequired
+              ? "Durable execution may already have started and requires recovery."
+              : "Durable execution intent could not be started.",
+            command.runId,
+            step.id,
+          );
+          claimedResponse = response(
+            "deny",
+            recoveryRequired ? "recovery_required" : "conflict",
+            reasons,
+            state,
+            latestResult,
+          );
+        } else {
+          const factualState = state;
+          const agentDecision: AgentStepRuntimeDecision = await executeAgentStep(
+            {
+              runId: command.runId,
+              stepId: step.id,
+              executionId: agentInput.executionId,
+              expectedRevision: state.snapshot.revision,
+              expectedAttemptNumber: attemptNumber,
+              invocationDraft: cloneModelProviderAdapterData(agentInput.invocationDraft),
+            },
+            {
+              async resolve(query: AgentStepRuntimeFactsQuery) {
+                if (query.runId !== factualState.snapshot.runId || query.stepId !== step.id) {
+                  throw new Error("Factual Agent Step query mismatch.");
+                }
+                return {
+                  snapshot: factualState.snapshot,
+                  projectRegistry: factualState.projectRegistry,
+                  modelProviderRegistry: factualState.modelProviderRegistry,
+                  existingRequests: factualState.existingRequests,
+                };
+              },
+            },
+            providers,
+            requirementsResolver,
+            evidenceResolver,
+            runtimeContext,
+          );
+          executionOutcomeKnown = true;
+          if (!agentDecision.previousSnapshot
+            || agentDecision.previousSnapshot.runId !== state.snapshot.runId
+            || agentDecision.previousSnapshot.revision !== state.snapshot.revision) {
+            addReason(reasons, "agent_result_mismatch", "previousSnapshot", "Agent result does not match the claimed factual revision.", command.runId, step.id);
+            claimedResponse = response("deny", "conflict", reasons, state, latestResult);
+          } else if (!agentDecision.nextSnapshot) {
+            if (agentDecision.status === "approval_required") {
+              const committed = await safeCompareAndSwap(
+                state,
+                state.snapshot,
+                claim.claimId,
+                reasons,
+                { kind: "risk_approval", stepId: step.id, reasonCode: "approval_required" },
+              );
+              if (!committed) {
+                claimedResponse = response("deny", "denied", reasons, state, latestResult);
+              } else if (committed.status === "recovery_required") {
+                claimedResponse = casRecoveryResponse(command.runId, reasons, state, latestResult);
+              } else if (committed.status === "conflict") {
+                claimedState = committed.state ?? state;
+                claimedResponse = await conflictResponse(command.runId, reasons, committed.state);
+              } else {
+                claimedState = committed.state;
+                claimedResponse = response("deny", "approval_required", [], committed.state, latestResult);
+              }
+            } else {
+              addReason(reasons, "agent_runtime_denied", "executeAgentStep", "Agent Step Runtime did not produce a committable snapshot.", command.runId, step.id);
+              const status = agentDecision.status === "unsupported_runtime" ? "unsupported_runtime" : "denied";
+              claimedResponse = response("deny", status, reasons, state, latestResult);
+            }
+          } else {
             const committed = await safeCompareAndSwap(
               state,
-              state.snapshot,
+              agentDecision.nextSnapshot,
               claim.claimId,
               reasons,
-              { kind: "risk_approval", stepId: step.id, reasonCode: "approval_required" },
+              null,
             );
             if (!committed) {
               claimedResponse = response("deny", "denied", reasons, state, latestResult);
+            } else if (committed.status === "recovery_required") {
+              claimedResponse = casRecoveryResponse(command.runId, reasons, state, latestResult);
             } else if (committed.status === "conflict") {
               claimedState = committed.state ?? state;
               claimedResponse = await conflictResponse(command.runId, reasons, committed.state);
             } else {
               claimedState = committed.state;
-              claimedResponse = response("deny", "approval_required", [], committed.state, latestResult);
-            }
-          } else {
-            addReason(reasons, "agent_runtime_denied", "executeAgentStep", "Agent Step Runtime did not produce a committable snapshot.", command.runId, step.id);
-            const status = agentDecision.status === "unsupported_runtime" ? "unsupported_runtime" : "denied";
-            claimedResponse = response("deny", status, reasons, state, latestResult);
-          }
-        } else {
-          const committed = await safeCompareAndSwap(
-            state,
-            agentDecision.nextSnapshot,
-            claim.claimId,
-            reasons,
-            null,
-          );
-          if (!committed) {
-            claimedResponse = response("deny", "denied", reasons, state, latestResult);
-          } else if (committed.status === "conflict") {
-            claimedState = committed.state ?? state;
-            claimedResponse = await conflictResponse(command.runId, reasons, committed.state);
-          } else {
-            claimedState = committed.state;
-            committedAgentState = committed.state;
-            if (agentDecision.normalizedResult) {
-              committedAgentResult = lastResult(step.id, agentDecision.normalizedResult);
+              committedAgentState = committed.state;
+              if (agentDecision.normalizedResult) {
+                committedAgentResult = lastResult(step.id, agentDecision.normalizedResult);
+              }
             }
           }
         }
@@ -1052,6 +1277,23 @@ export function createWorkflowRuntimeService(
         addReason(reasons, "agent_runtime_denied", "executeAgentStep", "Agent Step Runtime failed closed.", command.runId, step.id);
         claimedResponse = response("deny", "denied", reasons, state, latestResult);
       } finally {
+        if (executionOutcomeKnown) {
+          const recorded = await safeRecordKnownExecutionOutcome(
+            command.runId,
+            claim.claimId,
+            step.id,
+            reasons,
+          );
+          if (!recorded) {
+            claimedResponse = response(
+              "deny",
+              "denied",
+              reasons,
+              committedAgentState ?? claimedState,
+              committedAgentResult,
+            );
+          }
+        }
         const released = await safeReleaseClaim(command.runId, claim.claimId, step.id, reasons);
         if (!released) {
           claimedResponse = response(
@@ -1090,7 +1332,7 @@ export function createWorkflowRuntimeService(
     const reasons: MutableReasons = [];
     const prepared = await prepareMutation(command, reasons);
     if ("verdict" in prepared) return prepared;
-    const { state, fingerprint } = prepared;
+    const { state, ownership: fingerprint } = prepared;
     if (state.snapshot.revision !== command.expectedRevision) {
       addReason(reasons, "stale_revision", "expectedRevision", "Expected revision is stale.", command.runId, command.stepId);
       return finish(command, fingerprint, response("deny", "conflict", reasons, state));
@@ -1120,9 +1362,15 @@ export function createWorkflowRuntimeService(
       addReason(reasons, "invalid_transition", kind, "Canonical approval transition denied.", command.runId, command.stepId);
       return finish(command, fingerprint, response("deny", "denied", reasons, state));
     }
+    if (!await safeMarkCommandEffectful(command, fingerprint, reasons)) {
+      return finish(command, fingerprint, response("deny", "denied", reasons, state));
+    }
     const committed = await safeCompareAndSwap(state, transition.nextSnapshot, null, reasons, null);
     if (!committed) {
       return finish(command, fingerprint, response("deny", "denied", reasons, state));
+    }
+    if (committed.status === "recovery_required") {
+      return finish(command, fingerprint, casRecoveryResponse(command.runId, reasons, state));
     }
     if (committed.status === "conflict") {
       return finish(command, fingerprint, await conflictResponse(command.runId, reasons, committed.state));
@@ -1139,7 +1387,7 @@ export function createWorkflowRuntimeService(
     const reasons: MutableReasons = [];
     const prepared = await prepareMutation(command, reasons);
     if ("verdict" in prepared) return prepared;
-    const { state, fingerprint } = prepared;
+    const { state, ownership: fingerprint } = prepared;
     if (state.snapshot.status === "cancelled") {
       return finish(command, fingerprint, response("idempotent", "cancelled", [], state));
     }
@@ -1168,9 +1416,15 @@ export function createWorkflowRuntimeService(
       addReason(reasons, "invalid_transition", "run_cancelled", "Canonical cancellation transition denied.", command.runId);
       return finish(command, fingerprint, response("deny", "denied", reasons, state));
     }
+    if (!await safeMarkCommandEffectful(command, fingerprint, reasons)) {
+      return finish(command, fingerprint, response("deny", "denied", reasons, state));
+    }
     const committed = await safeCompareAndSwap(state, transition.nextSnapshot, null, reasons, null);
     if (!committed) {
       return finish(command, fingerprint, response("deny", "denied", reasons, state));
+    }
+    if (committed.status === "recovery_required") {
+      return finish(command, fingerprint, casRecoveryResponse(command.runId, reasons, state));
     }
     if (committed.status === "conflict") {
       return finish(command, fingerprint, await conflictResponse(command.runId, reasons, committed.state));

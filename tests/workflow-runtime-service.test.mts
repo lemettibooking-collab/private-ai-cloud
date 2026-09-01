@@ -21,7 +21,7 @@ const apiContract = (await import(
 )) as typeof import("../lib/workflows/workflow-runtime-api");
 
 const { createWorkflowRuntimeService } = serviceContract;
-const { createWorkflowRunSnapshot } = runContract;
+const { createWorkflowRunSnapshot, evaluateWorkflowRunTransition } = runContract;
 const {
   validateAndNormalizeModelInvocationRequest,
   validateAndNormalizeModelInvocationResult,
@@ -346,9 +346,17 @@ function initialState(kind: "linear" | "branched" | "single" = "linear"): Runtim
 
 class FakeStore implements RuntimeStore {
   state: RuntimeState;
-  claims = new Map<string, { claimId: string; executionId: string }>();
+  claims = new Map<string, {
+    claimId: string;
+    executionId: string;
+    expectedRevision: number;
+    requestFingerprint: string;
+    stepId: string;
+  }>();
   commands = new Map<string, { fingerprint: string; response: RuntimeResponse | null }>();
   casConflicts = 0;
+  casRecoveryRequired = 0;
+  reconciledLostCommitAcknowledgements = 0;
   compareAndSwapThrows = 0;
   releaseClaimThrows = 0;
   completeCommandThrows = 0;
@@ -357,6 +365,20 @@ class FakeStore implements RuntimeStore {
   completeAttempts = 0;
   abandonAttempts = 0;
   loadAttempts = 0;
+  startExecutionAttempts = 0;
+  markCommandEffectfulAttempts = 0;
+  recordKnownExecutionOutcomeAttempts = 0;
+  startExecutionStatus: "started" | "conflict" | "recovery_required" = "started";
+  startExecutionThrowsAfterStart = false;
+  beginCommandStatus: "normal" | "recovery_required" = "normal";
+  recoverPreparedClaims = false;
+  nextClaimNumber = 1;
+  recoveredClaims: Array<{ oldClaimId: string; newClaimId: string }> = [];
+  markCommandEffectfulHook: ((input: import(
+    "../lib/workflows/workflow-runtime-service"
+  ).WorkflowRuntimeCommandOwnershipInput) => Promise<void>) | null = null;
+  startExecutionHook: ((claimId: string) => Promise<void>) | null = null;
+  executionJournal = new Map<string, "prepared" | "running" | "completed" | "failed" | "outcome_unknown">();
 
   constructor(state: RuntimeState) {
     this.state = clone(state);
@@ -368,10 +390,16 @@ class FakeStore implements RuntimeStore {
   }
 
   async beginCommand(input: CommandBeginInput) {
+    if (this.beginCommandStatus === "recovery_required") {
+      return { status: "recovery_required" as const };
+    }
     const existing = this.commands.get(input.commandId);
     if (!existing) {
       this.commands.set(input.commandId, { fingerprint: input.fingerprint, response: null });
-      return { status: "acquired" as const };
+      return {
+        status: "acquired" as const,
+        ownershipToken: "00000000-0000-4000-8000-000000000961",
+      };
     }
     if (existing.fingerprint !== input.fingerprint) return { status: "conflict" as const };
     return existing.response
@@ -407,18 +435,73 @@ class FakeStore implements RuntimeStore {
     }
   }
 
+  async markCommandEffectful(input: import(
+    "../lib/workflows/workflow-runtime-service"
+  ).WorkflowRuntimeCommandOwnershipInput) {
+    this.markCommandEffectfulAttempts += 1;
+    await this.markCommandEffectfulHook?.(input);
+  }
+
   async claim(input: ClaimInput) {
+    if (this.state.pause !== null) {
+      return { status: "conflict" as const, claimId: null };
+    }
     const key = `${input.runId}:${input.stepId}:${input.attemptNumber}:${input.expectedRevision}`;
     const existing = this.claims.get(key);
     if (existing) {
+      if (existing.executionId !== input.executionId
+        || existing.requestFingerprint !== input.requestFingerprint) {
+        return { status: "conflict" as const, claimId: null };
+      }
+      if (this.recoverPreparedClaims && this.executionJournal.get(existing.claimId) === "prepared") {
+        const oldClaimId = existing.claimId;
+        const claimId = `claim-${this.nextClaimNumber}`;
+        this.nextClaimNumber += 1;
+        this.claims.set(key, { ...existing, claimId });
+        this.executionJournal.delete(oldClaimId);
+        this.executionJournal.set(claimId, "prepared");
+        this.recoveredClaims.push({ oldClaimId, newClaimId: claimId });
+        return { status: "acquired" as const, claimId };
+      }
       return {
-        status: existing.executionId === input.executionId ? "idempotent" as const : "conflict" as const,
+        status: "idempotent" as const,
         claimId: null,
       };
     }
-    const claimId = `claim-${this.claims.size + 1}`;
-    this.claims.set(key, { claimId, executionId: input.executionId });
+    const claimId = `claim-${this.nextClaimNumber}`;
+    this.nextClaimNumber += 1;
+    this.claims.set(key, {
+      claimId,
+      executionId: input.executionId,
+      expectedRevision: input.expectedRevision,
+      requestFingerprint: input.requestFingerprint,
+      stepId: input.stepId,
+    });
+    this.executionJournal.set(claimId, "prepared");
     return { status: "acquired" as const, claimId };
+  }
+
+  async startExecution({ claimId }: { runId: string; claimId: string }) {
+    this.startExecutionAttempts += 1;
+    await this.startExecutionHook?.(claimId);
+    const claim = [...this.claims.values()].find((candidate) => candidate.claimId === claimId);
+    if (!claim || this.state.snapshot.revision !== claim.expectedRevision
+      || this.state.pause !== null || this.state.snapshot.status !== "running") {
+      return { status: "conflict" as const };
+    }
+    if (this.startExecutionStatus === "started") this.executionJournal.set(claimId, "running");
+    if (this.startExecutionStatus === "recovery_required") {
+      this.executionJournal.set(claimId, "running");
+    }
+    if (this.startExecutionThrowsAfterStart) throw new Error("lost execution-start acknowledgement");
+    return { status: this.startExecutionStatus };
+  }
+
+  async recordKnownExecutionOutcome({ claimId }: { runId: string; claimId: string }) {
+    this.recordKnownExecutionOutcomeAttempts += 1;
+    const status = this.executionJournal.get(claimId);
+    if (status === "running") this.executionJournal.set(claimId, "failed");
+    else if (status !== "completed" && status !== "failed") throw new Error("invalid execution outcome");
   }
 
   async compareAndSwap(input: CompareAndSwapInput) {
@@ -430,13 +513,28 @@ class FakeStore implements RuntimeStore {
       this.casConflicts -= 1;
       return { status: "conflict" as const, state: clone(this.state) };
     }
+    if (this.casRecoveryRequired > 0) {
+      this.casRecoveryRequired -= 1;
+      return { status: "recovery_required" as const, state: null };
+    }
     if (this.state.snapshot.revision !== input.expectedRevision) {
+      return { status: "conflict" as const, state: clone(this.state) };
+    }
+    if (JSON.stringify(this.state.pause) !== JSON.stringify(input.expectedPause)) {
       return { status: "conflict" as const, state: clone(this.state) };
     }
     if (input.claimId && ![...this.claims.values()].some((claim) => claim.claimId === input.claimId)) {
       return { status: "conflict" as const, state: clone(this.state) };
     }
     this.state = clone(input.nextState);
+    if (this.reconciledLostCommitAcknowledgements > 0) {
+      this.reconciledLostCommitAcknowledgements -= 1;
+    }
+    if (input.claimId) {
+      const claim = [...this.claims.values()].find((candidate) => candidate.claimId === input.claimId);
+      const step = input.nextState.snapshot.stepStates.find((candidate) => candidate.stepId === claim?.stepId);
+      this.executionJournal.set(input.claimId, step?.status === "success" ? "completed" : "failed");
+    }
     return { status: "committed" as const, state: clone(this.state) };
   }
 
@@ -445,6 +543,9 @@ class FakeStore implements RuntimeStore {
     if (this.releaseClaimThrows > 0) {
       this.releaseClaimThrows -= 1;
       throw new Error("sensitive releaseClaim failure");
+    }
+    if (this.executionJournal.get(claimId) === "running") {
+      this.executionJournal.set(claimId, "outcome_unknown");
     }
     for (const [key, claim] of this.claims) if (claim.claimId === claimId) this.claims.delete(key);
   }
@@ -704,10 +805,112 @@ test("AI-029 risk approval creates a runtime pause without fabricating a Workflo
   assert.deepEqual(runtimeProvider.counts(), { health: 0, run: 0 });
   assert.equal(store.state.pause?.kind, "risk_approval");
   assert.equal(store.state.snapshot.revision, 1);
+  assert.equal(store.recordKnownExecutionOutcomeAttempts, 1);
+  assert.deepEqual([...store.executionJournal.values()], ["failed"]);
   const repeatedAdvance = await service.advance(
     advanceCommand(1, ["step-a"], "advance-after-risk-pause"),
   );
   assert.equal(repeatedAdvance.status, "approval_required");
+  assert.deepEqual(runtimeProvider.counts(), { health: 0, run: 0 });
+});
+
+test("stale advance loaded before a durable risk pause is fenced at claim time", async () => {
+  const store = new FakeStore(initialState("single"));
+  let releaseStaleAdvance: () => void = () => { throw new Error("not ready"); };
+  const staleAdvanceBlocked = new Promise<void>((resolve) => { releaseStaleAdvance = resolve; });
+  let notifyStaleAdvance: () => void = () => { throw new Error("not ready"); };
+  const staleAdvanceReady = new Promise<void>((resolve) => { notifyStaleAdvance = resolve; });
+  store.markCommandEffectfulHook = async (input) => {
+    if (input.commandId === "advance-stale-before-pause") {
+      notifyStaleAdvance();
+      await staleAdvanceBlocked;
+    }
+  };
+  const runtimeProvider = provider();
+  const service = createWorkflowRuntimeService(dependencies(store, runtimeProvider, {
+    requirements: () => ({
+      ...capability("security_analysis", "advanced_reasoning"),
+      riskLevel: "high",
+    }),
+  }));
+  await start(service);
+
+  const staleAdvance = service.advance(
+    advanceCommand(1, ["step-a"], "advance-stale-before-pause"),
+  );
+  await staleAdvanceReady;
+  const paused = await service.advance(advanceCommand(1, ["step-a"], "advance-create-pause"));
+  assert.equal(paused.status, "approval_required");
+  assert.equal(store.state.snapshot.revision, 1);
+  assert.equal(store.state.pause?.kind, "risk_approval");
+
+  releaseStaleAdvance();
+  const rejected = await staleAdvance;
+  assert.equal(rejected.status, "conflict");
+  assert.equal(rejected.reasons[0]?.code, "claim_conflict");
+  assert.equal(store.state.pause?.kind, "risk_approval");
+  assert.deepEqual(runtimeProvider.counts(), { health: 0, run: 0 });
+
+  const restartedService = createWorkflowRuntimeService(dependencies(store, runtimeProvider, {
+    requirements: () => capability(),
+  }));
+  const afterRestart = await restartedService.advance(
+    advanceCommand(1, ["step-a"], "advance-after-restart"),
+  );
+  assert.equal(afterRestart.status, "approval_required");
+  assert.deepEqual(runtimeProvider.counts(), { health: 0, run: 0 });
+
+  const cancelled = await restartedService.cancel({
+    kind: "cancel",
+    commandId: "cancel-paused-run",
+    runId: "run-one",
+    expectedRevision: 1,
+    actorId: "owner-one",
+  });
+  assert.equal(cancelled.status, "cancelled");
+  assert.equal(store.state.snapshot.status, "cancelled");
+  assert.equal(store.state.pause, null);
+});
+
+test("stale cancellation cannot erase a newer same-revision risk pause", async () => {
+  const store = new FakeStore(initialState("single"));
+  let releaseStaleCancel: () => void = () => { throw new Error("not ready"); };
+  const staleCancelBlocked = new Promise<void>((resolve) => { releaseStaleCancel = resolve; });
+  let notifyStaleCancel: () => void = () => { throw new Error("not ready"); };
+  const staleCancelReady = new Promise<void>((resolve) => { notifyStaleCancel = resolve; });
+  store.markCommandEffectfulHook = async (input) => {
+    if (input.commandId === "cancel-stale-before-pause") {
+      notifyStaleCancel();
+      await staleCancelBlocked;
+    }
+  };
+  const runtimeProvider = provider();
+  const service = createWorkflowRuntimeService(dependencies(store, runtimeProvider, {
+    requirements: () => ({
+      ...capability("security_analysis", "advanced_reasoning"),
+      riskLevel: "high",
+    }),
+  }));
+  await start(service);
+
+  const staleCancel = service.cancel({
+    kind: "cancel",
+    commandId: "cancel-stale-before-pause",
+    runId: "run-one",
+    expectedRevision: 1,
+    actorId: "owner-one",
+  });
+  await staleCancelReady;
+  assert.equal((await service.advance(
+    advanceCommand(1, ["step-a"], "advance-create-pause-for-cancel"),
+  )).status, "approval_required");
+  releaseStaleCancel();
+
+  const staleResult = await staleCancel;
+  assert.equal(staleResult.status, "conflict");
+  assert.equal(store.state.snapshot.status, "running");
+  assert.equal(store.state.snapshot.revision, 1);
+  assert.equal(store.state.pause?.kind, "risk_approval");
   assert.deepEqual(runtimeProvider.counts(), { health: 0, run: 0 });
 });
 
@@ -725,9 +928,28 @@ for (const [taskClass, requestedCapability] of [
     const result = await service.advance(advanceCommand(1, ["step-a"]));
     assert.equal(result.status, "unsupported_runtime");
     assert.equal(result.workflowStatus, "running");
+    assert.equal(store.recordKnownExecutionOutcomeAttempts, 1);
+    assert.deepEqual([...store.executionJournal.values()], ["failed"]);
     assert.deepEqual(runtimeProvider.counts(), { health: 0, run: 0 });
   });
 }
+
+test("known capability denial is terminal and never becomes outcome_unknown", async () => {
+  const store = new FakeStore(initialState("single"));
+  const runtimeProvider = provider();
+  const service = createWorkflowRuntimeService(dependencies(store, runtimeProvider, {
+    requirements: () => ({
+      ...capability(),
+      budget: { maxInputTokens: 1_000_000, maxOutputTokens: 4_000, maxCostUsdMicros: 500_000 },
+    }),
+  }));
+  await start(service);
+  const result = await service.advance(advanceCommand(1, ["step-a"]));
+  assert.equal(result.verdict, "deny");
+  assert.equal(store.recordKnownExecutionOutcomeAttempts, 1);
+  assert.deepEqual([...store.executionJournal.values()], ["failed"]);
+  assert.deepEqual(runtimeProvider.counts(), { health: 0, run: 0 });
+});
 
 test("approval reject and mismatched/stale approval commands fail closed", async () => {
   const store = new FakeStore(initialState("linear"));
@@ -873,6 +1095,20 @@ test("command replay is idempotent while same commandId with changed payload con
   assert.equal(conflict.reasons[0]?.code, "idempotency_conflict");
 });
 
+test("stale effectful command requires recovery and never reaches AI-029", async () => {
+  const store = new FakeStore(initialState("single"));
+  const runtimeProvider = provider();
+  const service = createWorkflowRuntimeService(dependencies(store, runtimeProvider));
+  await start(service);
+  store.beginCommandStatus = "recovery_required";
+  const result = await service.advance(advanceCommand(1, ["step-a"]));
+  assert.equal(result.status, "recovery_required");
+  assert.equal(result.reasons[0]?.code, "command_recovery_required");
+  assert.equal(store.markCommandEffectfulAttempts, 1);
+  assert.equal(store.startExecutionAttempts, 0);
+  assert.deepEqual(runtimeProvider.counts(), { health: 0, run: 0 });
+});
+
 test("one factual attempt claim prevents a concurrent second AI-029/provider call", async () => {
   const store = new FakeStore(initialState("single"));
   let releaseHealth: (value: unknown) => void = () => { throw new Error("not ready"); };
@@ -898,6 +1134,201 @@ test("one factual attempt claim prevents a concurrent second AI-029/provider cal
   }));
   assert.equal((await first).status, "completed");
   assert.deepEqual(runtimeProvider.counts(), { health: 1, run: 1 });
+});
+
+test("prepared recovery fences the stalled owner and permits at most one provider call", async () => {
+  const store = new FakeStore(initialState("single"));
+  let releaseOldStart: () => void = () => { throw new Error("not ready"); };
+  const oldStartBlocked = new Promise<void>((resolve) => { releaseOldStart = resolve; });
+  let notifyOldStart: () => void = () => { throw new Error("not ready"); };
+  const oldStartReached = new Promise<void>((resolve) => { notifyOldStart = resolve; });
+  store.startExecutionHook = async (currentClaimId) => {
+    if (currentClaimId === "claim-1") {
+      notifyOldStart();
+      await oldStartBlocked;
+    }
+  };
+
+  let releaseHealth: (value: unknown) => void = () => { throw new Error("not ready"); };
+  const pendingHealth = new Promise<unknown>((resolve) => { releaseHealth = resolve; });
+  let notifyHealth: () => void = () => { throw new Error("not ready"); };
+  const healthStarted = new Promise<void>((resolve) => { notifyHealth = resolve; });
+  const runtimeProvider = provider({ pendingHealth, onHealth: notifyHealth });
+  const service = createWorkflowRuntimeService(dependencies(store, runtimeProvider));
+  await start(service);
+
+  const oldAdvance = service.advance(advanceCommand(1, ["step-a"], "advance-old-owner"));
+  await oldStartReached;
+  store.recoverPreparedClaims = true;
+  const recoveredAdvance = service.advance(advanceCommand(1, ["step-a"], "advance-new-owner"));
+  await healthStarted;
+  assert.deepEqual(store.recoveredClaims, [{ oldClaimId: "claim-1", newClaimId: "claim-2" }]);
+  assert.deepEqual(runtimeProvider.counts(), { health: 1, run: 0 });
+
+  releaseOldStart();
+  const oldResult = await oldAdvance;
+  assert.equal(oldResult.status, "conflict");
+  assert.equal(oldResult.reasons[0]?.code, "claim_conflict");
+  assert.equal([...store.claims.values()].some((claim) => claim.claimId === "claim-2"), true);
+
+  releaseHealth(validateAndNormalizeModelProviderHealth({
+    providerId: "provider-mock",
+    deploymentId: "deployment-mock",
+    status: "healthy",
+    observedAt: "2026-08-30T10:00:10.000Z",
+    latencyMs: 1,
+    detailCode: null,
+  }));
+  assert.equal((await recoveredAdvance).status, "completed");
+  assert.deepEqual(runtimeProvider.counts(), { health: 1, run: 1 });
+});
+
+test("pause persisted after claim fences startExecution before AI-029 and provider", async () => {
+  const store = new FakeStore(initialState("single"));
+  let releaseStart: () => void = () => { throw new Error("not ready"); };
+  const startBlocked = new Promise<void>((resolve) => { releaseStart = resolve; });
+  let notifyStart: () => void = () => { throw new Error("not ready"); };
+  const startReached = new Promise<void>((resolve) => { notifyStart = resolve; });
+  store.startExecutionHook = async () => {
+    notifyStart();
+    await startBlocked;
+  };
+  const runtimeProvider = provider();
+  const service = createWorkflowRuntimeService(dependencies(store, runtimeProvider));
+  await start(service);
+
+  const advance = service.advance(advanceCommand(1, ["step-a"], "advance-claimed-before-pause"));
+  await startReached;
+  const pause = {
+    kind: "risk_approval" as const,
+    stepId: "step-a",
+    reasonCode: "approval_required" as const,
+  };
+  assert.equal((await store.compareAndSwap({
+    runId: "run-one",
+    expectedRevision: 1,
+    expectedPause: null,
+    nextState: { ...clone(store.state), pause },
+    claimId: null,
+  })).status, "committed");
+  releaseStart();
+
+  const result = await advance;
+  assert.equal(result.status, "conflict");
+  assert.equal(result.reasons[0]?.code, "claim_conflict");
+  assert.deepEqual(store.state.pause, pause);
+  assert.deepEqual(runtimeProvider.counts(), { health: 0, run: 0 });
+});
+
+test("cancellation persisted after claim fences startExecution and remains factual", async () => {
+  const store = new FakeStore(initialState("single"));
+  let releaseStart: () => void = () => { throw new Error("not ready"); };
+  const startBlocked = new Promise<void>((resolve) => { releaseStart = resolve; });
+  let notifyStart: () => void = () => { throw new Error("not ready"); };
+  const startReached = new Promise<void>((resolve) => { notifyStart = resolve; });
+  store.startExecutionHook = async () => {
+    notifyStart();
+    await startBlocked;
+  };
+  const runtimeProvider = provider();
+  const service = createWorkflowRuntimeService(dependencies(store, runtimeProvider));
+  await start(service);
+
+  const advance = service.advance(advanceCommand(1, ["step-a"], "advance-claimed-before-cancel"));
+  await startReached;
+  const cancelled = await service.cancel({
+    kind: "cancel",
+    commandId: "cancel-after-claim",
+    runId: "run-one",
+    expectedRevision: 1,
+    actorId: "owner-one",
+  });
+  assert.equal(cancelled.status, "cancelled");
+  releaseStart();
+
+  const result = await advance;
+  assert.equal(result.status, "conflict");
+  assert.equal(store.state.snapshot.status, "cancelled");
+  assert.equal(store.state.snapshot.revision, 2);
+  assert.deepEqual(runtimeProvider.counts(), { health: 0, run: 0 });
+});
+
+test("factual revision advancement after claim fences startExecution before provider", async () => {
+  const store = new FakeStore(initialState("single"));
+  let releaseStart: () => void = () => { throw new Error("not ready"); };
+  const startBlocked = new Promise<void>((resolve) => { releaseStart = resolve; });
+  let notifyStart: () => void = () => { throw new Error("not ready"); };
+  const startReached = new Promise<void>((resolve) => { notifyStart = resolve; });
+  store.startExecutionHook = async () => {
+    notifyStart();
+    await startBlocked;
+  };
+  const runtimeProvider = provider();
+  const service = createWorkflowRuntimeService(dependencies(store, runtimeProvider));
+  await start(service);
+
+  const advance = service.advance(advanceCommand(1, ["step-a"], "advance-claimed-before-revision"));
+  await startReached;
+  const transition = evaluateWorkflowRunTransition({
+    snapshot: clone(store.state.snapshot),
+    event: {
+      eventId: "concurrent-step-start-r2",
+      runId: "run-one",
+      kind: "step_started",
+      sequence: 2,
+      occurredAt: "2026-08-30T10:00:11.000Z",
+      actorKind: "system",
+      actorId: "workflow-runtime",
+      stepId: "step-a",
+    },
+  });
+  assert.equal(transition.verdict, "allow", JSON.stringify(transition.reasons));
+  assert.ok(transition.nextSnapshot);
+  assert.equal((await store.compareAndSwap({
+    runId: "run-one",
+    expectedRevision: 1,
+    expectedPause: null,
+    nextState: { ...clone(store.state), snapshot: transition.nextSnapshot },
+    claimId: null,
+  })).status, "committed");
+  releaseStart();
+
+  const result = await advance;
+  assert.equal(result.status, "conflict");
+  assert.equal(store.state.snapshot.revision, 2);
+  assert.deepEqual(runtimeProvider.counts(), { health: 0, run: 0 });
+});
+
+test("ambiguous durable execution requires recovery before AI-029 and performs zero provider calls", async () => {
+  const store = new FakeStore(initialState("single"));
+  const runtimeProvider = provider();
+  const service = createWorkflowRuntimeService(dependencies(store, runtimeProvider));
+  await start(service);
+  store.startExecutionStatus = "recovery_required";
+  const result = await service.advance(advanceCommand(1, ["step-a"]));
+  assert.equal(result.verdict, "deny");
+  assert.equal(result.status, "recovery_required");
+  assert.equal(result.reasons[0]?.code, "execution_recovery_required");
+  assert.equal(store.startExecutionAttempts, 1);
+  assert.equal(store.releaseAttempts, 1);
+  assert.deepEqual([...store.executionJournal.values()], ["outcome_unknown"]);
+  assert.equal(store.recordKnownExecutionOutcomeAttempts, 0);
+  assert.deepEqual(runtimeProvider.counts(), { health: 0, run: 0 });
+});
+
+test("exception after durable execution start remains outcome_unknown", async () => {
+  const store = new FakeStore(initialState("single"));
+  const runtimeProvider = provider();
+  const service = createWorkflowRuntimeService(dependencies(store, runtimeProvider));
+  await start(service);
+  store.startExecutionThrowsAfterStart = true;
+  const result = await service.advance(advanceCommand(1, ["step-a"]));
+  assert.equal(result.verdict, "deny");
+  assert.equal(result.status, "recovery_required");
+  assert.equal(result.reasons.some((reason) => reason.path === "store.startExecution"), true);
+  assert.deepEqual([...store.executionJournal.values()], ["outcome_unknown"]);
+  assert.equal(store.recordKnownExecutionOutcomeAttempts, 0);
+  assert.deepEqual(runtimeProvider.counts(), { health: 0, run: 0 });
 });
 
 test("CAS conflict discards a completed model result without overwriting newer state", async () => {
@@ -928,6 +1359,37 @@ test("compareAndSwap exception fails closed, releases the claim, and never retri
   assert.equal(JSON.stringify(result).includes("sensitive compareAndSwap failure"), false);
   assert.equal(store.releaseAttempts, 1);
   assert.equal(store.claims.size, 0);
+  assert.deepEqual(runtimeProvider.counts(), { health: 1, run: 1 });
+});
+
+test("unreconciled CAS acknowledgement remains recovery_required and command replay is at-most-once", async () => {
+  const store = new FakeStore(initialState("single"));
+  const runtimeProvider = provider();
+  const service = createWorkflowRuntimeService(dependencies(store, runtimeProvider));
+  await start(service);
+  store.casRecoveryRequired = 1;
+  const command = advanceCommand(1, ["step-a"], "advance-cas-unknown");
+  const first = await service.advance(command);
+  const replay = await service.advance(command);
+  assert.equal(first.status, "recovery_required");
+  assert.equal(replay.verdict, "idempotent");
+  assert.equal(replay.status, "recovery_required");
+  assert.deepEqual(runtimeProvider.counts(), { health: 1, run: 1 });
+});
+
+test("reconciled lost CAS acknowledgement completes command replay with one provider call", async () => {
+  const store = new FakeStore(initialState("single"));
+  const runtimeProvider = provider();
+  const service = createWorkflowRuntimeService(dependencies(store, runtimeProvider));
+  await start(service);
+  store.reconciledLostCommitAcknowledgements = 1;
+  const command = advanceCommand(1, ["step-a"], "advance-cas-reconciled");
+  const first = await service.advance(command);
+  const replay = await service.advance(command);
+  assert.equal(first.status, "completed");
+  assert.equal(replay.verdict, "idempotent");
+  assert.equal(replay.status, "completed");
+  assert.equal(store.reconciledLostCommitAcknowledgements, 0);
   assert.deepEqual(runtimeProvider.counts(), { health: 1, run: 1 });
 });
 
