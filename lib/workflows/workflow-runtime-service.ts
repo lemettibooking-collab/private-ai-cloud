@@ -6,6 +6,7 @@ import type { ModelProvider } from "../contracts/model-provider-adapter";
 import type { WorkflowRunSnapshot, WorkflowRunStatus } from "../contracts/workflow-run";
 import type {
   AgentStepCapabilityRequirementsResolver,
+  AgentStepRiskApprovalQuery,
   AgentStepRuntimeFactsQuery,
   AgentStepRuntimeContext,
   AgentStepRuntimeDecision,
@@ -83,6 +84,8 @@ export type WorkflowRuntimePause = Readonly<{
   kind: "risk_approval";
   stepId: string;
   reasonCode: "approval_required";
+  approvalRequestId: string;
+  approvalStatus: "pending" | "rejected";
 }>;
 
 export type WorkflowRuntimeState = Readonly<{
@@ -225,7 +228,45 @@ export type WorkflowRuntimeCompareAndSwapInput = Readonly<{
   expectedPause: WorkflowRuntimePause | null;
   nextState: WorkflowRuntimeState;
   claimId: string | null;
+  approvalMutation?: WorkflowRuntimeApprovalMutation | null;
 }>;
+
+export type WorkflowRuntimeRiskApprovalScope = Readonly<{
+  workspaceId: string;
+  runId: string;
+  approvalRequestId: string;
+  scopeFingerprint: string;
+  stepId: string;
+  attemptNumber: number;
+  expectedRevision: number;
+  requestFingerprint: string;
+  policyFingerprint: string;
+  requestedCapability: "deterministic" | "economy" | "reasoning" | "advanced_reasoning" | "coding";
+  riskLevel: "low" | "medium" | "high" | "critical";
+}>;
+
+export type WorkflowRuntimeApprovalMutation =
+  | Readonly<{
+      kind: "create";
+      scope: WorkflowRuntimeRiskApprovalScope;
+      requestedByActorId: string;
+    }>
+  | Readonly<{
+      kind: "resolve";
+      approvalRequestId: string;
+      decision: "approved" | "rejected";
+      decidedByActorId: string;
+      reason: string | null;
+      commandId: string;
+    }>
+  | Readonly<{
+      kind: "cancel";
+      approvalRequestId: string;
+      cancelledByActorId: string;
+      commandId: string;
+    }>;
+
+export type WorkflowRuntimeRiskApprovalCheckInput = WorkflowRuntimeRiskApprovalScope;
 
 export type WorkflowRuntimeCompareAndSwapDecision =
   | Readonly<{ status: "committed"; state: WorkflowRuntimeState }>
@@ -258,6 +299,7 @@ export interface WorkflowRuntimeStateStore {
     claimId: string;
   }>): Promise<void>;
   compareAndSwap(input: WorkflowRuntimeCompareAndSwapInput): Promise<WorkflowRuntimeCompareAndSwapDecision>;
+  checkRiskApproval(input: WorkflowRuntimeRiskApprovalCheckInput): Promise<Readonly<{ approved: boolean }>>;
   releaseClaim(input: Readonly<{ runId: string; claimId: string }>): Promise<void>;
 }
 
@@ -466,9 +508,44 @@ function executionRequestFingerprint(
     revision: state.snapshot.revision,
     stepId,
     attemptNumber,
-    executionId: input.executionId,
     invocationDraft: input.invocationDraft,
   })).digest("hex");
+}
+
+function riskApprovalScope(
+  state: WorkflowRuntimeState,
+  stepId: string,
+  attemptNumber: number,
+  requestFingerprint: string,
+  policyFingerprint: string,
+  requestedCapability: WorkflowRuntimeRiskApprovalScope["requestedCapability"],
+  riskLevel: WorkflowRuntimeRiskApprovalScope["riskLevel"],
+): WorkflowRuntimeRiskApprovalScope {
+  const scopeInput = {
+    workspaceId: state.snapshot.workspaceId,
+    runId: state.snapshot.runId,
+    stepId,
+    attemptNumber,
+    expectedRevision: state.snapshot.revision,
+    requestFingerprint,
+    policyFingerprint,
+    requestedCapability,
+    riskLevel,
+  };
+  const scopeFingerprint = createHash("sha256").update(canonicalData(scopeInput)).digest("hex");
+  return freezeModelProviderAdapterData({
+    workspaceId: state.snapshot.workspaceId,
+    runId: state.snapshot.runId,
+    approvalRequestId: `risk-approval-${scopeFingerprint.slice(0, 32)}`,
+    scopeFingerprint,
+    stepId,
+    attemptNumber,
+    expectedRevision: state.snapshot.revision,
+    requestFingerprint,
+    policyFingerprint,
+    requestedCapability,
+    riskLevel,
+  });
 }
 
 export function normalizeWorkflowRuntimeState(input: unknown): WorkflowRuntimeState | null {
@@ -482,10 +559,21 @@ export function normalizeWorkflowRuntimeState(input: unknown): WorkflowRuntimeSt
   const pauseInput = boundary.value.pause;
   let pause: WorkflowRuntimePause | null = null;
   if (pauseInput !== null) {
-    if (!plainRecord(pauseInput) || !exactFields(pauseInput, ["kind", "stepId", "reasonCode"])
+    if (!plainRecord(pauseInput) || !exactFields(pauseInput, [
+      "kind", "stepId", "reasonCode", "approvalRequestId", "approvalStatus",
+    ])
       || pauseInput.kind !== "risk_approval" || pauseInput.reasonCode !== "approval_required"
-      || typeof pauseInput.stepId !== "string") return null;
-    pause = { kind: "risk_approval", stepId: pauseInput.stepId, reasonCode: "approval_required" };
+      || typeof pauseInput.stepId !== "string"
+      || typeof pauseInput.approvalRequestId !== "string"
+      || !stableIdPattern.test(pauseInput.approvalRequestId)
+      || !["pending", "rejected"].includes(pauseInput.approvalStatus as string)) return null;
+    pause = {
+      kind: "risk_approval",
+      stepId: pauseInput.stepId,
+      reasonCode: "approval_required",
+      approvalRequestId: pauseInput.approvalRequestId,
+      approvalStatus: pauseInput.approvalStatus as "pending" | "rejected",
+    };
   }
   if (!Array.isArray(boundary.value.existingRequests)) return null;
   return freezeModelProviderAdapterData({
@@ -516,7 +604,13 @@ function lastResult(stepId: string, result: ModelInvocationResult): WorkflowRunt
 function waitingApproval(state: WorkflowRuntimeState): WorkflowRuntimeWaitingApproval | null {
   const gate = state.snapshot.stepStates.find((step) => step.status === "waiting_approval");
   if (gate) return { kind: "workflow_gate", stepId: gate.stepId, approvalRequestId: gate.approvalRequestId };
-  if (state.pause) return { kind: "runtime_risk", stepId: state.pause.stepId, approvalRequestId: null };
+  if (state.pause) {
+    return {
+      kind: "runtime_risk",
+      stepId: state.pause.stepId,
+      approvalRequestId: state.pause.approvalRequestId,
+    };
+  }
   return null;
 }
 
@@ -796,6 +890,7 @@ export function createWorkflowRuntimeService(
     claimId: string | null,
     reasons: MutableReasons,
     pause: WorkflowRuntimePause | null = state.pause,
+    approvalMutation: WorkflowRuntimeApprovalMutation | null = null,
   ): Promise<WorkflowRuntimeCompareAndSwapDecision | null> {
     try {
       return await store.compareAndSwap({
@@ -804,6 +899,7 @@ export function createWorkflowRuntimeService(
         expectedPause: state.pause,
         nextState: nextState(state, snapshot, pause),
         claimId,
+        approvalMutation,
       });
     } catch {
       addReason(
@@ -980,6 +1076,17 @@ export function createWorkflowRuntimeService(
       return finish(command, fingerprint, response("deny", "conflict", reasons, state));
     }
     if (state.pause) {
+      if (state.pause.approvalStatus === "rejected") {
+        addReason(
+          reasons,
+          "approval_mismatch",
+          "approvalRequestId",
+          "Factual runtime risk approval was rejected.",
+          command.runId,
+          state.pause.stepId,
+        );
+        return finish(command, fingerprint, response("deny", "denied", reasons, state));
+      }
       return finish(command, fingerprint, response("deny", "approval_required", [], state));
     }
     if (state.snapshot.status === "waiting_approval") {
@@ -1121,6 +1228,7 @@ export function createWorkflowRuntimeService(
         return finish(command, fingerprint, response("deny", "denied", reasons, state, latestResult));
       }
       const attemptNumber = stepState.attemptCount + 1;
+      const requestFingerprint = executionRequestFingerprint(state, step.id, attemptNumber, agentInput);
       let claim: WorkflowRuntimeClaimDecision;
       try {
         claim = await store.claim({
@@ -1129,7 +1237,7 @@ export function createWorkflowRuntimeService(
           attemptNumber,
           expectedRevision: state.snapshot.revision,
           executionId: agentInput.executionId,
-          requestFingerprint: executionRequestFingerprint(state, step.id, attemptNumber, agentInput),
+          requestFingerprint,
         });
       } catch {
         addReason(reasons, "state_store_failed", "store.claim", "Attempt claim failed closed.", command.runId, step.id);
@@ -1217,6 +1325,27 @@ export function createWorkflowRuntimeService(
             requirementsResolver,
             evidenceResolver,
             runtimeContext,
+            {
+              async resolve(query: AgentStepRiskApprovalQuery) {
+                if (query.workspaceId !== factualState.snapshot.workspaceId
+                  || query.runId !== factualState.snapshot.runId
+                  || query.stepId !== step.id
+                  || query.expectedRevision !== factualState.snapshot.revision
+                  || query.expectedAttemptNumber !== attemptNumber) {
+                  throw new Error("Factual risk approval query mismatch.");
+                }
+                const scope = riskApprovalScope(
+                  factualState,
+                  step.id,
+                  attemptNumber,
+                  requestFingerprint,
+                  query.policyFingerprint,
+                  query.requestedCapability,
+                  query.riskLevel,
+                );
+                return store.checkRiskApproval(scope);
+              },
+            },
           );
           executionOutcomeKnown = true;
           if (!agentDecision.previousSnapshot
@@ -1226,23 +1355,56 @@ export function createWorkflowRuntimeService(
             claimedResponse = response("deny", "conflict", reasons, state, latestResult);
           } else if (!agentDecision.nextSnapshot) {
             if (agentDecision.status === "approval_required") {
-              const committed = await safeCompareAndSwap(
-                state,
-                state.snapshot,
-                claim.claimId,
-                reasons,
-                { kind: "risk_approval", stepId: step.id, reasonCode: "approval_required" },
-              );
-              if (!committed) {
+              if (!agentDecision.riskApprovalScope) {
+                addReason(
+                  reasons,
+                  "agent_result_mismatch",
+                  "riskApprovalScope",
+                  "Agent approval outcome is missing its bounded factual risk scope.",
+                  command.runId,
+                  step.id,
+                );
                 claimedResponse = response("deny", "denied", reasons, state, latestResult);
-              } else if (committed.status === "recovery_required") {
-                claimedResponse = casRecoveryResponse(command.runId, reasons, state, latestResult);
-              } else if (committed.status === "conflict") {
-                claimedState = committed.state ?? state;
-                claimedResponse = await conflictResponse(command.runId, reasons, committed.state);
               } else {
-                claimedState = committed.state;
-                claimedResponse = response("deny", "approval_required", [], committed.state, latestResult);
+                const approvalScope = riskApprovalScope(
+                  state,
+                  step.id,
+                  attemptNumber,
+                  requestFingerprint,
+                  agentDecision.riskApprovalScope.policyFingerprint,
+                  agentDecision.riskApprovalScope.requestedCapability,
+                  agentDecision.riskApprovalScope.riskLevel,
+                );
+                const approvalPause: WorkflowRuntimePause = {
+                  kind: "risk_approval",
+                  stepId: step.id,
+                  reasonCode: "approval_required",
+                  approvalRequestId: approvalScope.approvalRequestId,
+                  approvalStatus: "pending",
+                };
+                const committed = await safeCompareAndSwap(
+                  state,
+                  state.snapshot,
+                  claim.claimId,
+                  reasons,
+                  approvalPause,
+                  {
+                    kind: "create",
+                    scope: approvalScope,
+                    requestedByActorId: "workflow-runtime",
+                  },
+                );
+                if (!committed) {
+                  claimedResponse = response("deny", "denied", reasons, state, latestResult);
+                } else if (committed.status === "recovery_required") {
+                  claimedResponse = casRecoveryResponse(command.runId, reasons, state, latestResult);
+                } else if (committed.status === "conflict") {
+                  claimedState = committed.state ?? state;
+                  claimedResponse = await conflictResponse(command.runId, reasons, committed.state);
+                } else {
+                  claimedState = committed.state;
+                  claimedResponse = response("deny", "approval_required", [], committed.state, latestResult);
+                }
               }
             } else {
               addReason(reasons, "agent_runtime_denied", "executeAgentStep", "Agent Step Runtime did not produce a committable snapshot.", command.runId, step.id);
@@ -1337,8 +1499,57 @@ export function createWorkflowRuntimeService(
       addReason(reasons, "stale_revision", "expectedRevision", "Expected revision is stale.", command.runId, command.stepId);
       return finish(command, fingerprint, response("deny", "conflict", reasons, state));
     }
+    if (state.pause) {
+      if (state.pause.approvalStatus !== "pending"
+        || state.pause.stepId !== command.stepId
+        || state.pause.approvalRequestId !== command.approvalRequestId) {
+        addReason(
+          reasons,
+          "approval_mismatch",
+          "approvalRequestId",
+          "Factual runtime risk approval does not match the pending command scope.",
+          command.runId,
+          command.stepId,
+        );
+        return finish(command, fingerprint, response("deny", "denied", reasons, state));
+      }
+      if (!await safeMarkCommandEffectful(command, fingerprint, reasons)) {
+        return finish(command, fingerprint, response("deny", "denied", reasons, state));
+      }
+      const nextPause: WorkflowRuntimePause | null = command.kind === "approve"
+        ? null
+        : { ...state.pause, approvalStatus: "rejected" };
+      const committed = await safeCompareAndSwap(
+        state,
+        state.snapshot,
+        null,
+        reasons,
+        nextPause,
+        {
+          kind: "resolve",
+          approvalRequestId: command.approvalRequestId,
+          decision: command.kind === "approve" ? "approved" : "rejected",
+          decidedByActorId: command.actorId,
+          reason: command.kind === "reject" ? command.reason : null,
+          commandId: command.commandId,
+        },
+      );
+      if (!committed) return finish(command, fingerprint, response("deny", "denied", reasons, state));
+      if (committed.status === "recovery_required") {
+        return finish(command, fingerprint, casRecoveryResponse(command.runId, reasons, state));
+      }
+      if (committed.status === "conflict") {
+        return finish(command, fingerprint, await conflictResponse(command.runId, reasons, committed.state));
+      }
+      return finish(command, fingerprint, response(
+        command.kind === "approve" ? "allow" : "deny",
+        command.kind === "approve" ? "running" : "denied",
+        [],
+        committed.state,
+      ));
+    }
     const stepState = state.snapshot.stepStates.find((step) => step.stepId === command.stepId);
-    if (state.pause || state.snapshot.status !== "waiting_approval"
+    if (state.snapshot.status !== "waiting_approval"
       || stepState?.status !== "waiting_approval"
       || stepState.approvalRequestId !== command.approvalRequestId) {
       addReason(reasons, "approval_mismatch", "approvalRequestId", "Factual pending approval does not match command.", command.runId, command.stepId);
@@ -1419,7 +1630,21 @@ export function createWorkflowRuntimeService(
     if (!await safeMarkCommandEffectful(command, fingerprint, reasons)) {
       return finish(command, fingerprint, response("deny", "denied", reasons, state));
     }
-    const committed = await safeCompareAndSwap(state, transition.nextSnapshot, null, reasons, null);
+    const committed = await safeCompareAndSwap(
+      state,
+      transition.nextSnapshot,
+      null,
+      reasons,
+      null,
+      state.pause?.approvalStatus === "pending"
+        ? {
+            kind: "cancel",
+            approvalRequestId: state.pause.approvalRequestId,
+            cancelledByActorId: command.actorId,
+            commandId: command.commandId,
+          }
+        : null,
+    );
     if (!committed) {
       return finish(command, fingerprint, response("deny", "denied", reasons, state));
     }
@@ -1437,7 +1662,9 @@ export function createWorkflowRuntimeService(
     const state = await load(command.runId, reasons);
     if (!state) return response("deny", "denied", reasons, null);
     if (!await authorize(command, state, reasons)) return response("deny", "denied", reasons, state);
-    const status = state.pause ? "approval_required" : statusForSnapshot(state.snapshot);
+    const status = state.pause
+      ? state.pause.approvalStatus === "pending" ? "approval_required" : "denied"
+      : statusForSnapshot(state.snapshot);
     return response("allow", status, [], state);
   }
 

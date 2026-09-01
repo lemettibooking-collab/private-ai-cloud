@@ -1,5 +1,8 @@
 import { isProxy } from "node:util/types";
-import type { ModelCapabilityRoutingDecision } from "../contracts/model-capability-routing-policy";
+import type {
+  ModelCapabilityRiskApprovalScope,
+  ModelCapabilityRoutingDecision,
+} from "../contracts/model-capability-routing-policy";
 import type { ModelInvocationResult } from "../contracts/model-invocation";
 import type { ModelInvocationExecutionDecision } from "../contracts/model-invocation-execution";
 import type { ModelProviderIdentity } from "../contracts/model-provider-adapter";
@@ -9,7 +12,7 @@ import type {
   WorkflowRunTransitionDecision,
 } from "../contracts/workflow-run";
 // @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
-import { evaluateModelCapabilityRoutingPolicy } from "../contracts/model-capability-routing-policy.ts";
+import { createModelCapabilityRiskApprovalScope, evaluateModelCapabilityRoutingPolicy } from "../contracts/model-capability-routing-policy.ts";
 // @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
 import { executeModelInvocation } from "../contracts/model-invocation-execution.ts";
 // @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
@@ -88,6 +91,21 @@ export interface AgentStepCapabilityRequirementsResolver {
   resolve(input: AgentStepCapabilityRequirementsContext): unknown | Promise<unknown>;
 }
 
+export type AgentStepRiskApprovalQuery = Readonly<{
+  workspaceId: string;
+  runId: string;
+  stepId: string;
+  expectedRevision: number;
+  expectedAttemptNumber: number;
+  policyFingerprint: string;
+  requestedCapability: ModelCapabilityRiskApprovalScope["requestedCapability"];
+  riskLevel: ModelCapabilityRiskApprovalScope["riskLevel"];
+}>;
+
+export interface AgentStepRiskApprovalResolver {
+  resolve(input: AgentStepRiskApprovalQuery): unknown | Promise<unknown>;
+}
+
 export interface AgentStepRuntimeContext {
   now(): string;
 }
@@ -105,6 +123,8 @@ export type AgentStepRuntimeReasonCode =
   | "stale_runtime_input"
   | "requirements_resolver_invalid"
   | "requirements_resolution_failed"
+  | "risk_approval_resolver_invalid"
+  | "risk_approval_resolution_failed"
   | "capability_denied"
   | "capability_budget_exceeded"
   | "approval_required"
@@ -146,6 +166,7 @@ export type AgentStepRuntimeDecision = Readonly<{
   reasons: readonly AgentStepRuntimeReason[];
   stepId: string | null;
   capabilityDecision: ModelCapabilityRoutingDecision | null;
+  riskApprovalScope: ModelCapabilityRiskApprovalScope | null;
   modelExecutionDecision: AgentStepModelExecutionDecision | null;
   previousSnapshot: WorkflowRunSnapshot | null;
   nextSnapshot: WorkflowRunSnapshot | null;
@@ -158,6 +179,9 @@ type CapturedRequirementsResolver = Readonly<{
 }>;
 type CapturedFactsResolver = Readonly<{
   resolve: (input: AgentStepRuntimeFactsQuery) => unknown | Promise<unknown>;
+}>;
+type CapturedRiskApprovalResolver = Readonly<{
+  resolve: (input: AgentStepRiskApprovalQuery) => unknown | Promise<unknown>;
 }>;
 type CapturedRuntimeContext = Readonly<{ now: () => unknown }>;
 
@@ -177,6 +201,7 @@ const factsFields = Object.freeze([
 ] as const);
 const factsResolverFields = Object.freeze(["resolve"] as const);
 const requirementsResolverFields = Object.freeze(["resolve"] as const);
+const riskApprovalResolverFields = Object.freeze(["resolve"] as const);
 const runtimeContextFields = Object.freeze(["now"] as const);
 const stableIdPattern = /^[a-z0-9][a-z0-9._-]{0,63}$/u;
 const canonicalTimestampPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
@@ -294,6 +319,7 @@ function decision(
   context: Readonly<{
     stepId?: string | null;
     capabilityDecision?: ModelCapabilityRoutingDecision | null;
+    riskApprovalScope?: ModelCapabilityRiskApprovalScope | null;
     modelExecutionDecision?: ModelInvocationExecutionDecision | null;
     previousSnapshot?: WorkflowRunSnapshot | null;
     nextSnapshot?: WorkflowRunSnapshot | null;
@@ -307,6 +333,9 @@ function decision(
     stepId: context.stepId ?? null,
     capabilityDecision: context.capabilityDecision
       ? cloneModelProviderAdapterData(context.capabilityDecision)
+      : null,
+    riskApprovalScope: context.riskApprovalScope
+      ? cloneModelProviderAdapterData(context.riskApprovalScope)
       : null,
     modelExecutionDecision: context.modelExecutionDecision
       ? cloneModelProviderAdapterData({
@@ -330,6 +359,33 @@ function decision(
       ? cloneModelProviderAdapterData(context.normalizedResult)
       : null,
   });
+}
+
+function captureRiskApprovalResolver(
+  input: unknown,
+  reasons: MutableReasons,
+): CapturedRiskApprovalResolver | null {
+  if (input === undefined) return null;
+  try {
+    if (!isPlainRecord(input)) throw new Error("invalid");
+    const ownKeys = Reflect.ownKeys(input);
+    if (ownKeys.some((key) => typeof key !== "string")
+      || ownKeys.length !== riskApprovalResolverFields.length
+      || !riskApprovalResolverFields.every((field) => ownKeys.includes(field))) {
+      throw new Error("invalid");
+    }
+    const resolveDescriptor = ownDataDescriptor(input, "resolve");
+    if (!resolveDescriptor || typeof resolveDescriptor.value !== "function") throw new Error("invalid");
+    return { resolve: resolveDescriptor.value as CapturedRiskApprovalResolver["resolve"] };
+  } catch {
+    addReason(
+      reasons,
+      "risk_approval_resolver_invalid",
+      "riskApprovalResolver",
+      "Trusted risk approval resolver is invalid.",
+    );
+    return null;
+  }
 }
 
 function captureFactsResolver(
@@ -624,6 +680,7 @@ export async function executeAgentStep(
   requirementsResolver: unknown,
   evidenceResolver?: unknown,
   runtimeContext?: unknown,
+  riskApprovalResolver?: unknown,
 ): Promise<AgentStepRuntimeDecision> {
   const reasons: MutableReasons = [];
   const boundary = containsProxy(input)
@@ -787,26 +844,104 @@ export async function executeAgentStep(
     return decision("deny", "denied", reasons, { stepId, previousSnapshot });
   }
 
-  const capabilityDecision = evaluateModelCapabilityRoutingPolicy(rawRequirements);
+  let capabilityDecision = evaluateModelCapabilityRoutingPolicy(rawRequirements);
   if (capabilityDecision.verdict !== "allow" || !capabilityDecision.authorizedCapability
     || !capabilityDecision.budget) {
-    const approvalRequired = capabilityDecision.reasons.some(
-      (reason) => reason.code === "risk_approval_required",
-    );
-    addReason(
-      reasons,
-      approvalRequired ? "approval_required" : "capability_denied",
-      "capabilityDecision",
-      approvalRequired
-        ? "Capability execution requires approval orchestration outside AI-029."
-        : "Factual AI-028.1 capability policy denied execution.",
-      { runId: previousSnapshot.runId, stepId },
-    );
-    return decision("deny", approvalRequired ? "approval_required" : "denied", reasons, {
-      stepId,
-      capabilityDecision,
-      previousSnapshot,
-    });
+    const riskApprovalScope = createModelCapabilityRiskApprovalScope(rawRequirements);
+    const approvalRequired = riskApprovalScope !== null;
+    if (approvalRequired) {
+      const capturedRiskApprovalResolver = captureRiskApprovalResolver(riskApprovalResolver, reasons);
+      if (riskApprovalResolver !== undefined && !capturedRiskApprovalResolver) {
+        return decision("deny", "denied", reasons, {
+          stepId,
+          capabilityDecision,
+          riskApprovalScope,
+          previousSnapshot,
+        });
+      }
+      let approved = false;
+      if (capturedRiskApprovalResolver) {
+        let rawApproval: unknown;
+        try {
+          rawApproval = await capturedRiskApprovalResolver.resolve(freezeModelProviderAdapterData({
+            workspaceId: previousSnapshot.workspaceId,
+            runId: previousSnapshot.runId,
+            stepId,
+            expectedRevision,
+            expectedAttemptNumber,
+            policyFingerprint: riskApprovalScope.policyFingerprint,
+            requestedCapability: riskApprovalScope.requestedCapability,
+            riskLevel: riskApprovalScope.riskLevel,
+          }));
+        } catch {
+          addReason(
+            reasons,
+            "risk_approval_resolution_failed",
+            "riskApprovalResolver.resolve",
+            "Trusted risk approval resolution failed closed.",
+            { runId: previousSnapshot.runId, stepId },
+          );
+          return decision("deny", "denied", reasons, {
+            stepId,
+            capabilityDecision,
+            riskApprovalScope,
+            previousSnapshot,
+          });
+        }
+        const approvalBoundary = snapshotModelProviderAdapterInput(rawApproval);
+        if (!approvalBoundary.ok || !isPlainRecord(approvalBoundary.value)
+          || !hasExactFields(approvalBoundary.value, ["approved"])
+          || typeof approvalBoundary.value.approved !== "boolean") {
+          addReason(
+            reasons,
+            "risk_approval_resolution_failed",
+            "riskApprovalResolver.resolve",
+            "Trusted risk approval result is invalid.",
+            { runId: previousSnapshot.runId, stepId },
+          );
+          return decision("deny", "denied", reasons, {
+            stepId,
+            capabilityDecision,
+            riskApprovalScope,
+            previousSnapshot,
+          });
+        }
+        approved = approvalBoundary.value.approved;
+      }
+      if (approved) {
+        capabilityDecision = riskApprovalScope.conditionalDecision;
+      }
+      if (!approved) {
+        addReason(
+          reasons,
+          "approval_required",
+          "capabilityDecision",
+          "Capability execution requires an exact durable risk approval.",
+          { runId: previousSnapshot.runId, stepId },
+        );
+        return decision("deny", "approval_required", reasons, {
+          stepId,
+          capabilityDecision,
+          riskApprovalScope,
+          previousSnapshot,
+        });
+      }
+    }
+    if (capabilityDecision.verdict !== "allow" || !capabilityDecision.authorizedCapability
+      || !capabilityDecision.budget) {
+      addReason(
+        reasons,
+        "capability_denied",
+        "capabilityDecision",
+        "Factual AI-028.1 capability policy denied execution.",
+        { runId: previousSnapshot.runId, stepId },
+      );
+      return decision("deny", "denied", reasons, {
+        stepId,
+        capabilityDecision,
+        previousSnapshot,
+      });
+    }
   }
   if (!capabilityBudgetFitsWorkflow(capabilityDecision, previousSnapshot)) {
     addReason(

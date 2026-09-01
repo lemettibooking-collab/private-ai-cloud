@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
   WorkflowRuntimeCommandBeginDecision,
   WorkflowRuntimeCommandBeginInput,
@@ -6,6 +7,8 @@ import type {
   WorkflowRuntimeCompareAndSwapInput,
   WorkflowRuntimeExecutionStartDecision,
   WorkflowRuntimeResponse,
+  WorkflowRuntimeApprovalMutation,
+  WorkflowRuntimeRiskApprovalCheckInput,
   WorkflowRuntimeState,
   WorkflowRuntimeStateStore,
 } from "../workflows/workflow-runtime-service";
@@ -106,9 +109,24 @@ type ExecutionRow = Record<string, unknown> & {
   run_status: string;
 };
 
+type RuntimeApprovalRow = Record<string, unknown> & {
+  runtime_approval_id: string;
+  status: "pending" | "approved" | "rejected" | "cancelled";
+  step_id: string;
+  attempt_number: number;
+  expected_revision: string | number;
+  request_fingerprint: string;
+  policy_fingerprint: string;
+  scope_fingerprint: string;
+  requested_capability: "deterministic" | "economy" | "reasoning" | "advanced_reasoning" | "coding";
+  risk_level: "low" | "medium" | "high" | "critical";
+  decision: "approved" | "rejected" | null;
+};
+
 const stableIdPattern = /^[a-z0-9][a-z0-9._-]{0,63}$/u;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const fingerprintPattern = /^[0-9a-f]{64}$/u;
+const actorIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}$/u;
 const forbiddenStoredKeys = new Set([
   "apiKey",
   "credential",
@@ -306,6 +324,85 @@ function sameRuntimeState(left: WorkflowRuntimeState, right: WorkflowRuntimeStat
   return canonicalData(left) === canonicalData(right);
 }
 
+function validRiskScope(input: WorkflowRuntimeRiskApprovalCheckInput): boolean {
+  const calculatedScopeFingerprint = createHash("sha256").update(canonicalData({
+    workspaceId: input.workspaceId,
+    runId: input.runId,
+    stepId: input.stepId,
+    attemptNumber: input.attemptNumber,
+    expectedRevision: input.expectedRevision,
+    requestFingerprint: input.requestFingerprint,
+    policyFingerprint: input.policyFingerprint,
+    requestedCapability: input.requestedCapability,
+    riskLevel: input.riskLevel,
+  })).digest("hex");
+  return stableIdPattern.test(input.workspaceId)
+    && stableIdPattern.test(input.runId)
+    && /^risk-approval-[0-9a-f]{32}$/u.test(input.approvalRequestId)
+    && fingerprintPattern.test(input.scopeFingerprint)
+    && input.scopeFingerprint === calculatedScopeFingerprint
+    && input.approvalRequestId === `risk-approval-${calculatedScopeFingerprint.slice(0, 32)}`
+    && stableIdPattern.test(input.stepId)
+    && Number.isSafeInteger(input.attemptNumber) && input.attemptNumber >= 1
+    && safeInteger(input.expectedRevision)
+    && fingerprintPattern.test(input.requestFingerprint)
+    && fingerprintPattern.test(input.policyFingerprint)
+    && ["deterministic", "economy", "reasoning", "advanced_reasoning", "coding"]
+      .includes(input.requestedCapability)
+    && ["low", "medium", "high", "critical"].includes(input.riskLevel);
+}
+
+function validApprovalMutation(
+  mutation: WorkflowRuntimeApprovalMutation | null,
+  input: WorkflowRuntimeCompareAndSwapInput,
+  state: WorkflowRuntimeState,
+  workspaceId: string,
+): boolean {
+  if (mutation === null) {
+    const createsPending = input.expectedPause === null && state.pause?.approvalStatus === "pending";
+    const changesPending = input.expectedPause?.approvalStatus === "pending"
+      && canonicalData(input.expectedPause) !== canonicalData(state.pause);
+    return !createsPending && !changesPending;
+  }
+  if (mutation.kind === "create") {
+    const scope = mutation.scope;
+    return validRiskScope(scope)
+      && scope.workspaceId === workspaceId
+      && scope.runId === input.runId
+      && scope.expectedRevision === input.expectedRevision
+      && actorIdPattern.test(mutation.requestedByActorId)
+      && input.claimId !== null
+      && input.expectedPause === null
+      && state.pause?.approvalStatus === "pending"
+      && state.pause.approvalRequestId === scope.approvalRequestId
+      && state.pause.stepId === scope.stepId;
+  }
+  if (!/^risk-approval-[0-9a-f]{32}$/u.test(mutation.approvalRequestId)
+    || !actorIdPattern.test(mutation.kind === "resolve"
+      ? mutation.decidedByActorId
+      : mutation.cancelledByActorId)
+    || !stableIdPattern.test(mutation.commandId)) return false;
+  if (mutation.kind === "resolve") {
+    return input.claimId === null
+      && input.expectedPause?.approvalStatus === "pending"
+      && input.expectedPause.approvalRequestId === mutation.approvalRequestId
+      && (mutation.decision === "approved"
+        ? state.pause === null
+        : state.pause?.approvalStatus === "rejected"
+          && state.pause.approvalRequestId === mutation.approvalRequestId)
+      && ["approved", "rejected"].includes(mutation.decision)
+      && (mutation.reason === null
+        || (mutation.decision === "rejected"
+          && typeof mutation.reason === "string"
+          && mutation.reason.length >= 1
+          && mutation.reason.length <= 1_024));
+  }
+  return input.claimId === null
+    && input.expectedPause?.approvalStatus === "pending"
+    && input.expectedPause.approvalRequestId === mutation.approvalRequestId
+    && state.pause === null;
+}
+
 export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateStore {
   readonly #database: WorkflowRuntimeDatabase;
   readonly #workspaceId: string;
@@ -343,6 +440,69 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
       throw persistenceError("Workflow runtime store clock is invalid.");
     }
     return new Date(value.getTime());
+  }
+
+  async #approvalMutationObserved(
+    runId: string,
+    mutation: WorkflowRuntimeApprovalMutation,
+  ): Promise<boolean> {
+    let client: WorkflowRuntimeSqlClient | null = null;
+    try {
+      client = await this.#database.connect();
+      const result = await client.query<Record<string, unknown>>(
+        `/* workflow-runtime:reconcile-risk-approval */
+         select approval.status, approval.step_id, approval.attempt_number,
+                approval.expected_revision::text as expected_revision,
+                approval.request_fingerprint, approval.policy_fingerprint,
+                approval.scope_fingerprint, approval.requested_capability,
+                approval.risk_level, approval.requested_by_actor_id,
+                approval.resolved_by_actor_id, decision.decision,
+                decision.decided_by_actor_id, decision.reason, decision.command_id
+         from approval_requests as approval
+         join workflow_runs as run on run.id = approval.workflow_run_id
+         left join approval_decisions as decision
+           on decision.workspace_id = approval.workspace_id
+          and decision.approval_request_id = approval.id
+         where approval.workspace_id = $1 and run.workspace_id = $1
+           and run.runtime_id = $2 and approval.runtime_approval_id = $3`,
+        [
+          this.#workspaceDatabaseId,
+          runId,
+          mutation.kind === "create" ? mutation.scope.approvalRequestId : mutation.approvalRequestId,
+        ],
+      );
+      if (result.rowCount !== 1) return false;
+      const row = result.rows[0];
+      if (mutation.kind === "create") {
+        const scope = mutation.scope;
+        return row.status === "pending"
+          && row.step_id === scope.stepId
+          && row.attempt_number === scope.attemptNumber
+          && databaseInteger(row.expected_revision as string | number) === scope.expectedRevision
+          && row.request_fingerprint === scope.requestFingerprint
+          && row.policy_fingerprint === scope.policyFingerprint
+          && row.scope_fingerprint === scope.scopeFingerprint
+          && row.requested_capability === scope.requestedCapability
+          && row.risk_level === scope.riskLevel
+          && row.requested_by_actor_id === mutation.requestedByActorId
+          && row.decision === null;
+      }
+      if (mutation.kind === "resolve") {
+        return row.status === mutation.decision
+          && row.resolved_by_actor_id === mutation.decidedByActorId
+          && row.decision === mutation.decision
+          && row.decided_by_actor_id === mutation.decidedByActorId
+          && row.reason === mutation.reason
+          && row.command_id === mutation.commandId;
+      }
+      return row.status === "cancelled"
+        && row.resolved_by_actor_id === mutation.cancelledByActorId
+        && row.decision === null;
+    } catch {
+      return false;
+    } finally {
+      client?.release();
+    }
   }
 
   async create(input: CreateWorkflowRuntimeStateInput): Promise<void> {
@@ -449,6 +609,60 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
           || row.attempt_count !== step.attemptCount
           || canonicalData(boundary.value) !== canonicalData(step)) {
           throw persistenceError("Persisted Workflow step projection is inconsistent.");
+        }
+      }
+      if (state.pause) {
+        const approvalResult = await client.query<RuntimeApprovalRow>(
+          `/* workflow-runtime:load-risk-approval */
+           select approval.runtime_approval_id, approval.status, approval.step_id,
+                  approval.attempt_number, approval.expected_revision::text as expected_revision,
+                  approval.request_fingerprint, approval.policy_fingerprint,
+                  approval.scope_fingerprint, approval.requested_capability,
+                  approval.risk_level, decision.decision
+           from approval_requests as approval
+           join workflow_runs as run on run.id = approval.workflow_run_id
+           left join approval_decisions as decision
+             on decision.workspace_id = approval.workspace_id
+            and decision.approval_request_id = approval.id
+           where approval.workspace_id = $1 and run.workspace_id = $1
+             and run.id = $2 and run.runtime_id = $3
+             and approval.runtime_approval_id = $4`,
+          [
+            this.#workspaceDatabaseId,
+            run.db_run_id,
+            input.runId,
+            state.pause.approvalRequestId,
+          ],
+        );
+        if (approvalResult.rowCount !== 1) {
+          throw persistenceError("Persisted runtime risk approval is missing or ambiguous.");
+        }
+        const approval = approvalResult.rows[0];
+        const attemptNumber = state.snapshot.stepStates.find(
+          (step) => step.stepId === state.pause?.stepId,
+        )?.attemptCount;
+        const approvalRevision = databaseInteger(approval.expected_revision);
+        const scopeFingerprint = createHash("sha256").update(canonicalData({
+          workspaceId: state.snapshot.workspaceId,
+          runId: state.snapshot.runId,
+          stepId: approval.step_id,
+          attemptNumber: approval.attempt_number,
+          expectedRevision: approvalRevision,
+          requestFingerprint: approval.request_fingerprint,
+          policyFingerprint: approval.policy_fingerprint,
+          requestedCapability: approval.requested_capability,
+          riskLevel: approval.risk_level,
+        })).digest("hex");
+        if (approval.runtime_approval_id !== state.pause.approvalRequestId
+          || approval.status !== state.pause.approvalStatus
+          || approval.step_id !== state.pause.stepId
+          || attemptNumber === undefined || approval.attempt_number !== attemptNumber + 1
+          || approvalRevision !== state.snapshot.revision
+          || approval.scope_fingerprint !== scopeFingerprint
+          || approval.runtime_approval_id !== `risk-approval-${scopeFingerprint.slice(0, 32)}`
+          || (approval.status === "pending" && approval.decision !== null)
+          || (approval.status === "rejected" && approval.decision !== "rejected")) {
+          throw persistenceError("Persisted runtime risk approval is inconsistent.");
         }
       }
       return state;
@@ -967,13 +1181,71 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
     });
   }
 
+  async checkRiskApproval(
+    input: WorkflowRuntimeRiskApprovalCheckInput,
+  ): Promise<Readonly<{ approved: boolean }>> {
+    if (!validRiskScope(input) || input.workspaceId !== this.#workspaceId) {
+      return { approved: false };
+    }
+    let client: WorkflowRuntimeSqlClient | null = null;
+    try {
+      client = await this.#database.connect();
+      const result = await client.query<RuntimeApprovalRow>(
+        `/* workflow-runtime:check-risk-approval */
+         select approval.runtime_approval_id, approval.status, approval.step_id,
+                approval.attempt_number, approval.expected_revision::text as expected_revision,
+                approval.request_fingerprint, approval.policy_fingerprint,
+                approval.scope_fingerprint, approval.requested_capability,
+                approval.risk_level, decision.decision
+         from approval_requests as approval
+         join workflow_runs as run on run.id = approval.workflow_run_id
+         left join approval_decisions as decision
+           on decision.workspace_id = approval.workspace_id
+          and decision.approval_request_id = approval.id
+         where approval.workspace_id = $1 and run.workspace_id = $1
+           and run.runtime_id = $2 and approval.runtime_approval_id = $3
+           and approval.step_id = $4 and approval.attempt_number = $5
+           and approval.expected_revision = $6 and approval.request_fingerprint = $7
+           and approval.policy_fingerprint = $8 and approval.scope_fingerprint = $9
+           and approval.requested_capability = $10 and approval.risk_level = $11`,
+        [
+          this.#workspaceDatabaseId,
+          input.runId,
+          input.approvalRequestId,
+          input.stepId,
+          input.attemptNumber,
+          input.expectedRevision,
+          input.requestFingerprint,
+          input.policyFingerprint,
+          input.scopeFingerprint,
+          input.requestedCapability,
+          input.riskLevel,
+        ],
+      );
+      if (result.rowCount === 0) return { approved: false };
+      if (result.rowCount !== 1) {
+        throw persistenceError("Runtime risk approval lookup is ambiguous.");
+      }
+      const approval = result.rows[0];
+      return freezeModelProviderAdapterData({
+        approved: approval.status === "approved" && approval.decision === "approved",
+      });
+    } catch (error) {
+      if (error instanceof WorkflowRuntimePersistenceError) throw error;
+      throw persistenceError("Runtime risk approval lookup failed closed.");
+    } finally {
+      client?.release();
+    }
+  }
+
   async compareAndSwap(input: WorkflowRuntimeCompareAndSwapInput): Promise<WorkflowRuntimeCompareAndSwapDecision> {
     const state = validatedState(input.nextState, this.#workspaceId);
     const expectedState = validatedState({ ...state, pause: input.expectedPause }, this.#workspaceId);
     const expectedPause = expectedState.pause;
     if (state.snapshot.runId !== input.runId || !safeInteger(input.expectedRevision)
       || state.snapshot.revision < input.expectedRevision
-      || state.snapshot.revision > input.expectedRevision + 2) {
+      || state.snapshot.revision > input.expectedRevision + 2
+      || !validApprovalMutation(input.approvalMutation ?? null, input, state, this.#workspaceId)) {
       throw persistenceError("Workflow CAS input is invalid.");
     }
     let result: Readonly<{ committed: boolean }>;
@@ -1005,6 +1277,111 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
         );
         if (claim.rowCount !== 1) throw persistenceError("Workflow CAS claim is invalid.");
         claimedStepId = claim.rows[0].step_id;
+      }
+      const approvalMutation = input.approvalMutation ?? null;
+      if (approvalMutation?.kind === "create") {
+        const scope = approvalMutation.scope;
+        const created = await client.query(
+          `/* workflow-runtime:create-risk-approval */
+           insert into approval_requests (
+             workspace_id, workflow_run_id, action_type, status, risk_level,
+             original_payload, runtime_approval_id, step_id, attempt_number,
+             expected_revision, request_fingerprint, policy_fingerprint,
+             scope_fingerprint, requested_capability, requested_by_actor_id
+           ) values (
+             $1, $2, 'runtime_risk_approval', 'pending', $3, '{}'::jsonb,
+             $4, $5, $6, $7, $8, $9, $10, $11, $12
+           )
+           on conflict (workspace_id, runtime_approval_id)
+             where runtime_approval_id is not null
+           do nothing`,
+          [
+            this.#workspaceDatabaseId,
+            run.rows[0].db_run_id,
+            scope.riskLevel,
+            scope.approvalRequestId,
+            scope.stepId,
+            scope.attemptNumber,
+            scope.expectedRevision,
+            scope.requestFingerprint,
+            scope.policyFingerprint,
+            scope.scopeFingerprint,
+            scope.requestedCapability,
+            approvalMutation.requestedByActorId,
+          ],
+        );
+        if (created.rowCount !== 1) {
+          throw persistenceError("Runtime risk approval creation conflicted.");
+        }
+      } else if (approvalMutation?.kind === "resolve") {
+        const approval = await client.query<{ approval_request_id: string; status: string }>(
+          `/* workflow-runtime:lock-risk-approval */
+           select approval.id::text as approval_request_id, approval.status
+           from approval_requests as approval
+           where approval.workspace_id = $1 and approval.workflow_run_id = $2
+             and approval.runtime_approval_id = $3
+           for update`,
+          [
+            this.#workspaceDatabaseId,
+            run.rows[0].db_run_id,
+            approvalMutation.approvalRequestId,
+          ],
+        );
+        if (approval.rowCount !== 1 || approval.rows[0].status !== "pending") {
+          throw persistenceError("Runtime risk approval is not factually pending.");
+        }
+        const insertedDecision = await client.query(
+          `/* workflow-runtime:create-approval-decision */
+           insert into approval_decisions (
+             workspace_id, approval_request_id, decision,
+             decided_by_actor_id, reason, command_id
+           ) values ($1, $2, $3, $4, $5, $6)`,
+          [
+            this.#workspaceDatabaseId,
+            approval.rows[0].approval_request_id,
+            approvalMutation.decision,
+            approvalMutation.decidedByActorId,
+            approvalMutation.reason,
+            approvalMutation.commandId,
+          ],
+        );
+        if (insertedDecision.rowCount !== 1) {
+          throw persistenceError("Runtime approval decision creation failed closed.");
+        }
+        const resolved = await client.query(
+          `/* workflow-runtime:resolve-risk-approval */
+           update approval_requests
+           set status = $4, resolved_by_actor_id = $5, resolved_at = now()
+           where workspace_id = $1 and workflow_run_id = $2
+             and runtime_approval_id = $3 and status = 'pending'`,
+          [
+            this.#workspaceDatabaseId,
+            run.rows[0].db_run_id,
+            approvalMutation.approvalRequestId,
+            approvalMutation.decision,
+            approvalMutation.decidedByActorId,
+          ],
+        );
+        if (resolved.rowCount !== 1) {
+          throw persistenceError("Runtime risk approval resolution failed closed.");
+        }
+      } else if (approvalMutation?.kind === "cancel") {
+        const cancelled = await client.query(
+          `/* workflow-runtime:cancel-risk-approval */
+           update approval_requests
+           set status = 'cancelled', resolved_by_actor_id = $4, resolved_at = now()
+           where workspace_id = $1 and workflow_run_id = $2
+             and runtime_approval_id = $3 and status = 'pending'`,
+          [
+            this.#workspaceDatabaseId,
+            run.rows[0].db_run_id,
+            approvalMutation.approvalRequestId,
+            approvalMutation.cancelledByActorId,
+          ],
+        );
+        if (cancelled.rowCount !== 1) {
+          throw persistenceError("Runtime risk approval cancellation failed closed.");
+        }
       }
       const updated = await client.query(
         `/* workflow-runtime:update-run */
@@ -1079,7 +1456,13 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
         return { status: "recovery_required", state: null };
       }
       if (!current) return { status: "recovery_required", state: null };
-      if (sameRuntimeState(current, state)) return { status: "committed", state: current };
+      if (sameRuntimeState(current, state)) {
+        if (input.approvalMutation
+          && !await this.#approvalMutationObserved(input.runId, input.approvalMutation)) {
+          return { status: "recovery_required", state: null };
+        }
+        return { status: "committed", state: current };
+      }
       if (current.snapshot.revision > input.expectedRevision) {
         return { status: "conflict", state: current };
       }

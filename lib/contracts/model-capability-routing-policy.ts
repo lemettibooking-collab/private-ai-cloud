@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { RiskLevel } from "./domain";
 // @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
 import { isRiskLevel } from "./domain.ts";
@@ -91,6 +92,13 @@ export type ModelCapabilityRoutingDecision = Readonly<{
   commandExecutionRequired: boolean | null;
   networkRequired: boolean | null;
   budget: ModelCapabilityBudget | null;
+}>;
+
+export type ModelCapabilityRiskApprovalScope = Readonly<{
+  policyFingerprint: string;
+  requestedCapability: ModelCapabilityTier;
+  riskLevel: RiskLevel;
+  conditionalDecision: ModelCapabilityRoutingDecision;
 }>;
 
 type MutableReasons = ModelCapabilityRoutingReason[];
@@ -292,6 +300,23 @@ function capabilityAllowedForTaskClass(
     || allowed.includes(capability);
 }
 
+function riskPolicyFingerprint(
+  input: ModelCapabilityRoutingPolicyInput,
+  budget: ModelCapabilityBudget,
+): string {
+  return createHash("sha256").update(JSON.stringify({
+    taskClass: input.taskClass,
+    requestedCapability: input.requestedCapability,
+    riskLevel: input.riskLevel,
+    requiresModel: input.requiresModel,
+    requiresRepositoryRead: input.requiresRepositoryRead,
+    requiresRepositoryWrite: input.requiresRepositoryWrite,
+    requiresCommandExecution: input.requiresCommandExecution,
+    requiresNetwork: input.requiresNetwork,
+    budget,
+  }), "utf8").digest("hex");
+}
+
 export function evaluateModelCapabilityRoutingPolicy(
   input: unknown,
 ): ModelCapabilityRoutingDecision {
@@ -420,4 +445,33 @@ export function evaluateModelCapabilityRoutingPolicy(
   }
 
   return reasons.length > 0 ? deny(reasons) : allow(normalizedInput, budget);
+}
+
+export function createModelCapabilityRiskApprovalScope(
+  input: unknown,
+): ModelCapabilityRiskApprovalScope | null {
+  const decision = evaluateModelCapabilityRoutingPolicy(input);
+  if (decision.reasons.length !== 1 || decision.reasons[0]?.code !== "risk_approval_required") {
+    return null;
+  }
+  const snapshot = snapshotModelProviderAdapterInput(input);
+  if (!snapshot.ok || !isPlainRecord(snapshot.value) || !hasExactFields(snapshot.value, inputFields)) {
+    return null;
+  }
+  const requestedCapability = parseModelCapabilityTier(snapshot.value.requestedCapability);
+  const riskLevel = isRiskLevel(snapshot.value.riskLevel) ? snapshot.value.riskLevel : null;
+  const budget = normalizeBudget(snapshot.value.budget, []);
+  if (!requestedCapability || !riskLevel || !budget) return null;
+  return freezeModelProviderAdapterData({
+    policyFingerprint: riskPolicyFingerprint(
+      snapshot.value as unknown as ModelCapabilityRoutingPolicyInput,
+      budget,
+    ),
+    requestedCapability,
+    riskLevel,
+    conditionalDecision: allow(
+      snapshot.value as unknown as ModelCapabilityRoutingPolicyInput,
+      budget,
+    ),
+  });
 }

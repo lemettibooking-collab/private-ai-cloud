@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
@@ -32,6 +33,63 @@ const claimId = "00000000-0000-4000-8000-000000000951";
 const recoveredClaimId = "00000000-0000-4000-8000-000000000952";
 const commandOwnershipToken = "00000000-0000-4000-8000-000000000961";
 const fingerprint = "a".repeat(64);
+const approvalRequestFingerprint = "b".repeat(64);
+const approvalPolicyFingerprint = "c".repeat(64);
+
+function canonicalData(input: unknown): string {
+  if (input === null) return "null";
+  if (["string", "number", "boolean"].includes(typeof input)) {
+    return typeof input === "string" ? JSON.stringify(input) : String(input);
+  }
+  if (Array.isArray(input)) return `[${input.map(canonicalData).join(",")}]`;
+  const record = input as Record<string, unknown>;
+  return `{${Object.keys(record).sort().map(
+    (key) => `${JSON.stringify(key)}:${canonicalData(record[key])}`,
+  ).join(",")}}`;
+}
+
+function riskPause(stepId = "step-one", approvalStatus: "pending" | "rejected" = "pending") {
+  const scopeInput = {
+    workspaceId: "workspace-primary",
+    runId: "run-one",
+    stepId,
+    attemptNumber: 1,
+    expectedRevision: 1,
+    requestFingerprint: approvalRequestFingerprint,
+    policyFingerprint: approvalPolicyFingerprint,
+    requestedCapability: "advanced_reasoning",
+    riskLevel: "high",
+  };
+  const scopeFingerprint = createHash("sha256").update(canonicalData(scopeInput)).digest("hex");
+  return {
+    kind: "risk_approval" as const,
+    stepId,
+    reasonCode: "approval_required" as const,
+    approvalRequestId: `risk-approval-${scopeFingerprint.slice(0, 32)}`,
+    approvalStatus,
+  };
+}
+
+function riskScope(state: RuntimeState) {
+  const pause = riskPause();
+  const scopeInput = {
+    workspaceId: state.snapshot.workspaceId,
+    runId: state.snapshot.runId,
+    stepId: pause.stepId,
+    attemptNumber: 1,
+    expectedRevision: state.snapshot.revision,
+    requestFingerprint: approvalRequestFingerprint,
+    policyFingerprint: approvalPolicyFingerprint,
+    requestedCapability: "advanced_reasoning" as const,
+    riskLevel: "high" as const,
+  };
+  const scopeFingerprint = createHash("sha256").update(canonicalData(scopeInput)).digest("hex");
+  return {
+    ...scopeInput,
+    approvalRequestId: `risk-approval-${scopeFingerprint.slice(0, 32)}`,
+    scopeFingerprint,
+  };
+}
 
 type ScriptStep = {
   tag: string;
@@ -128,10 +186,40 @@ function stateRows(state: RuntimeState) {
 
 function loadSteps(state: RuntimeState): ScriptStep[] {
   const rows = stateRows(state);
-  return [
+  const steps: ScriptStep[] = [
     { tag: "workflow-runtime:load-run", rows: [rows.run] },
     { tag: "workflow-runtime:load-steps", rows: rows.steps },
   ];
+  if (state.pause) {
+    const scopeInput = {
+      workspaceId: state.snapshot.workspaceId,
+      runId: state.snapshot.runId,
+      stepId: state.pause.stepId,
+      attemptNumber: 1,
+      expectedRevision: state.snapshot.revision,
+      requestFingerprint: approvalRequestFingerprint,
+      policyFingerprint: approvalPolicyFingerprint,
+      requestedCapability: "advanced_reasoning",
+      riskLevel: "high",
+    };
+    steps.push({
+      tag: "workflow-runtime:load-risk-approval",
+      rows: [{
+        runtime_approval_id: state.pause.approvalRequestId,
+        status: state.pause.approvalStatus,
+        step_id: state.pause.stepId,
+        attempt_number: 1,
+        expected_revision: String(state.snapshot.revision),
+        request_fingerprint: approvalRequestFingerprint,
+        policy_fingerprint: approvalPolicyFingerprint,
+        scope_fingerprint: createHash("sha256").update(canonicalData(scopeInput)).digest("hex"),
+        requested_capability: "advanced_reasoning",
+        risk_level: "high",
+        decision: state.pause.approvalStatus === "rejected" ? "rejected" : null,
+      }],
+    });
+  }
+  return steps;
 }
 
 function auditResponse() {
@@ -179,6 +267,43 @@ test("migration adds canonical runtime columns and broadens legacy statuses with
     "workflow_step_runs_run_step_unique",
   ]) assert.equal(migration.includes(token), true, token);
   assert.equal(migration.includes("alter table workflow_runs alter column id"), false);
+});
+
+test("migration 0003 extends factual approvals with bounded runtime identity and immutable decisions", () => {
+  const migration = readFileSync(
+    new URL("../db/migrations/0003_workflow_runtime_approvals.sql", import.meta.url),
+    "utf8",
+  );
+  for (const token of [
+    "alter table approval_requests",
+    "runtime_approval_id",
+    "request_fingerprint",
+    "policy_fingerprint",
+    "scope_fingerprint",
+    "requested_by_actor_id",
+    "create table approval_decisions",
+    "unique (approval_request_id)",
+    "references approval_requests (workspace_id, id) on delete restrict",
+    "action_type <> 'runtime_risk_approval'",
+    "action_type = 'runtime_risk_approval'",
+    "runtime_approval_id is not null",
+    "step_id is not null",
+    "attempt_number is not null",
+    "expected_revision is not null",
+    "request_fingerprint is not null",
+    "policy_fingerprint is not null",
+    "scope_fingerprint is not null",
+    "requested_capability is not null",
+    "requested_by_actor_id is not null",
+    "approval_requests_runtime_lifecycle_check",
+    "status = 'pending' and resolved_by_actor_id is null and resolved_at is null",
+    "status in ('approved', 'rejected', 'cancelled')",
+    "resolved_by_actor_id is not null",
+    "resolved_at is not null",
+  ]) assert.equal(migration.includes(token), true, token);
+  assert.equal(migration.includes("invocationDraft"), false);
+  assert.equal(migration.includes("messages"), false);
+  assert.equal(migration.includes("providerRequest"), false);
 });
 
 for (const [table, required] of [
@@ -258,7 +383,7 @@ test("recreated stores observe the same revision, steps, and runtime pause", asy
   const running = transitionRuntimeState(createWorkflowRuntimeStateFixture(), "run_started") as RuntimeState;
   const paused = {
     ...running,
-    pause: { kind: "risk_approval", stepId: "step-one", reasonCode: "approval_required" },
+    pause: riskPause(),
   } as RuntimeState;
   const database = new ScriptedDatabase([...loadSteps(paused), ...loadSteps(paused)]);
   const first = await createStore(database).load({ runId: "run-one" });
@@ -266,6 +391,43 @@ test("recreated stores observe the same revision, steps, and runtime pause", asy
   assert.deepEqual(first, paused);
   assert.deepEqual(second, paused);
   assert.notEqual(first, second);
+  database.done();
+});
+
+test("approved runtime risk lookup requires the exact workspace, Run, and full scope", async () => {
+  const running = transitionRuntimeState(createWorkflowRuntimeStateFixture(), "run_started") as RuntimeState;
+  const scope = riskScope(running);
+  const approvalRow = {
+    runtime_approval_id: scope.approvalRequestId,
+    status: "approved",
+    step_id: scope.stepId,
+    attempt_number: scope.attemptNumber,
+    expected_revision: String(scope.expectedRevision),
+    request_fingerprint: scope.requestFingerprint,
+    policy_fingerprint: scope.policyFingerprint,
+    scope_fingerprint: scope.scopeFingerprint,
+    requested_capability: scope.requestedCapability,
+    risk_level: scope.riskLevel,
+    decision: "approved",
+  };
+  const database = new ScriptedDatabase([
+    {
+      tag: "workflow-runtime:check-risk-approval",
+      rows: [approvalRow],
+      inspect(values) {
+        assert.equal(values[0], workspaceDatabaseId);
+        assert.equal(values[1], "run-one");
+        assert.equal(values[2], scope.approvalRequestId);
+      },
+    },
+  ]);
+  const store = createStore(database);
+  assert.deepEqual(await store.checkRiskApproval(scope), { approved: true });
+  assert.deepEqual(await store.checkRiskApproval({ ...scope, runId: "run-two" }), { approved: false });
+  assert.deepEqual(await store.checkRiskApproval({ ...scope, workspaceId: "workspace-other" }), {
+    approved: false,
+  });
+  assert.equal(database.queries.length, 1);
   database.done();
 });
 
@@ -700,7 +862,7 @@ test("prepared recovery fences the old claimant across start, outcome, release, 
 });
 
 test("claim rejects a same-revision Agent execution when the factual Run is durably paused", async () => {
-  const pause = { kind: "risk_approval", stepId: "step-one", reasonCode: "approval_required" };
+  const pause = riskPause();
   const database = new ScriptedDatabase([{
     tag: "workflow-runtime:claim-run",
     rows: [{ db_run_id: dbRunId, revision: "1", runtime_pause: pause }],
@@ -1197,11 +1359,12 @@ test("claimed CAS synchronizes execution terminal status with Run and Step state
   const running = transitionRuntimeState(queued, "run_started") as RuntimeState;
   const paused = {
     ...running,
-    pause: { kind: "risk_approval", stepId: "step-one", reasonCode: "approval_required" },
+    pause: riskPause(),
   } as RuntimeState;
   const database = new ScriptedDatabase([
     { tag: "workflow-runtime:cas-run", rows: [{ db_run_id: dbRunId, revision: "1", runtime_pause: null }] },
     { tag: "workflow-runtime:cas-claim", rows: [{ step_id: "step-one" }] },
+    { tag: "workflow-runtime:create-risk-approval", rowCount: 1 },
     { tag: "workflow-runtime:update-run", rowCount: 1 },
     { tag: "workflow-runtime:update-step", rowCount: 1 },
     { tag: "workflow-runtime:remove-extra-steps", rowCount: 0 },
@@ -1213,6 +1376,11 @@ test("claimed CAS synchronizes execution terminal status with Run and Step state
   ]);
   const result = await createStore(database).compareAndSwap({
     runId: "run-one", expectedRevision: 1, expectedPause: null, nextState: paused, claimId,
+    approvalMutation: {
+      kind: "create",
+      scope: riskScope(running),
+      requestedByActorId: "workflow-runtime",
+    },
   });
   assert.equal(result.status, "committed");
   assert.deepEqual(database.transactions, ["begin", "commit"]);
@@ -1222,20 +1390,46 @@ test("lost claimed CAS acknowledgement reconciles Run, pause, Step, and terminal
   const running = transitionRuntimeState(createWorkflowRuntimeStateFixture(), "run_started") as RuntimeState;
   const paused = {
     ...running,
-    pause: { kind: "risk_approval", stepId: "step-one", reasonCode: "approval_required" },
+    pause: riskPause(),
   } as RuntimeState;
   const database = new ScriptedDatabase([
     { tag: "workflow-runtime:cas-run", rows: [{ db_run_id: dbRunId, revision: "1", runtime_pause: null }] },
     { tag: "workflow-runtime:cas-claim", rows: [{ step_id: "step-one" }] },
+    { tag: "workflow-runtime:create-risk-approval", rowCount: 1 },
     { tag: "workflow-runtime:update-run", rowCount: 1 },
     { tag: "workflow-runtime:update-step", rowCount: 1 },
     { tag: "workflow-runtime:remove-extra-steps", rowCount: 0 },
     { tag: "workflow-runtime:finish-execution", rowCount: 1 },
     ...loadSteps(paused),
+    {
+      tag: "workflow-runtime:reconcile-risk-approval",
+      rows: [{
+        status: "pending",
+        step_id: "step-one",
+        attempt_number: 1,
+        expected_revision: "1",
+        request_fingerprint: approvalRequestFingerprint,
+        policy_fingerprint: approvalPolicyFingerprint,
+        scope_fingerprint: riskScope(running).scopeFingerprint,
+        requested_capability: "advanced_reasoning",
+        risk_level: "high",
+        requested_by_actor_id: "workflow-runtime",
+        resolved_by_actor_id: null,
+        decision: null,
+        decided_by_actor_id: null,
+        reason: null,
+        command_id: null,
+      }],
+    },
   ]);
   database.commitErrors = 1;
   const result = await createStore(database).compareAndSwap({
     runId: "run-one", expectedRevision: 1, expectedPause: null, nextState: paused, claimId,
+    approvalMutation: {
+      kind: "create",
+      scope: riskScope(running),
+      requestedByActorId: "workflow-runtime",
+    },
   });
   assert.equal(result.status, "committed");
   assert.deepEqual(result.state, paused);
@@ -1260,7 +1454,7 @@ test("stale CAS returns persisted conflict state and never overwrites a newer ca
 
 test("same-revision stale CAS cannot erase a newer factual runtime pause", async () => {
   const running = transitionRuntimeState(createWorkflowRuntimeStateFixture(), "run_started") as RuntimeState;
-  const pause = { kind: "risk_approval", stepId: "step-one", reasonCode: "approval_required" } as const;
+  const pause = riskPause();
   const paused = { ...running, pause } as RuntimeState;
   const database = new ScriptedDatabase([
     {
@@ -1284,7 +1478,7 @@ test("same-revision stale CAS cannot erase a newer factual runtime pause", async
 
 test("CAS permits canonical cancellation from the exact paused factual state", async () => {
   const running = transitionRuntimeState(createWorkflowRuntimeStateFixture(), "run_started") as RuntimeState;
-  const pause = { kind: "risk_approval", stepId: "step-one", reasonCode: "approval_required" } as const;
+  const pause = riskPause();
   const paused = { ...running, pause } as RuntimeState;
   const cancelled = transitionRuntimeState(running, "run_cancelled") as RuntimeState;
   const database = new ScriptedDatabase([
@@ -1292,6 +1486,7 @@ test("CAS permits canonical cancellation from the exact paused factual state", a
       tag: "workflow-runtime:cas-run",
       rows: [{ db_run_id: dbRunId, revision: "1", runtime_pause: pause }],
     },
+    { tag: "workflow-runtime:cancel-risk-approval", rowCount: 1 },
     { tag: "workflow-runtime:update-run", rowCount: 1 },
     { tag: "workflow-runtime:update-step", rowCount: 1 },
     { tag: "workflow-runtime:remove-extra-steps", rowCount: 0 },
@@ -1302,10 +1497,177 @@ test("CAS permits canonical cancellation from the exact paused factual state", a
     expectedPause: paused.pause,
     nextState: { ...cancelled, pause: null },
     claimId: null,
+    approvalMutation: {
+      kind: "cancel",
+      approvalRequestId: pause.approvalRequestId,
+      cancelledByActorId: "owner-one",
+      commandId: "cancel-one",
+    },
   });
   assert.equal(result.status, "committed");
   assert.equal(result.state.pause, null);
   assert.equal(result.state.snapshot.status, "cancelled");
+});
+
+for (const decision of ["approved", "rejected"] as const) {
+  test(`CAS atomically persists immutable ${decision} decision and matching runtime pause`, async () => {
+    const running = transitionRuntimeState(createWorkflowRuntimeStateFixture(), "run_started") as RuntimeState;
+    const pause = riskPause();
+    const paused = { ...running, pause } as RuntimeState;
+    const nextPause = decision === "approved" ? null : riskPause("step-one", "rejected");
+    const database = new ScriptedDatabase([
+      {
+        tag: "workflow-runtime:cas-run",
+        rows: [{ db_run_id: dbRunId, revision: "1", runtime_pause: pause }],
+      },
+      {
+        tag: "workflow-runtime:lock-risk-approval",
+        rows: [{ approval_request_id: "00000000-0000-4000-8000-000000000991", status: "pending" }],
+      },
+      {
+        tag: "workflow-runtime:create-approval-decision",
+        rowCount: 1,
+        inspect(values) {
+          assert.equal(values[0], workspaceDatabaseId);
+          assert.equal(values[2], decision);
+          assert.equal(JSON.stringify(values).includes("providerRequest"), false);
+        },
+      },
+      { tag: "workflow-runtime:resolve-risk-approval", rowCount: 1 },
+      { tag: "workflow-runtime:update-run", rowCount: 1 },
+      { tag: "workflow-runtime:update-step", rowCount: 1 },
+      { tag: "workflow-runtime:remove-extra-steps", rowCount: 0 },
+    ]);
+    const result = await createStore(database).compareAndSwap({
+      runId: "run-one",
+      expectedRevision: 1,
+      expectedPause: paused.pause,
+      nextState: { ...running, pause: nextPause },
+      claimId: null,
+      approvalMutation: {
+        kind: "resolve",
+        approvalRequestId: pause.approvalRequestId,
+        decision,
+        decidedByActorId: "owner-one",
+        reason: decision === "rejected" ? "Bounded owner rejection." : null,
+        commandId: `risk-${decision}`,
+      },
+    });
+    assert.equal(result.status, "committed");
+    assert.deepEqual(result.state.pause, nextPause);
+    assert.deepEqual(database.transactions, ["begin", "commit"]);
+  });
+}
+
+for (const decision of ["approved", "rejected"] as const) {
+  test(`lost ${decision} COMMIT acknowledgement reconciles the exact decision and pause`, async () => {
+    const running = transitionRuntimeState(createWorkflowRuntimeStateFixture(), "run_started") as RuntimeState;
+    const pause = riskPause();
+    const paused = { ...running, pause } as RuntimeState;
+    const nextPause = decision === "approved" ? null : riskPause("step-one", "rejected");
+    const nextState = { ...running, pause: nextPause } as RuntimeState;
+    const reason = decision === "rejected" ? "Bounded owner rejection." : null;
+    const commandId = `risk-lost-${decision}`;
+    const database = new ScriptedDatabase([
+      {
+        tag: "workflow-runtime:cas-run",
+        rows: [{ db_run_id: dbRunId, revision: "1", runtime_pause: pause }],
+      },
+      {
+        tag: "workflow-runtime:lock-risk-approval",
+        rows: [{ approval_request_id: "00000000-0000-4000-8000-000000000991", status: "pending" }],
+      },
+      { tag: "workflow-runtime:create-approval-decision", rowCount: 1 },
+      { tag: "workflow-runtime:resolve-risk-approval", rowCount: 1 },
+      { tag: "workflow-runtime:update-run", rowCount: 1 },
+      { tag: "workflow-runtime:update-step", rowCount: 1 },
+      { tag: "workflow-runtime:remove-extra-steps", rowCount: 0 },
+      ...loadSteps(nextState),
+      {
+        tag: "workflow-runtime:reconcile-risk-approval",
+        rows: [{
+          status: decision,
+          resolved_by_actor_id: "owner-one",
+          decision,
+          decided_by_actor_id: "owner-one",
+          reason,
+          command_id: commandId,
+        }],
+      },
+    ]);
+    database.commitErrors = 1;
+    const result = await createStore(database).compareAndSwap({
+      runId: "run-one",
+      expectedRevision: 1,
+      expectedPause: paused.pause,
+      nextState,
+      claimId: null,
+      approvalMutation: {
+        kind: "resolve",
+        approvalRequestId: pause.approvalRequestId,
+        decision,
+        decidedByActorId: "owner-one",
+        reason,
+        commandId,
+      },
+    });
+    assert.equal(result.status, "committed");
+    assert.deepEqual(result.state.pause, nextPause);
+  });
+}
+
+test("unreadable approval decision reconciliation returns recovery_required", async () => {
+  const running = transitionRuntimeState(createWorkflowRuntimeStateFixture(), "run_started") as RuntimeState;
+  const pause = riskPause();
+  const paused = { ...running, pause } as RuntimeState;
+  const database = new ScriptedDatabase([
+    {
+      tag: "workflow-runtime:cas-run",
+      rows: [{ db_run_id: dbRunId, revision: "1", runtime_pause: pause }],
+    },
+    {
+      tag: "workflow-runtime:lock-risk-approval",
+      rows: [{ approval_request_id: "00000000-0000-4000-8000-000000000991", status: "pending" }],
+    },
+    { tag: "workflow-runtime:create-approval-decision", rowCount: 1 },
+    { tag: "workflow-runtime:resolve-risk-approval", rowCount: 1 },
+    { tag: "workflow-runtime:update-run", rowCount: 1 },
+    { tag: "workflow-runtime:update-step", rowCount: 1 },
+    { tag: "workflow-runtime:remove-extra-steps", rowCount: 0 },
+    ...loadSteps(running),
+    { tag: "workflow-runtime:reconcile-risk-approval", error: new Error("database unavailable") },
+  ]);
+  database.commitErrors = 1;
+  const result = await createStore(database).compareAndSwap({
+    runId: "run-one",
+    expectedRevision: 1,
+    expectedPause: paused.pause,
+    nextState: running,
+    claimId: null,
+    approvalMutation: {
+      kind: "resolve",
+      approvalRequestId: pause.approvalRequestId,
+      decision: "approved",
+      decidedByActorId: "owner-one",
+      reason: null,
+      commandId: "risk-unreadable",
+    },
+  });
+  assert.deepEqual(result, { status: "recovery_required", state: null });
+});
+
+test("pending approval pause cannot change without its matching atomic approval mutation", async () => {
+  const running = transitionRuntimeState(createWorkflowRuntimeStateFixture(), "run_started") as RuntimeState;
+  const paused = { ...running, pause: riskPause() } as RuntimeState;
+  const database = new ScriptedDatabase([]);
+  await assert.rejects(createStore(database).compareAndSwap({
+    runId: "run-one",
+    expectedRevision: 1,
+    expectedPause: paused.pause,
+    nextState: { ...running, pause: null },
+    claimId: null,
+  }), /CAS input is invalid/u);
+  assert.equal(database.queries.length, 0);
 });
 
 test("step projection failure rolls back the factual Run update", async () => {

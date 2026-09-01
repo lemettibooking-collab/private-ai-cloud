@@ -379,6 +379,11 @@ class FakeStore implements RuntimeStore {
   ).WorkflowRuntimeCommandOwnershipInput) => Promise<void>) | null = null;
   startExecutionHook: ((claimId: string) => Promise<void>) | null = null;
   executionJournal = new Map<string, "prepared" | "running" | "completed" | "failed" | "outcome_unknown">();
+  approvals = new Map<string, {
+    scope: import("../lib/workflows/workflow-runtime-service").WorkflowRuntimeRiskApprovalScope;
+    status: "pending" | "approved" | "rejected" | "cancelled";
+    decision: "approved" | "rejected" | null;
+  }>();
 
   constructor(state: RuntimeState) {
     this.state = clone(state);
@@ -504,6 +509,17 @@ class FakeStore implements RuntimeStore {
     else if (status !== "completed" && status !== "failed") throw new Error("invalid execution outcome");
   }
 
+  async checkRiskApproval(
+    input: import("../lib/workflows/workflow-runtime-service").WorkflowRuntimeRiskApprovalCheckInput,
+  ) {
+    const approval = this.approvals.get(input.approvalRequestId);
+    return {
+      approved: approval?.status === "approved"
+        && approval.decision === "approved"
+        && JSON.stringify(approval.scope) === JSON.stringify(input),
+    };
+  }
+
   async compareAndSwap(input: CompareAndSwapInput) {
     if (this.compareAndSwapThrows > 0) {
       this.compareAndSwapThrows -= 1;
@@ -525,6 +541,30 @@ class FakeStore implements RuntimeStore {
     }
     if (input.claimId && ![...this.claims.values()].some((claim) => claim.claimId === input.claimId)) {
       return { status: "conflict" as const, state: clone(this.state) };
+    }
+    const approvalMutation = input.approvalMutation ?? null;
+    if (approvalMutation?.kind === "create") {
+      if (this.approvals.has(approvalMutation.scope.approvalRequestId)) {
+        return { status: "conflict" as const, state: clone(this.state) };
+      }
+      this.approvals.set(approvalMutation.scope.approvalRequestId, {
+        scope: clone(approvalMutation.scope),
+        status: "pending",
+        decision: null,
+      });
+    } else if (approvalMutation?.kind === "resolve") {
+      const approval = this.approvals.get(approvalMutation.approvalRequestId);
+      if (!approval || approval.status !== "pending") {
+        return { status: "conflict" as const, state: clone(this.state) };
+      }
+      approval.status = approvalMutation.decision;
+      approval.decision = approvalMutation.decision;
+    } else if (approvalMutation?.kind === "cancel") {
+      const approval = this.approvals.get(approvalMutation.approvalRequestId);
+      if (!approval || approval.status !== "pending") {
+        return { status: "conflict" as const, state: clone(this.state) };
+      }
+      approval.status = "cancelled";
     }
     this.state = clone(input.nextState);
     if (this.reconciledLostCommitAcknowledgements > 0) {
@@ -687,6 +727,14 @@ function advanceCommand(
   };
 }
 
+function exactRiskResumeCommand(commandId: string): AdvanceCommand {
+  const command = advanceCommand(1, ["step-a"], commandId);
+  return {
+    ...command,
+    agentInputs: [{ ...command.agentInputs[0], executionId: "execution-step-a-two" }],
+  };
+}
+
 async function start(service: RuntimeService, commandId = "start-one") {
   return service.start({
     kind: "start",
@@ -797,21 +845,263 @@ test("AI-029 risk approval creates a runtime pause without fabricating a Workflo
   const paused = await service.advance(advanceCommand(1, ["step-a"]));
   assert.equal(paused.status, "approval_required");
   assert.equal(paused.workflowStatus, "running");
-  assert.deepEqual(paused.waitingApproval, {
-    kind: "runtime_risk",
-    stepId: "step-a",
-    approvalRequestId: null,
-  });
+  assert.equal(paused.waitingApproval?.kind, "runtime_risk");
+  assert.equal(paused.waitingApproval?.stepId, "step-a");
+  assert.match(paused.waitingApproval?.approvalRequestId ?? "", /^risk-approval-[0-9a-f]{32}$/u);
   assert.deepEqual(runtimeProvider.counts(), { health: 0, run: 0 });
   assert.equal(store.state.pause?.kind, "risk_approval");
   assert.equal(store.state.snapshot.revision, 1);
   assert.equal(store.recordKnownExecutionOutcomeAttempts, 1);
   assert.deepEqual([...store.executionJournal.values()], ["failed"]);
+  assert.equal(store.approvals.size, 1);
+  assert.equal(store.approvals.get(paused.waitingApproval!.approvalRequestId!)?.status, "pending");
   const repeatedAdvance = await service.advance(
     advanceCommand(1, ["step-a"], "advance-after-risk-pause"),
   );
   assert.equal(repeatedAdvance.status, "approval_required");
+  assert.equal(store.approvals.size, 1);
   assert.deepEqual(runtimeProvider.counts(), { health: 0, run: 0 });
+});
+
+test("durable runtime risk approval resumes only on a later exact advance", async () => {
+  const store = new FakeStore(initialState("single"));
+  const runtimeProvider = provider();
+  const service = createWorkflowRuntimeService(dependencies(store, runtimeProvider, {
+    requirements: () => ({
+      ...capability("security_analysis", "advanced_reasoning"),
+      riskLevel: "high",
+    }),
+  }));
+  await start(service);
+  const paused = await service.advance(advanceCommand(1, ["step-a"], "risk-create"));
+  const approvalRequestId = paused.waitingApproval?.approvalRequestId;
+  assert.ok(approvalRequestId);
+  assert.deepEqual(runtimeProvider.counts(), { health: 0, run: 0 });
+
+  const restartedService = createWorkflowRuntimeService(dependencies(store, runtimeProvider, {
+    requirements: () => ({
+      ...capability("security_analysis", "advanced_reasoning"),
+      riskLevel: "high",
+    }),
+  }));
+  const afterRestart = await restartedService.get({
+    kind: "get", runId: "run-one", actorId: "owner-one",
+  });
+  assert.equal(afterRestart.waitingApproval?.approvalRequestId, approvalRequestId);
+  const approved = await restartedService.approve({
+    kind: "approve",
+    commandId: "risk-approve",
+    runId: "run-one",
+    expectedRevision: 1,
+    actorId: "owner-one",
+    stepId: "step-a",
+    approvalRequestId,
+  });
+  assert.equal(approved.status, "running");
+  assert.equal(approved.waitingApproval, null);
+  assert.deepEqual(runtimeProvider.counts(), { health: 0, run: 0 });
+  assert.equal(store.approvals.get(approvalRequestId)?.status, "approved");
+  assert.equal(store.approvals.get(approvalRequestId)?.decision, "approved");
+
+  const resumedService = createWorkflowRuntimeService(dependencies(store, runtimeProvider, {
+    requirements: () => ({
+      ...capability("security_analysis", "advanced_reasoning"),
+      riskLevel: "high",
+    }),
+  }));
+  const resumed = await resumedService.advance(exactRiskResumeCommand("risk-resume"));
+  assert.equal(resumed.status, "completed");
+  assert.deepEqual(runtimeProvider.counts(), { health: 1, run: 1 });
+});
+
+test("runtime risk rejection is final for the exact scope and remains cancellable", async () => {
+  const store = new FakeStore(initialState("single"));
+  const runtimeProvider = provider();
+  const service = createWorkflowRuntimeService(dependencies(store, runtimeProvider, {
+    requirements: () => ({
+      ...capability("security_analysis", "advanced_reasoning"),
+      riskLevel: "high",
+    }),
+  }));
+  await start(service);
+  const paused = await service.advance(advanceCommand(1, ["step-a"], "risk-reject-create"));
+  const approvalRequestId = paused.waitingApproval!.approvalRequestId!;
+  const restarted = createWorkflowRuntimeService(dependencies(store, runtimeProvider, {
+    requirements: () => ({
+      ...capability("security_analysis", "advanced_reasoning"),
+      riskLevel: "high",
+    }),
+  }));
+  const rejected = await restarted.reject({
+    kind: "reject",
+    commandId: "risk-reject",
+    runId: "run-one",
+    expectedRevision: 1,
+    actorId: "owner-one",
+    stepId: "step-a",
+    approvalRequestId,
+    reason: "Owner rejected the exact high-risk scope.",
+  });
+  assert.equal(rejected.status, "denied");
+  assert.equal(rejected.waitingApproval?.approvalRequestId, approvalRequestId);
+  assert.equal(store.state.pause?.approvalStatus, "rejected");
+  assert.equal(store.approvals.get(approvalRequestId)?.decision, "rejected");
+  assert.deepEqual(runtimeProvider.counts(), { health: 0, run: 0 });
+
+  const afterRejectRestart = createWorkflowRuntimeService(dependencies(store, runtimeProvider));
+  const retry = await afterRejectRestart.advance(
+    advanceCommand(1, ["step-a"], "risk-after-reject", "two"),
+  );
+  assert.equal(retry.status, "denied");
+  assert.equal(store.approvals.size, 1);
+  assert.deepEqual(runtimeProvider.counts(), { health: 0, run: 0 });
+  const cancelled = await service.cancel({
+    kind: "cancel",
+    commandId: "risk-rejected-cancel",
+    runId: "run-one",
+    expectedRevision: 1,
+    actorId: "owner-one",
+  });
+  assert.equal(cancelled.status, "cancelled");
+});
+
+test("cancelling pending runtime risk approval atomically retires its durable request", async () => {
+  const store = new FakeStore(initialState("single"));
+  const runtimeProvider = provider();
+  const service = createWorkflowRuntimeService(dependencies(store, runtimeProvider, {
+    requirements: () => ({
+      ...capability("security_analysis", "advanced_reasoning"),
+      riskLevel: "high",
+    }),
+  }));
+  await start(service);
+  const paused = await service.advance(advanceCommand(1, ["step-a"], "risk-cancel-create"));
+  const approvalRequestId = paused.waitingApproval!.approvalRequestId!;
+  const cancelled = await service.cancel({
+    kind: "cancel",
+    commandId: "risk-cancel",
+    runId: "run-one",
+    expectedRevision: 1,
+    actorId: "owner-one",
+  });
+  assert.equal(cancelled.status, "cancelled");
+  assert.equal(store.approvals.get(approvalRequestId)?.status, "cancelled");
+  assert.equal(cancelled.waitingApproval, null);
+  assert.deepEqual(runtimeProvider.counts(), { health: 0, run: 0 });
+});
+
+test("concurrent runtime risk approve and reject produce exactly one immutable winner", async () => {
+  const store = new FakeStore(initialState("single"));
+  const runtimeProvider = provider();
+  const service = createWorkflowRuntimeService(dependencies(store, runtimeProvider, {
+    requirements: () => ({
+      ...capability("security_analysis", "advanced_reasoning"),
+      riskLevel: "high",
+    }),
+  }));
+  await start(service);
+  const paused = await service.advance(advanceCommand(1, ["step-a"], "risk-race-create"));
+  const approvalRequestId = paused.waitingApproval!.approvalRequestId!;
+  const [approveResult, rejectResult] = await Promise.all([
+    service.approve({
+      kind: "approve",
+      commandId: "risk-race-approve",
+      runId: "run-one",
+      expectedRevision: 1,
+      actorId: "owner-one",
+      stepId: "step-a",
+      approvalRequestId,
+    }),
+    service.reject({
+      kind: "reject",
+      commandId: "risk-race-reject",
+      runId: "run-one",
+      expectedRevision: 1,
+      actorId: "owner-one",
+      stepId: "step-a",
+      approvalRequestId,
+      reason: "Concurrent bounded rejection.",
+    }),
+  ]);
+  assert.equal([approveResult, rejectResult].filter((result) => result.status === "conflict").length, 1);
+  assert.equal(["approved", "rejected"].includes(store.approvals.get(approvalRequestId)!.status), true);
+  assert.notEqual(store.approvals.get(approvalRequestId)?.decision, null);
+  assert.deepEqual(runtimeProvider.counts(), { health: 0, run: 0 });
+});
+
+test("approval transaction ambiguity never retries or enters the provider boundary", async () => {
+  const store = new FakeStore(initialState("single"));
+  const runtimeProvider = provider();
+  const service = createWorkflowRuntimeService(dependencies(store, runtimeProvider, {
+    requirements: () => ({
+      ...capability("security_analysis", "advanced_reasoning"),
+      riskLevel: "high",
+    }),
+  }));
+  await start(service);
+  store.casRecoveryRequired = 1;
+  const creation = await service.advance(advanceCommand(1, ["step-a"], "risk-ambiguous-create"));
+  assert.equal(creation.status, "recovery_required");
+  assert.deepEqual(runtimeProvider.counts(), { health: 0, run: 0 });
+
+  const restartStore = new FakeStore(initialState("single"));
+  const restartProvider = provider();
+  const restartService = createWorkflowRuntimeService(dependencies(restartStore, restartProvider, {
+    requirements: () => ({
+      ...capability("security_analysis", "advanced_reasoning"),
+      riskLevel: "high",
+    }),
+  }));
+  await start(restartService, "risk-ambiguous-start");
+  const paused = await restartService.advance(
+    advanceCommand(1, ["step-a"], "risk-ambiguous-pause"),
+  );
+  restartStore.casRecoveryRequired = 1;
+  const resolution = await restartService.approve({
+    kind: "approve",
+    commandId: "risk-ambiguous-approve",
+    runId: "run-one",
+    expectedRevision: 1,
+    actorId: "owner-one",
+    stepId: "step-a",
+    approvalRequestId: paused.waitingApproval!.approvalRequestId!,
+  });
+  assert.equal(resolution.status, "recovery_required");
+  assert.deepEqual(restartProvider.counts(), { health: 0, run: 0 });
+});
+
+test("an approved risk scope cannot authorize a changed request or policy", async () => {
+  for (const change of ["request", "policy"] as const) {
+    const store = new FakeStore(initialState("single"));
+    const runtimeProvider = provider();
+    let riskLevel: "high" | "critical" = "high";
+    const service = createWorkflowRuntimeService(dependencies(store, runtimeProvider, {
+      requirements: () => ({
+        ...capability("security_analysis", "advanced_reasoning"),
+        riskLevel,
+      }),
+    }));
+    await start(service);
+    const paused = await service.advance(advanceCommand(1, ["step-a"], `risk-${change}-create`));
+    const approvalRequestId = paused.waitingApproval!.approvalRequestId!;
+    await service.approve({
+      kind: "approve",
+      commandId: `risk-${change}-approve`,
+      runId: "run-one",
+      expectedRevision: 1,
+      actorId: "owner-one",
+      stepId: "step-a",
+      approvalRequestId,
+    });
+    if (change === "policy") riskLevel = "critical";
+    const changed = await service.advance(change === "request"
+      ? advanceCommand(1, ["step-a"], `risk-${change}-changed`, "two")
+      : exactRiskResumeCommand(`risk-${change}-changed`));
+    assert.equal(changed.status, "approval_required");
+    assert.notEqual(changed.waitingApproval?.approvalRequestId, approvalRequestId);
+    assert.equal(store.approvals.size, 2);
+    assert.deepEqual(runtimeProvider.counts(), { health: 0, run: 0 });
+  }
 });
 
 test("stale advance loaded before a durable risk pause is fenced at claim time", async () => {
@@ -1203,6 +1493,8 @@ test("pause persisted after claim fences startExecution before AI-029 and provid
     kind: "risk_approval" as const,
     stepId: "step-a",
     reasonCode: "approval_required" as const,
+    approvalRequestId: "risk-approval-00000000000000000000000000000000",
+    approvalStatus: "pending" as const,
   };
   assert.equal((await store.compareAndSwap({
     runId: "run-one",

@@ -996,6 +996,122 @@ test("AI-028.1 deny and approval-required risk stop before clock and provider ca
   }
 });
 
+test("trusted exact risk approval resolver permits only the singular risk gate", async () => {
+  const input = runtimeInput();
+  const counters = freshCounters();
+  const trusted = dependencies(input, counters, {
+    taskClass: "security_analysis",
+    requestedCapability: "advanced_reasoning",
+    riskLevel: "high",
+  });
+  let observedQuery: unknown = null;
+  const allowed = await executeAgentStep(
+    input,
+    trusted.factsResolver,
+    [provider(input, counters)],
+    trusted.requirementsResolver,
+    undefined,
+    trusted.runtimeContext,
+    {
+      async resolve(query: unknown) {
+        observedQuery = query;
+        return { approved: true };
+      },
+    },
+  );
+  assert.equal(allowed.verdict, "allow", JSON.stringify(allowed.reasons));
+  assert.equal((observedQuery as any).runId, input.runId);
+  assert.equal((observedQuery as any).stepId, input.stepId);
+  assert.equal((observedQuery as any).riskLevel, "high");
+  assert.match((observedQuery as any).policyFingerprint, /^[0-9a-f]{64}$/u);
+  assert.equal(counters.health, 1);
+  assert.equal(counters.run, 1);
+});
+
+test("missing, false, or caller-computable risk approval never enters the provider boundary", async () => {
+  const input = runtimeInput();
+  for (const resolver of [undefined, { resolve: async () => ({ approved: false }) }]) {
+    const counters = freshCounters();
+    const trusted = dependencies(input, counters, {
+      taskClass: "security_analysis",
+      requestedCapability: "advanced_reasoning",
+      riskLevel: "high",
+    });
+    const denied = await executeAgentStep(
+      input,
+      trusted.factsResolver,
+      [provider(input, counters)],
+      trusted.requirementsResolver,
+      undefined,
+      trusted.runtimeContext,
+      resolver,
+    );
+    assert.equal(denied.status, "approval_required");
+    assert.equal(denied.reasons[0]?.code, "approval_required");
+    assert.equal(counters.health, 0);
+    assert.equal(counters.run, 0);
+  }
+
+  const callerCounters = freshCounters();
+  const trusted = dependencies(input, callerCounters);
+  const fingerprintOnly = await executeAgentStep(
+    { ...input, policyFingerprint: "a".repeat(64) },
+    trusted.factsResolver,
+    [provider(input, callerCounters)],
+    trusted.requirementsResolver,
+    undefined,
+    trusted.runtimeContext,
+  );
+  assert.equal(fingerprintOnly.verdict, "deny");
+  assert.equal(callerCounters.facts, 0);
+  assertNoRuntimeCalls(callerCounters);
+});
+
+test("malformed risk approval resolver and approved multi-reason policy fail closed", async () => {
+  const input = runtimeInput();
+  for (const approvalResult of [{ approved: "yes" }, { approved: true, extra: true }]) {
+    const counters = freshCounters();
+    const trusted = dependencies(input, counters, {
+      taskClass: "security_analysis",
+      requestedCapability: "advanced_reasoning",
+      riskLevel: "high",
+    });
+    const denied = await executeAgentStep(
+      input,
+      trusted.factsResolver,
+      [provider(input, counters)],
+      trusted.requirementsResolver,
+      undefined,
+      trusted.runtimeContext,
+      { resolve: async () => approvalResult },
+    );
+    assert.equal(denied.verdict, "deny");
+    assert.equal(denied.reasons[0]?.code, "risk_approval_resolution_failed");
+    assertNoRuntimeCalls(counters);
+  }
+
+  const counters = freshCounters();
+  const trusted = dependencies(input, counters, {
+    taskClass: "security_analysis",
+    requestedCapability: "advanced_reasoning",
+    riskLevel: "high",
+    requiresRepositoryWrite: true,
+  });
+  const denied = await executeAgentStep(
+    input,
+    trusted.factsResolver,
+    [provider(input, counters)],
+    trusted.requirementsResolver,
+    undefined,
+    trusted.runtimeContext,
+    { resolve: async () => ({ approved: true }) },
+  );
+  assert.equal(denied.verdict, "deny");
+  assert.equal(denied.riskApprovalScope, null);
+  assert.equal(counters.health, 0);
+  assert.equal(counters.run, 0);
+});
+
 test("deterministic capability uses no model and returns unsupported runtime", async () => {
   const input = runtimeInput();
   const counters = freshCounters();

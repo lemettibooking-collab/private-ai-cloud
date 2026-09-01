@@ -9,6 +9,7 @@ const contract = (await import(
 )) as typeof import("../lib/contracts/model-capability-routing-policy");
 
 const {
+  createModelCapabilityRiskApprovalScope,
   evaluateModelCapabilityRoutingPolicy,
   isModelCapabilityRoutingVerdict,
   isModelCapabilityTaskClass,
@@ -178,6 +179,75 @@ for (const riskLevel of ["high", "critical"] as const) {
     assert.ok(reasonCodes(decision).includes("risk_approval_required"));
   });
 }
+
+test("self-computable risk scope cannot authorize the base policy evaluator", () => {
+  const input = policy({
+    taskClass: "security_analysis",
+    requestedCapability: "advanced_reasoning",
+    riskLevel: "high",
+  });
+  const scope = createModelCapabilityRiskApprovalScope(input);
+  assert.ok(scope);
+  assert.equal(scope.riskLevel, "high");
+  const stillDenied = Reflect.apply(evaluateModelCapabilityRoutingPolicy, null, [
+    input,
+    { policyFingerprint: scope.policyFingerprint },
+  ]);
+  assertDeny(stillDenied);
+  assert.deepEqual(reasonCodes(stillDenied), ["risk_approval_required"]);
+  assert.equal(scope.conditionalDecision.verdict, "allow");
+  assert.equal(scope.conditionalDecision.authorizedCapability, "advanced_reasoning");
+  assert.equal(input.riskLevel, "high");
+});
+
+test("risk policy fingerprint is deterministic and changes for material policy facts", () => {
+  const base = policy({
+    taskClass: "security_analysis",
+    requestedCapability: "advanced_reasoning",
+    riskLevel: "high",
+  });
+  const first = createModelCapabilityRiskApprovalScope(base);
+  const repeated = createModelCapabilityRiskApprovalScope(clone(base));
+  assert.deepEqual(repeated, first);
+  assert.notEqual(createModelCapabilityRiskApprovalScope({
+    ...base,
+    riskLevel: "critical",
+  })?.policyFingerprint, first?.policyFingerprint);
+  assert.notEqual(createModelCapabilityRiskApprovalScope({
+    ...base,
+    budget: { ...base.budget, maxOutputTokens: 3_999 },
+  })?.policyFingerprint, first?.policyFingerprint);
+});
+
+test("fingerprints, candidates, and multi-reason risk denials remain non-authorizing", () => {
+  const input = policy({
+    taskClass: "security_analysis",
+    requestedCapability: "advanced_reasoning",
+    riskLevel: "high",
+  });
+  const candidate = createModelCapabilityRiskApprovalScope(input);
+  assert.ok(candidate);
+  assertDeny(Reflect.apply(evaluateModelCapabilityRoutingPolicy, null, [input, candidate]));
+  assertDeny(Reflect.apply(evaluateModelCapabilityRoutingPolicy, null, [
+    input,
+    { policyFingerprint: candidate.policyFingerprint },
+  ]));
+  const multiReason = {
+    ...input,
+    requiresRepositoryWrite: true,
+  };
+  assert.equal(createModelCapabilityRiskApprovalScope(multiReason), null);
+  assertDeny(Reflect.apply(evaluateModelCapabilityRoutingPolicy, null, [multiReason, candidate]));
+});
+
+test("production contract exports no fingerprint bearer-token approval primitive", () => {
+  const source = readFileSync(
+    new URL("../lib/contracts/model-capability-routing-policy.ts", import.meta.url),
+    "utf8",
+  );
+  assert.equal(source.includes("ModelCapabilityRiskApprovalPermit"), false);
+  assert.equal(source.includes("riskApprovalPermit"), false);
+});
 
 test("coding without repository write authority is denied", () => {
   const decision = evaluateModelCapabilityRoutingPolicy(policy({
