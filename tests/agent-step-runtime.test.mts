@@ -637,6 +637,7 @@ test("exports exact frozen runtime enums, guards, parsers, and limits", () => {
   assert.deepEqual(agentStepRuntimeVerdicts, ["allow", "deny"]);
   assert.deepEqual(agentStepRuntimeStatuses, [
     "completed", "denied", "failed", "approval_required", "unsupported_runtime",
+    "recovery_required",
   ]);
   assert.equal(Object.isFrozen(agentStepRuntimeVerdicts), true);
   assert.equal(Object.isFrozen(agentStepRuntimeStatuses), true);
@@ -947,6 +948,184 @@ test("trusted existing invocation history cannot be erased and stops factual rep
   assert.equal(erasedDecision.reasons[0]?.code, "invalid_input");
   assert.equal(erasedCounters.facts, 0);
   assertNoRuntimeCalls(erasedCounters);
+});
+
+test("durable invocation ledger reserves before provider and records bounded factual usage", async () => {
+  const input = runtimeInput();
+  const expected = expectedRoute(input);
+  const before = clone(input);
+  const counters = freshCounters();
+  const trusted = dependencies(input, counters);
+  const calls: string[] = [];
+  let reservation: any = null;
+  let outcome: any = null;
+  const ledger = {
+    async reserve(value: unknown) {
+      calls.push("reserve");
+      assert.deepEqual({ health: counters.health, run: counters.run }, { health: 0, run: 0 });
+      assert.equal(deeplyFrozen(value), true);
+      reservation = clone(value);
+      assert.equal(JSON.stringify(value).includes("messages"), false);
+      assert.match((value as any).requestFingerprint, /^sha256:[0-9a-f]{64}$/u);
+      return { status: "reserved" as const };
+    },
+    async recordOutcome(value: unknown) {
+      calls.push("outcome");
+      assert.equal(counters.run, 1);
+      assert.equal(deeplyFrozen(value), true);
+      outcome = clone(value);
+      return { status: "recorded" as const };
+    },
+  };
+  const decision = await executeAgentStep(
+    input,
+    trusted.factsResolver,
+    [provider(input, counters)],
+    trusted.requirementsResolver,
+    undefined,
+    trusted.runtimeContext,
+    undefined,
+    ledger,
+  );
+  assert.equal(decision.verdict, "allow", JSON.stringify(decision.reasons));
+  assert.deepEqual(calls, ["reserve", "outcome"]);
+  assert.deepEqual(reservation, {
+    workspaceId: "workspace-primary",
+    runId: "run-one",
+    workflowExecutionId: "runtime-one",
+    invocationId: "invocation-one",
+    runRevision: expected.request.runRevision,
+    projectId: "project-one",
+    workflowId: "workflow-one",
+    agentId: "agent-one",
+    agentBindingId: expected.request.agentBindingId,
+    stepId: "execute-one",
+    attemptNumber: 1,
+    modelProfileId: expected.request.modelProfileId,
+    requestFingerprint: reservation.requestFingerprint,
+    providerId: expected.route.routePlan!.primary.providerId,
+    deploymentId: expected.route.routePlan!.primary.deploymentId,
+    providerModelId: expected.route.routePlan!.primary.providerModelId,
+    providerModelVersion: "version-1",
+  });
+  assert.deepEqual(outcome, {
+    workspaceId: "workspace-primary",
+    runId: "run-one",
+    invocationId: "invocation-one",
+    requestFingerprint: reservation.requestFingerprint,
+    status: "succeeded",
+    outcome: "succeeded",
+    finishReason: "stop",
+    inputTokens: 10,
+    outputTokens: 5,
+    totalTokens: 15,
+    latencyMs: 5,
+    costUsdMicros: 0,
+    errorCode: null,
+  });
+  assert.deepEqual(input, before);
+  assert.equal(deeplyFrozen(decision), true);
+});
+
+test("durable replay, collision, and unresolved invocation stop before provider", async () => {
+  for (const [ledgerStatus, reasonCode] of [
+    ["replay", "invocation_replay_detected"],
+    ["conflict", "invocation_ledger_conflict"],
+    ["recovery_required", "invocation_ledger_recovery_required"],
+  ] as const) {
+    const input = runtimeInput();
+    const counters = freshCounters();
+    const trusted = dependencies(input, counters);
+    let outcomeCalls = 0;
+    const decision = await executeAgentStep(
+      input,
+      trusted.factsResolver,
+      [provider(input, counters)],
+      trusted.requirementsResolver,
+      undefined,
+      trusted.runtimeContext,
+      undefined,
+      {
+        async reserve() { return { status: ledgerStatus }; },
+        async recordOutcome() { outcomeCalls += 1; return { status: "recorded" as const }; },
+      },
+    );
+    assert.equal(decision.verdict, "deny");
+    assert.equal(decision.reasons.at(-1)?.code, reasonCode);
+    assert.deepEqual({ health: counters.health, run: counters.run, outcomeCalls }, {
+      health: 0, run: 0, outcomeCalls: 0,
+    });
+    assert.equal(decision.nextSnapshot, null);
+    assert.equal(decision.normalizedResult, null);
+  }
+});
+
+test("provider run ambiguity is durably outcome_unknown without fabricated usage", async () => {
+  const input = runtimeInput();
+  const counters = freshCounters();
+  const trusted = dependencies(input, counters);
+  let recorded: any = null;
+  const decision = await executeAgentStep(
+    input,
+    trusted.factsResolver,
+    [provider(input, counters, 0, { throwRun: true })],
+    trusted.requirementsResolver,
+    undefined,
+    trusted.runtimeContext,
+    undefined,
+    {
+      async reserve() { return { status: "reserved" as const }; },
+      async recordOutcome(value) { recorded = clone(value); return { status: "recorded" as const }; },
+    },
+  );
+  assert.equal(decision.verdict, "deny");
+  assert.equal(counters.run, 1);
+  assert.deepEqual(recorded, {
+    workspaceId: "workspace-primary",
+    runId: "run-one",
+    invocationId: "invocation-one",
+    requestFingerprint: recorded.requestFingerprint,
+    status: "outcome_unknown",
+    outcome: null,
+    finishReason: null,
+    inputTokens: null,
+    outputTokens: null,
+    totalTokens: null,
+    latencyMs: null,
+    costUsdMicros: null,
+    errorCode: "provider_exception",
+  });
+});
+
+test("hostile or malformed invocation ledger fails closed before runtime facts and provider", async () => {
+  const input = runtimeInput();
+  const counters = freshCounters();
+  const trusted = dependencies(input, counters);
+  let getterCalls = 0;
+  const hostile = {};
+  Object.defineProperty(hostile, "reserve", {
+    enumerable: true,
+    get() { getterCalls += 1; throw new Error("secret ledger getter"); },
+  });
+  Object.defineProperty(hostile, "recordOutcome", {
+    enumerable: true,
+    value: async () => ({ status: "recorded" }),
+  });
+  const decision = await executeAgentStep(
+    input,
+    trusted.factsResolver,
+    [provider(input, counters)],
+    trusted.requirementsResolver,
+    undefined,
+    trusted.runtimeContext,
+    undefined,
+    hostile as never,
+  );
+  assert.equal(decision.verdict, "deny");
+  assert.equal(decision.reasons[0]?.code, "invocation_ledger_failed");
+  assert.equal(getterCalls, 0);
+  assert.deepEqual(counters, freshCounters());
+  assert.equal(JSON.stringify(decision).includes("secret ledger getter"), false);
 });
 
 test("requirements and routing derive only from trusted factual snapshot and registries", async () => {

@@ -591,6 +591,63 @@ class FakeStore implements RuntimeStore {
   }
 }
 
+type DurableInvocationRecord = {
+  fingerprint: string;
+  status: "running" | "succeeded" | "failed" | "outcome_unknown";
+  outcome: unknown | null;
+};
+
+class LedgerFakeStore extends FakeStore {
+  readonly durableInvocations: Map<string, DurableInvocationRecord>;
+  reservationFailure: "conflict" | "recovery_required" | null = null;
+  recordOutcomeFailure: "conflict" | "recovery_required" | null = null;
+
+  constructor(state: RuntimeState, durableInvocations = new Map<string, DurableInvocationRecord>()) {
+    super(state);
+    this.durableInvocations = durableInvocations;
+  }
+
+  async reserveModelInvocation(
+    input: import("../lib/workflows/agent-step-runtime").AgentStepModelInvocationReservation,
+  ) {
+    if (this.reservationFailure) return { status: this.reservationFailure };
+    const key = `${input.workspaceId}:${input.runId}:${input.invocationId}`;
+    const existing = this.durableInvocations.get(key);
+    if (!existing) {
+      this.durableInvocations.set(key, {
+        fingerprint: input.requestFingerprint,
+        status: "running",
+        outcome: null,
+      });
+      return { status: "reserved" as const };
+    }
+    if (existing.fingerprint !== input.requestFingerprint) return { status: "conflict" as const };
+    return { status: existing.status === "running" || existing.status === "outcome_unknown"
+      ? "recovery_required" as const : "replay" as const };
+  }
+
+  async recordModelInvocationOutcome(
+    input: import("../lib/workflows/agent-step-runtime").AgentStepModelInvocationOutcome,
+  ) {
+    if (this.recordOutcomeFailure === "conflict") return { status: "conflict" as const };
+    if (this.recordOutcomeFailure === "recovery_required") {
+      return { status: "recovery_required" as const };
+    }
+    const key = `${input.workspaceId}:${input.runId}:${input.invocationId}`;
+    const existing = this.durableInvocations.get(key);
+    if (!existing || existing.fingerprint !== input.requestFingerprint) {
+      return { status: "conflict" as const };
+    }
+    if (existing.status !== "running") {
+      return { status: JSON.stringify(existing.outcome) === JSON.stringify(input)
+        ? "idempotent" as const : "conflict" as const };
+    }
+    existing.status = input.status;
+    existing.outcome = clone(input);
+    return { status: "recorded" as const };
+  }
+}
+
 function capability(taskClass = "analysis", requestedCapability = "reasoning") {
   return {
     taskClass,
@@ -864,7 +921,7 @@ test("AI-029 risk approval creates a runtime pause without fabricating a Workflo
 });
 
 test("durable runtime risk approval resumes only on a later exact advance", async () => {
-  const store = new FakeStore(initialState("single"));
+  const store = new LedgerFakeStore(initialState("single"));
   const runtimeProvider = provider();
   const service = createWorkflowRuntimeService(dependencies(store, runtimeProvider, {
     requirements: () => ({
@@ -912,6 +969,8 @@ test("durable runtime risk approval resumes only on a later exact advance", asyn
   const resumed = await resumedService.advance(exactRiskResumeCommand("risk-resume"));
   assert.equal(resumed.status, "completed");
   assert.deepEqual(runtimeProvider.counts(), { health: 1, run: 1 });
+  assert.equal(store.durableInvocations.size, 1);
+  assert.equal([...store.durableInvocations.values()][0]?.status, "succeeded");
 });
 
 test("runtime risk rejection is final for the exact scope and remains cancellable", async () => {
@@ -1383,6 +1442,96 @@ test("command replay is idempotent while same commandId with changed payload con
   assert.equal(replay.revision, first.revision);
   const conflict = await service.start({ ...command, expectedRevision: 1 });
   assert.equal(conflict.reasons[0]?.code, "idempotency_conflict");
+});
+
+test("durable invocation ledger survives service recreation and fences exact or changed replay", async () => {
+  const durable = new Map<string, DurableInvocationRecord>();
+  const firstStore = new LedgerFakeStore(initialState("single"), durable);
+  const firstProvider = provider();
+  const firstService = createWorkflowRuntimeService(dependencies(firstStore, firstProvider));
+  assert.equal((await start(firstService)).status, "running");
+  const restartState = clone(firstStore.state);
+  const completed = await firstService.advance(advanceCommand(1, ["step-a"], "ledger-first"));
+  assert.equal(completed.status, "completed", JSON.stringify(completed.reasons));
+  assert.deepEqual(firstProvider.counts(), { health: 1, run: 1 });
+  assert.equal(durable.size, 1);
+
+  const replayStore = new LedgerFakeStore(restartState, durable);
+  const replayProvider = provider();
+  const replayService = createWorkflowRuntimeService(dependencies(replayStore, replayProvider));
+  const replay = await replayService.advance(advanceCommand(1, ["step-a"], "ledger-replay"));
+  assert.equal(replay.verdict, "deny");
+  assert.deepEqual(replayProvider.counts(), { health: 0, run: 0 });
+
+  const conflictStore = new LedgerFakeStore(restartState, durable);
+  const conflictProvider = provider();
+  const conflictService = createWorkflowRuntimeService(dependencies(conflictStore, conflictProvider));
+  const originalChanged = advanceCommand(1, ["step-a"], "ledger-conflict");
+  const changed = {
+    ...originalChanged,
+    agentInputs: originalChanged.agentInputs.map((agentInput) => ({
+      ...agentInput,
+      invocationDraft: {
+        ...agentInput.invocationDraft,
+        messages: agentInput.invocationDraft.messages.map((message, index) => index === 1
+          ? { ...message, content: "Materially changed replay." }
+          : message),
+      },
+    })),
+  };
+  const conflict = await conflictService.advance(changed);
+  assert.equal(conflict.verdict, "deny");
+  assert.deepEqual(conflictProvider.counts(), { health: 0, run: 0 });
+  assert.equal(JSON.stringify(durable).includes("Materially changed replay"), false);
+});
+
+test("concurrent service instances sharing a durable invocation ledger call provider at most once", async () => {
+  const durable = new Map<string, DurableInvocationRecord>();
+  const starterStore = new FakeStore(initialState("single"));
+  const starter = createWorkflowRuntimeService(dependencies(starterStore, provider()));
+  await start(starter);
+  const runningState = clone(starterStore.state);
+  const sharedProvider = provider();
+  const first = createWorkflowRuntimeService(dependencies(
+    new LedgerFakeStore(runningState, durable), sharedProvider,
+  ));
+  const second = createWorkflowRuntimeService(dependencies(
+    new LedgerFakeStore(runningState, durable), sharedProvider,
+  ));
+  const decisions = await Promise.all([
+    first.advance(advanceCommand(1, ["step-a"], "concurrent-ledger-a")),
+    second.advance(advanceCommand(1, ["step-a"], "concurrent-ledger-b")),
+  ]);
+  assert.equal(decisions.some((decision) => decision.status === "completed"), true);
+  assert.equal(sharedProvider.counts().run, 1);
+  assert.equal(sharedProvider.counts().health, 1);
+  assert.equal(durable.size, 1);
+});
+
+test("different-owner ambiguous reservation recovery performs zero provider calls", async () => {
+  const starterStore = new FakeStore(initialState("single"));
+  await start(createWorkflowRuntimeService(dependencies(starterStore, provider())));
+  const store = new LedgerFakeStore(clone(starterStore.state));
+  store.reservationFailure = "recovery_required";
+  const runtimeProvider = provider();
+  const service = createWorkflowRuntimeService(dependencies(store, runtimeProvider));
+  const result = await service.advance(advanceCommand(1, ["step-a"], "different-owner-fence"));
+  assert.equal(result.status, "recovery_required");
+  assert.deepEqual(runtimeProvider.counts(), { health: 0, run: 0 });
+});
+
+test("ambiguous terminal ledger COMMIT preserves outer outcome_unknown and requires recovery", async () => {
+  const store = new LedgerFakeStore(initialState("single"));
+  store.recordOutcomeFailure = "recovery_required";
+  const runtimeProvider = provider();
+  const service = createWorkflowRuntimeService(dependencies(store, runtimeProvider));
+  await start(service);
+  const result = await service.advance(advanceCommand(1, ["step-a"], "ledger-lost-terminal"));
+  assert.equal(result.status, "recovery_required");
+  assert.deepEqual(runtimeProvider.counts(), { health: 1, run: 1 });
+  assert.deepEqual([...store.executionJournal.values()], ["outcome_unknown"]);
+  assert.equal(store.state.snapshot.status, "running");
+  assert.equal(store.state.snapshot.stepStates[0]?.status, "pending");
 });
 
 test("stale effectful command requires recovery and never reaches AI-029", async () => {

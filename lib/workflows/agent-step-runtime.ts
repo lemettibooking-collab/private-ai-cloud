@@ -14,6 +14,8 @@ import type {
 // @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
 import { createModelCapabilityRiskApprovalScope, evaluateModelCapabilityRoutingPolicy } from "../contracts/model-capability-routing-policy.ts";
 // @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
+import { createModelInvocationRequestFingerprint } from "../contracts/model-invocation-data-handling.ts";
+// @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
 import { executeModelInvocation } from "../contracts/model-invocation-execution.ts";
 // @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
 import { resolveModelInvocationRoute } from "../contracts/model-provider-registry.ts";
@@ -31,6 +33,7 @@ export const agentStepRuntimeStatuses = Object.freeze([
   "failed",
   "approval_required",
   "unsupported_runtime",
+  "recovery_required",
 ] as const);
 export type AgentStepRuntimeStatus = (typeof agentStepRuntimeStatuses)[number];
 
@@ -106,6 +109,51 @@ export interface AgentStepRiskApprovalResolver {
   resolve(input: AgentStepRiskApprovalQuery): unknown | Promise<unknown>;
 }
 
+export type AgentStepModelInvocationReservation = Readonly<{
+  workspaceId: string;
+  runId: string;
+  workflowExecutionId: string;
+  invocationId: string;
+  runRevision: number;
+  projectId: string;
+  workflowId: string;
+  agentId: string;
+  agentBindingId: string;
+  stepId: string;
+  attemptNumber: number;
+  modelProfileId: string;
+  requestFingerprint: string;
+  providerId: string;
+  deploymentId: string;
+  providerModelId: string;
+  providerModelVersion: string;
+}>;
+
+export type AgentStepModelInvocationOutcome = Readonly<{
+  workspaceId: string;
+  runId: string;
+  invocationId: string;
+  requestFingerprint: string;
+  status: "succeeded" | "failed" | "outcome_unknown";
+  outcome: ModelInvocationResult["outcome"] | null;
+  finishReason: ModelInvocationResult["finishReason"] | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  totalTokens: number | null;
+  latencyMs: number | null;
+  costUsdMicros: number | null;
+  errorCode: string | null;
+}>;
+
+export interface AgentStepModelInvocationLedger {
+  reserve(input: AgentStepModelInvocationReservation): Promise<Readonly<{
+    status: "reserved" | "replay" | "conflict" | "recovery_required";
+  }>>;
+  recordOutcome(input: AgentStepModelInvocationOutcome): Promise<Readonly<{
+    status: "recorded" | "idempotent" | "conflict" | "recovery_required";
+  }>>;
+}
+
 export interface AgentStepRuntimeContext {
   now(): string;
 }
@@ -134,6 +182,9 @@ export type AgentStepRuntimeReasonCode =
   | "transition_denied"
   | "route_denied"
   | "invocation_replay_detected"
+  | "invocation_ledger_conflict"
+  | "invocation_ledger_recovery_required"
+  | "invocation_ledger_failed"
   | "invocation_linkage_mismatch"
   | "model_execution_denied"
   | "model_result_failed"
@@ -184,6 +235,10 @@ type CapturedRiskApprovalResolver = Readonly<{
   resolve: (input: AgentStepRiskApprovalQuery) => unknown | Promise<unknown>;
 }>;
 type CapturedRuntimeContext = Readonly<{ now: () => unknown }>;
+type CapturedInvocationLedger = Readonly<{
+  reserve: AgentStepModelInvocationLedger["reserve"];
+  recordOutcome: AgentStepModelInvocationLedger["recordOutcome"];
+}>;
 
 const inputFields = Object.freeze([
   "runId",
@@ -203,6 +258,7 @@ const factsResolverFields = Object.freeze(["resolve"] as const);
 const requirementsResolverFields = Object.freeze(["resolve"] as const);
 const riskApprovalResolverFields = Object.freeze(["resolve"] as const);
 const runtimeContextFields = Object.freeze(["now"] as const);
+const invocationLedgerFields = Object.freeze(["reserve", "recordOutcome"] as const);
 const stableIdPattern = /^[a-z0-9][a-z0-9._-]{0,63}$/u;
 const canonicalTimestampPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
 
@@ -532,6 +588,36 @@ function captureRuntimeContext(
   }
 }
 
+function captureInvocationLedger(
+  input: unknown,
+  reasons: MutableReasons,
+): CapturedInvocationLedger | null {
+  if (input === undefined) return null;
+  try {
+    if (!isPlainRecord(input)) throw new Error("invalid");
+    const keys = Reflect.ownKeys(input);
+    if (keys.some((key) => typeof key !== "string")
+      || keys.length !== invocationLedgerFields.length
+      || !invocationLedgerFields.every((field) => keys.includes(field))) throw new Error("invalid");
+    const reserve = ownDataDescriptor(input, "reserve");
+    const recordOutcome = ownDataDescriptor(input, "recordOutcome");
+    if (!reserve || typeof reserve.value !== "function"
+      || !recordOutcome || typeof recordOutcome.value !== "function") throw new Error("invalid");
+    return {
+      reserve: reserve.value as AgentStepModelInvocationLedger["reserve"],
+      recordOutcome: recordOutcome.value as AgentStepModelInvocationLedger["recordOutcome"],
+    };
+  } catch {
+    addReason(
+      reasons,
+      "invocation_ledger_failed",
+      "invocationLedger",
+      "Trusted model invocation ledger is invalid.",
+    );
+    return null;
+  }
+}
+
 function requirementsContext(
   snapshot: WorkflowRunSnapshot,
   step: WorkflowAgentTaskStep,
@@ -681,8 +767,13 @@ export async function executeAgentStep(
   evidenceResolver?: unknown,
   runtimeContext?: unknown,
   riskApprovalResolver?: unknown,
+  invocationLedger?: AgentStepModelInvocationLedger,
 ): Promise<AgentStepRuntimeDecision> {
   const reasons: MutableReasons = [];
+  const capturedInvocationLedger = captureInvocationLedger(invocationLedger, reasons);
+  if (invocationLedger !== undefined && !capturedInvocationLedger) {
+    return decision("deny", "denied", reasons);
+  }
   const boundary = containsProxy(input)
     ? { ok: false as const, limited: false as const }
     : snapshotModelProviderAdapterInput(input);
@@ -1149,12 +1240,150 @@ export async function executeAgentStep(
     });
   }
 
+  const requestFingerprint = createModelInvocationRequestFingerprint(request);
+  if (!requestFingerprint) {
+    addReason(
+      reasons,
+      "invocation_ledger_failed",
+      "routeDecision.invocationAdmissionDecision.normalizedRequest",
+      "Factual model invocation fingerprint could not be created.",
+      { runId: previousSnapshot.runId, stepId, invocationId: request.invocationId },
+    );
+    return decision("deny", "denied", reasons, {
+      stepId,
+      capabilityDecision,
+      previousSnapshot,
+    });
+  }
+  if (capturedInvocationLedger) {
+    let reservation: Awaited<ReturnType<AgentStepModelInvocationLedger["reserve"]>>;
+    try {
+      reservation = await capturedInvocationLedger.reserve(freezeModelProviderAdapterData({
+        workspaceId: request.workspaceId,
+        runId: request.runId,
+        workflowExecutionId: executionId,
+        invocationId: request.invocationId,
+        runRevision: request.runRevision,
+        projectId: request.projectId,
+        workflowId: request.workflowId,
+        agentId: request.agentId,
+        agentBindingId: request.agentBindingId,
+        stepId: request.stepId,
+        attemptNumber: request.attemptNumber,
+        modelProfileId: request.modelProfileId,
+        requestFingerprint,
+        providerId: primary.providerId,
+        deploymentId: primary.deploymentId,
+        providerModelId: primary.providerModelId,
+        providerModelVersion: primary.providerModelVersion,
+      }));
+    } catch {
+      addReason(
+        reasons,
+        "invocation_ledger_failed",
+        "invocationLedger.reserve",
+        "Durable model invocation reservation failed closed.",
+        { runId: request.runId, stepId, invocationId: request.invocationId },
+      );
+      return decision("deny", "denied", reasons, {
+        stepId,
+        capabilityDecision,
+        previousSnapshot,
+      });
+    }
+    if (!reservation || !["reserved", "replay", "conflict", "recovery_required"]
+      .includes(reservation.status)) {
+      addReason(
+        reasons,
+        "invocation_ledger_failed",
+        "invocationLedger.reserve",
+        "Durable model invocation reservation returned an invalid decision.",
+        { runId: request.runId, stepId, invocationId: request.invocationId },
+      );
+      return decision("deny", "denied", reasons, { stepId, capabilityDecision, previousSnapshot });
+    }
+    if (reservation.status !== "reserved") {
+      const code = reservation.status === "replay"
+        ? "invocation_replay_detected"
+        : reservation.status === "conflict"
+          ? "invocation_ledger_conflict"
+          : "invocation_ledger_recovery_required";
+      addReason(
+        reasons,
+        code,
+        "invocationLedger.reserve",
+        reservation.status === "replay"
+          ? "Durable invocation history already contains this factual invocation."
+          : reservation.status === "conflict"
+            ? "Durable invocation identity conflicts with another factual request."
+            : "Durable invocation outcome is unresolved and requires recovery.",
+        { runId: request.runId, stepId, invocationId: request.invocationId },
+      );
+      return decision(
+        "deny",
+        reservation.status === "recovery_required" ? "recovery_required" : "denied",
+        reasons,
+        { stepId, capabilityDecision, previousSnapshot },
+      );
+    }
+  }
+
   const modelExecutionDecision = await executeModelInvocation(
     { routeInput, candidateIdentity: identityForPrimary(primary) },
     providers,
     evidenceResolver,
     { now: () => occurredAt },
   );
+  if (capturedInvocationLedger) {
+    const result = modelExecutionDecision.normalizedResult;
+    const providerBoundaryAmbiguous = modelExecutionDecision.reasons.some(
+      (item) => item.code === "provider_exception" && item.path.endsWith(".run"),
+    ) || modelExecutionDecision.reasons.some((item) => item.code === "invalid_provider_decision");
+    const status = result
+      ? result.outcome === "succeeded" ? "succeeded" : "failed"
+      : providerBoundaryAmbiguous ? "outcome_unknown" : "failed";
+    const errorCode = result?.error?.code
+      ?? (status === "succeeded" ? null : modelExecutionDecision.reasons[0]?.code ?? "model_execution_denied");
+    let recorded: Awaited<ReturnType<AgentStepModelInvocationLedger["recordOutcome"]>>;
+    try {
+      recorded = await capturedInvocationLedger.recordOutcome(freezeModelProviderAdapterData({
+        workspaceId: request.workspaceId,
+        runId: request.runId,
+        invocationId: request.invocationId,
+        requestFingerprint,
+        status,
+        outcome: result?.outcome ?? null,
+        finishReason: result?.finishReason ?? null,
+        inputTokens: result?.usage.inputTokens ?? null,
+        outputTokens: result?.usage.outputTokens ?? null,
+        totalTokens: result?.usage.totalTokens ?? null,
+        latencyMs: result?.latencyMs ?? null,
+        costUsdMicros: result?.costUsdMicros ?? null,
+        errorCode,
+      }));
+    } catch {
+      recorded = { status: "recovery_required" };
+    }
+    if (!recorded || !["recorded", "idempotent"].includes(recorded.status)) {
+      addReason(
+        reasons,
+        recorded?.status === "conflict"
+          ? "invocation_ledger_conflict"
+          : recorded?.status === "recovery_required"
+            ? "invocation_ledger_recovery_required"
+            : "invocation_ledger_failed",
+        "invocationLedger.recordOutcome",
+        "Durable model invocation outcome could not be committed factually.",
+        { runId: request.runId, stepId, invocationId: request.invocationId },
+      );
+      return decision("deny", "recovery_required", reasons, {
+        stepId,
+        capabilityDecision,
+        modelExecutionDecision,
+        previousSnapshot,
+      });
+    }
+  }
   if (modelExecutionDecision.verdict !== "allow" || !modelExecutionDecision.normalizedResult) {
     addReason(
       reasons,

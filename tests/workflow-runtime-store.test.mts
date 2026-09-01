@@ -35,6 +35,94 @@ const commandOwnershipToken = "00000000-0000-4000-8000-000000000961";
 const fingerprint = "a".repeat(64);
 const approvalRequestFingerprint = "b".repeat(64);
 const approvalPolicyFingerprint = "c".repeat(64);
+const invocationRequestFingerprint = `sha256:${"d".repeat(64)}`;
+const otherReservationToken = "00000000-0000-4000-8000-000000000972";
+
+function invocationReservation(overrides: Record<string, unknown> = {}) {
+  return {
+    workspaceId: "workspace-primary",
+    runId: "run-one",
+    workflowExecutionId: "runtime-one",
+    invocationId: "invocation-one",
+    runRevision: 2,
+    projectId: "project-one",
+    workflowId: "workflow-one",
+    agentId: "agent-one",
+    agentBindingId: "binding-agent-one",
+    stepId: "step-one",
+    attemptNumber: 1,
+    modelProfileId: "model-one",
+    requestFingerprint: invocationRequestFingerprint,
+    providerId: "provider-one",
+    deploymentId: "deployment-one",
+    providerModelId: "provider/model:v1",
+    providerModelVersion: "version-1",
+    ...overrides,
+  } as import("../lib/workflows/agent-step-runtime").AgentStepModelInvocationReservation;
+}
+
+function executionIdentityRow() {
+  return {
+    workflow_execution_id: "00000000-0000-4000-8000-000000000971",
+    db_run_id: dbRunId,
+    execution_id: "runtime-one",
+    step_id: "step-one",
+    attempt_number: 1,
+    expected_revision: "1",
+    execution_status: "running",
+    run_revision: "1",
+  };
+}
+
+function invocationRow(overrides: Record<string, unknown> = {}) {
+  return {
+    workflow_execution_id: "00000000-0000-4000-8000-000000000971",
+    reservation_token: otherReservationToken,
+    invocation_id: "invocation-one",
+    run_revision: "2",
+    project_id: "project-one",
+    workflow_id: "workflow-one",
+    agent_id: "agent-one",
+    agent_binding_id: "binding-agent-one",
+    step_id: "step-one",
+    attempt_number: 1,
+    model_profile_id: "model-one",
+    request_fingerprint: invocationRequestFingerprint,
+    status: "running",
+    provider_id: "provider-one",
+    deployment_id: "deployment-one",
+    provider_model_id: "provider/model:v1",
+    provider_model_version: "version-1",
+    outcome: null,
+    finish_reason: null,
+    input_tokens: null,
+    output_tokens: null,
+    total_tokens: null,
+    latency_ms: null,
+    cost_usd_micros: null,
+    error_code: null,
+    ...overrides,
+  };
+}
+
+function invocationOutcome(overrides: Record<string, unknown> = {}) {
+  return {
+    workspaceId: "workspace-primary",
+    runId: "run-one",
+    invocationId: "invocation-one",
+    requestFingerprint: invocationRequestFingerprint,
+    status: "succeeded",
+    outcome: "succeeded",
+    finishReason: "stop",
+    inputTokens: 10,
+    outputTokens: 5,
+    totalTokens: 15,
+    latencyMs: 7,
+    costUsdMicros: 11,
+    errorCode: null,
+    ...overrides,
+  } as import("../lib/workflows/agent-step-runtime").AgentStepModelInvocationOutcome;
+}
 
 function canonicalData(input: unknown): string {
   if (input === null) return "null";
@@ -128,6 +216,10 @@ class ScriptedDatabase {
         const match = text.match(/\/\* ([^*]+) \*\//u);
         assert.ok(match, `Missing SQL operation tag: ${text}`);
         const tag = match[1];
+        if (tag === "workflow-runtime:audit-event") {
+          this.queries.push({ tag, values });
+          return { rows: [], rowCount: 1 } as import("../lib/db/workflow-runtime-store").WorkflowRuntimeSqlResult<Row>;
+        }
         const step = this.steps.shift();
         assert.ok(step, `Unexpected SQL operation ${tag}`);
         assert.equal(tag, step.tag);
@@ -355,6 +447,9 @@ test("create persists one canonical Run and its step projection in one transacti
   ]);
   await createStore(database).create({ state });
   assert.deepEqual(database.transactions, ["begin", "commit"]);
+  const audit = database.queries.find((query) => query.tag === "workflow-runtime:audit-event");
+  assert.equal(audit?.values[3], "workflow.run_created");
+  assert.equal(JSON.stringify(audit?.values).includes("messages"), false);
   database.done();
 });
 
@@ -1282,6 +1377,7 @@ test("CAS commits Run and Step projection in one transaction", async () => {
   });
   assert.equal(result.status, "committed");
   assert.deepEqual(database.transactions, ["begin", "commit"]);
+  assert.equal(database.queries.find((query) => query.tag === "workflow-runtime:audit-event")?.values[3], "workflow.run_started");
 });
 
 test("lost CAS COMMIT acknowledgement reconciles an exact persisted next state as committed", async () => {
@@ -1384,6 +1480,11 @@ test("claimed CAS synchronizes execution terminal status with Run and Step state
   });
   assert.equal(result.status, "committed");
   assert.deepEqual(database.transactions, ["begin", "commit"]);
+  assert.equal(
+    database.queries.filter((query) => query.tag === "workflow-runtime:audit-event")
+      .some((query) => query.values[3] === "workflow.approval_requested"),
+    true,
+  );
 });
 
 test("lost claimed CAS acknowledgement reconciles Run, pause, Step, and terminal execution together", async () => {
@@ -1507,6 +1608,11 @@ test("CAS permits canonical cancellation from the exact paused factual state", a
   assert.equal(result.status, "committed");
   assert.equal(result.state.pause, null);
   assert.equal(result.state.snapshot.status, "cancelled");
+  assert.deepEqual(
+    database.queries.filter((query) => query.tag === "workflow-runtime:audit-event")
+      .map((query) => query.values[3]),
+    ["workflow.approval_cancelled", "workflow.run_cancelled"],
+  );
 });
 
 for (const decision of ["approved", "rejected"] as const) {
@@ -1556,6 +1662,11 @@ for (const decision of ["approved", "rejected"] as const) {
     assert.equal(result.status, "committed");
     assert.deepEqual(result.state.pause, nextPause);
     assert.deepEqual(database.transactions, ["begin", "commit"]);
+    assert.equal(
+      database.queries.filter((query) => query.tag === "workflow-runtime:audit-event")
+        .some((query) => query.values[3] === `workflow.approval_${decision}`),
+      true,
+    );
   });
 }
 
@@ -1713,6 +1824,351 @@ test("stored command response rejects unknown secret-bearing fields before SQL",
     ownershipToken: commandOwnershipToken,
     response: { ...auditResponse(), databaseUrl: "postgresql://secret" } as never,
   }), /response is invalid/u);
+  assert.equal(database.queries.length, 0);
+});
+
+test("migration 0004 defines a bounded workspace-linked invocation ledger and idempotent runtime audit", () => {
+  const migration = readFileSync(
+    new URL("../db/migrations/0004_workflow_runtime_observability.sql", import.meta.url),
+    "utf8",
+  );
+  for (const token of [
+    "create table workflow_model_invocations",
+    "workflow_execution_id uuid not null references workflow_runtime_executions(id)",
+    "unique (workflow_run_id, invocation_id)",
+    "unique (workflow_execution_id)",
+    "request_fingerprint ~ '^sha256:[0-9a-f]{64}$'",
+    "reservation_token uuid not null",
+    "unique (reservation_token)",
+    "outcome_unknown",
+    "runtime_event_key",
+    "audit_events_workspace_runtime_event_unique",
+  ]) assert.equal(migration.includes(token), true, token);
+  for (const forbidden of [
+    "messages", "prompt_text", "prepared_provider_request", "raw_model_output",
+    "structured_output", "tool_call_arguments", "api_key", "credentials",
+  ]) assert.equal(migration.includes(forbidden), false, forbidden);
+});
+
+test("migration 0004 makes runtime actor and invocation lifecycle NULL shapes explicit", () => {
+  const migration = readFileSync(
+    new URL("../db/migrations/0004_workflow_runtime_observability.sql", import.meta.url),
+    "utf8",
+  ).toLowerCase();
+  for (const required of [
+    "runtime_event_key is not null",
+    "actor_kind is not null",
+    "actor_id is not null",
+    "runtime_run_id is not null",
+    "status = 'succeeded'",
+    "outcome is not null",
+    "outcome = 'succeeded'",
+    "status = 'failed'",
+    "outcome = 'failed'",
+    "status = 'outcome_unknown'",
+  ]) assert.equal(migration.includes(required), true, required);
+  const resultCheck = migration.slice(
+    migration.indexOf("constraint workflow_model_invocations_result_check"),
+    migration.indexOf("constraint workflow_model_invocations_usage_check"),
+  );
+  assert.equal(resultCheck.includes("outcome in ('succeeded', 'failed')"), false);
+  assert.match(
+    migration,
+    /status = 'succeeded'[\s\S]+?outcome is not null[\s\S]+?outcome = 'succeeded'/u,
+  );
+  assert.match(
+    migration,
+    /status = 'failed'[\s\S]+?outcome is not null[\s\S]+?outcome = 'failed'/u,
+  );
+});
+
+test("model invocation reservation is factual, precedes any provider boundary, and stores no request bodies", async () => {
+  let storedReservationToken: unknown;
+  const reservation = invocationReservation();
+  const database = new ScriptedDatabase([
+    { tag: "workflow-runtime:model-invocation-execution", rows: [executionIdentityRow()] },
+    {
+      tag: "workflow-runtime:reserve-model-invocation",
+      rowCount: 1,
+      inspect(values) {
+        storedReservationToken = values[13];
+        const serialized = JSON.stringify(values);
+        assert.equal(serialized.includes("sensitive prompt sentinel"), false);
+        assert.equal(serialized.includes("messages"), false);
+        assert.equal(values.includes(invocationRequestFingerprint), true);
+      },
+    },
+  ]);
+  assert.deepEqual(
+    await createStore(database).reserveModelInvocation(reservation),
+    { status: "reserved" },
+  );
+  assert.equal("reservationToken" in reservation, false);
+  assert.match(storedReservationToken as string, /^[0-9a-f]{8}-[0-9a-f-]{27}$/u);
+  assert.equal(Object.values(reservation).includes(storedReservationToken as string), false);
+  assert.deepEqual(database.transactions, ["begin", "commit"]);
+  const audit = database.queries.find((query) => query.tag === "workflow-runtime:audit-event");
+  assert.ok(audit);
+  assert.equal(JSON.stringify(audit.values).includes(storedReservationToken as string), false);
+  const readModelSource = readFileSync(
+    new URL("../lib/db/workflow-runtime-read-model.ts", import.meta.url),
+    "utf8",
+  );
+  assert.equal(readModelSource.includes("reservation_token"), false);
+  database.done();
+});
+
+test("durable invocation replay survives store recreation while changed fingerprint conflicts", async () => {
+  for (const [reservation, expected] of [
+    [invocationReservation(), "replay"],
+    [invocationReservation({ requestFingerprint: `sha256:${"e".repeat(64)}` }), "conflict"],
+  ] as const) {
+    const database = new ScriptedDatabase([
+      { tag: "workflow-runtime:model-invocation-execution", rows: [executionIdentityRow()] },
+      { tag: "workflow-runtime:reserve-model-invocation", rowCount: 0 },
+      { tag: "workflow-runtime:read-reserved-model-invocation", rows: [
+        invocationRow({ status: "succeeded", outcome: "succeeded", finish_reason: "stop",
+          input_tokens: "10", output_tokens: "5", total_tokens: "15", latency_ms: "7",
+          cost_usd_micros: "11" }),
+      ] },
+    ]);
+    const recreated = createStore(database);
+    assert.deepEqual(await recreated.reserveModelInvocation(reservation), { status: expected });
+    database.done();
+  }
+});
+
+test("two concurrent factual reservations have one winner and one recovery-required loser", async () => {
+  const database = new ScriptedDatabase([
+    { tag: "workflow-runtime:model-invocation-execution", rows: [executionIdentityRow()] },
+    { tag: "workflow-runtime:model-invocation-execution", rows: [executionIdentityRow()] },
+    { tag: "workflow-runtime:reserve-model-invocation", rowCount: 1 },
+    { tag: "workflow-runtime:reserve-model-invocation", rowCount: 0 },
+    { tag: "workflow-runtime:read-reserved-model-invocation", rows: [invocationRow()] },
+  ]);
+  const firstStore = createStore(database);
+  const secondStore = createStore(database);
+  const decisions = await Promise.all([
+    firstStore.reserveModelInvocation(invocationReservation()),
+    secondStore.reserveModelInvocation(invocationReservation()),
+  ]);
+  assert.deepEqual(decisions.map((decision) => decision.status).sort(), ["recovery_required", "reserved"]);
+  assert.equal(decisions.filter((decision) => decision.status === "reserved").length, 1);
+  database.done();
+});
+
+test("lost reservation COMMIT acknowledgement reconciles only this caller's reservation token", async () => {
+  const ownRow = invocationRow();
+  const database = new ScriptedDatabase([
+    { tag: "workflow-runtime:model-invocation-execution", rows: [executionIdentityRow()] },
+    {
+      tag: "workflow-runtime:reserve-model-invocation",
+      rowCount: 1,
+      inspect(values) { ownRow.reservation_token = values[13] as string; },
+    },
+    { tag: "workflow-runtime:read-model-invocation", rows: [ownRow] },
+  ]);
+  database.commitErrors = 1;
+  assert.deepEqual(
+    await createStore(database).reserveModelInvocation(invocationReservation()),
+    { status: "reserved" },
+  );
+  assert.equal(database.queries.filter((query) => query.tag === "workflow-runtime:reserve-model-invocation").length, 1);
+  assert.equal(database.queries.filter((query) => query.tag === "workflow-runtime:audit-event").length, 1);
+  database.done();
+});
+
+test("ambiguous rolled-back contender cannot claim a different token owner's reservation", async () => {
+  let winnerToken = "";
+  const winnerDatabase = new ScriptedDatabase([
+    { tag: "workflow-runtime:model-invocation-execution", rows: [executionIdentityRow()] },
+    {
+      tag: "workflow-runtime:reserve-model-invocation",
+      rowCount: 1,
+      inspect(values) { winnerToken = values[13] as string; },
+    },
+  ]);
+  const winner = await createStore(winnerDatabase).reserveModelInvocation(invocationReservation());
+  assert.deepEqual(winner, { status: "reserved" });
+  winnerDatabase.done();
+
+  let contenderToken = "";
+  const contenderDatabase = new ScriptedDatabase([
+    { tag: "workflow-runtime:model-invocation-execution", rows: [executionIdentityRow()] },
+    {
+      tag: "workflow-runtime:reserve-model-invocation",
+      rowCount: 1,
+      inspect(values) { contenderToken = values[13] as string; },
+    },
+    {
+      tag: "workflow-runtime:read-model-invocation",
+      rows: [invocationRow({ reservation_token: winnerToken })],
+    },
+  ]);
+  contenderDatabase.commitErrors = 1;
+  const contender = await createStore(contenderDatabase)
+    .reserveModelInvocation(invocationReservation());
+  assert.notEqual(contenderToken, winnerToken);
+  assert.deepEqual(contender, { status: "recovery_required" });
+  assert.deepEqual([winner.status, contender.status].sort(), ["recovery_required", "reserved"]);
+  contenderDatabase.done();
+});
+
+test("ambiguous reservation sees an exact terminal row as replay regardless of token", async () => {
+  const database = new ScriptedDatabase([
+    { tag: "workflow-runtime:model-invocation-execution", rows: [executionIdentityRow()] },
+    { tag: "workflow-runtime:reserve-model-invocation", rowCount: 1 },
+    { tag: "workflow-runtime:read-model-invocation", rows: [invocationRow({
+      reservation_token: otherReservationToken,
+      status: "succeeded",
+      outcome: "succeeded",
+      finish_reason: "stop",
+      input_tokens: "10",
+      output_tokens: "5",
+      total_tokens: "15",
+      latency_ms: "7",
+      cost_usd_micros: "11",
+    })] },
+  ]);
+  database.commitErrors = 1;
+  assert.deepEqual(
+    await createStore(database).reserveModelInvocation(invocationReservation()),
+    { status: "replay" },
+  );
+  database.done();
+});
+
+test("ambiguous reservation with an unknown stored lifecycle fails closed", async () => {
+  const unknownRow = invocationRow({ status: "corrupted" });
+  const database = new ScriptedDatabase([
+    { tag: "workflow-runtime:model-invocation-execution", rows: [executionIdentityRow()] },
+    {
+      tag: "workflow-runtime:reserve-model-invocation",
+      rowCount: 1,
+      inspect(values) { unknownRow.reservation_token = values[13] as string; },
+    },
+    { tag: "workflow-runtime:read-model-invocation", rows: [unknownRow] },
+  ]);
+  database.commitErrors = 1;
+  assert.deepEqual(
+    await createStore(database).reserveModelInvocation(invocationReservation()),
+    { status: "recovery_required" },
+  );
+  database.done();
+});
+
+test("unreadable lost reservation or terminal acknowledgement requires recovery", async () => {
+  const reservationDatabase = new ScriptedDatabase([
+    { tag: "workflow-runtime:model-invocation-execution", rows: [executionIdentityRow()] },
+    { tag: "workflow-runtime:reserve-model-invocation", rowCount: 1 },
+    { tag: "workflow-runtime:read-model-invocation", error: new Error("unreadable") },
+  ]);
+  reservationDatabase.commitErrors = 1;
+  assert.deepEqual(
+    await createStore(reservationDatabase).reserveModelInvocation(invocationReservation()),
+    { status: "recovery_required" },
+  );
+
+  const outcomeDatabase = new ScriptedDatabase([
+    { tag: "workflow-runtime:lock-model-invocation", rows: [{ ...invocationRow(), db_run_id: dbRunId }] },
+    { tag: "workflow-runtime:complete-model-invocation", rowCount: 1 },
+    { tag: "workflow-runtime:read-model-invocation", error: new Error("unreadable") },
+  ]);
+  outcomeDatabase.commitErrors = 1;
+  assert.deepEqual(
+    await createStore(outcomeDatabase).recordModelInvocationOutcome(invocationOutcome()),
+    { status: "recovery_required" },
+  );
+  reservationDatabase.done();
+  outcomeDatabase.done();
+});
+
+test("model invocation terminal usage is exact-once and conflicting terminal data fails closed", async () => {
+  const database = new ScriptedDatabase([
+    { tag: "workflow-runtime:lock-model-invocation", rows: [{ ...invocationRow(), db_run_id: dbRunId }] },
+    {
+      tag: "workflow-runtime:complete-model-invocation",
+      rowCount: 1,
+      inspect(values) {
+        assert.equal(values[6], 10);
+        assert.equal(values[8], 15);
+        assert.equal(values[10], 11);
+      },
+    },
+    { tag: "workflow-runtime:lock-model-invocation", rows: [{
+      ...invocationRow({ status: "succeeded", outcome: "succeeded", finish_reason: "stop",
+        input_tokens: "10", output_tokens: "5", total_tokens: "15", latency_ms: "7",
+        cost_usd_micros: "11" }), db_run_id: dbRunId,
+    }] },
+    { tag: "workflow-runtime:lock-model-invocation", rows: [{
+      ...invocationRow({ status: "succeeded", outcome: "succeeded", finish_reason: "stop",
+        input_tokens: "10", output_tokens: "5", total_tokens: "15", latency_ms: "7",
+        cost_usd_micros: "11" }), db_run_id: dbRunId,
+    }] },
+  ]);
+  const store = createStore(database);
+  assert.deepEqual(await store.recordModelInvocationOutcome(invocationOutcome()), { status: "recorded" });
+  assert.deepEqual(await store.recordModelInvocationOutcome(invocationOutcome()), { status: "idempotent" });
+  assert.deepEqual(
+    await store.recordModelInvocationOutcome(invocationOutcome({ costUsdMicros: 12 })),
+    { status: "conflict" },
+  );
+  assert.equal(database.queries.filter((query) => query.tag === "workflow-runtime:complete-model-invocation").length, 1);
+  assert.equal(database.queries.filter((query) => query.tag === "workflow-runtime:audit-event").length, 1);
+  database.done();
+});
+
+test("ambiguous model outcome stores no fabricated usage and lost terminal COMMIT reconciles", async () => {
+  const ambiguous = invocationOutcome({
+    status: "outcome_unknown", outcome: null, finishReason: null,
+    inputTokens: null, outputTokens: null, totalTokens: null,
+    latencyMs: null, costUsdMicros: null, errorCode: "provider_exception",
+  });
+  const terminal = invocationRow({
+    status: "outcome_unknown", error_code: "provider_exception",
+  });
+  const database = new ScriptedDatabase([
+    { tag: "workflow-runtime:lock-model-invocation", rows: [{ ...invocationRow(), db_run_id: dbRunId }] },
+    {
+      tag: "workflow-runtime:complete-model-invocation",
+      rowCount: 1,
+      inspect(values) {
+        assert.deepEqual(values.slice(4, 11), [null, null, null, null, null, null, null]);
+      },
+    },
+    { tag: "workflow-runtime:read-model-invocation", rows: [terminal] },
+  ]);
+  database.commitErrors = 1;
+  assert.deepEqual(await createStore(database).recordModelInvocationOutcome(ambiguous), { status: "recorded" });
+  assert.equal(database.queries.filter((query) => query.tag === "workflow-runtime:audit-event").length, 1);
+  database.done();
+});
+
+test("model invocation operations are workspace isolated and reject invalid identity before SQL", async () => {
+  const database = new ScriptedDatabase([]);
+  const store = createStore(database);
+  assert.deepEqual(
+    await store.reserveModelInvocation(invocationReservation({ workspaceId: "workspace-other" })),
+    { status: "conflict" },
+  );
+  assert.deepEqual(
+    await store.recordModelInvocationOutcome(invocationOutcome({ workspaceId: "workspace-other" })),
+    { status: "conflict" },
+  );
+  assert.equal(database.queries.length, 0);
+});
+
+test("application outcome validation rejects NULL success and failed-plus-succeeded lifecycle shapes", async () => {
+  const database = new ScriptedDatabase([]);
+  const store = createStore(database);
+  assert.deepEqual(await store.recordModelInvocationOutcome(invocationOutcome({
+    outcome: null,
+  })), { status: "conflict" });
+  assert.deepEqual(await store.recordModelInvocationOutcome(invocationOutcome({
+    status: "failed",
+    outcome: "succeeded",
+    errorCode: "provider_failed",
+  })), { status: "conflict" });
   assert.equal(database.queries.length, 0);
 });
 

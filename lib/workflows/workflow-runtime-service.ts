@@ -6,6 +6,7 @@ import type { ModelProvider } from "../contracts/model-provider-adapter";
 import type { WorkflowRunSnapshot, WorkflowRunStatus } from "../contracts/workflow-run";
 import type {
   AgentStepCapabilityRequirementsResolver,
+  AgentStepModelInvocationLedger,
   AgentStepRiskApprovalQuery,
   AgentStepRuntimeFactsQuery,
   AgentStepRuntimeContext,
@@ -301,6 +302,8 @@ export interface WorkflowRuntimeStateStore {
   compareAndSwap(input: WorkflowRuntimeCompareAndSwapInput): Promise<WorkflowRuntimeCompareAndSwapDecision>;
   checkRiskApproval(input: WorkflowRuntimeRiskApprovalCheckInput): Promise<Readonly<{ approved: boolean }>>;
   releaseClaim(input: Readonly<{ runId: string; claimId: string }>): Promise<void>;
+  reserveModelInvocation?: AgentStepModelInvocationLedger["reserve"];
+  recordModelInvocationOutcome?: AgentStepModelInvocationLedger["recordOutcome"];
 }
 
 export type WorkflowRuntimeServiceDependencies = Readonly<{
@@ -747,6 +750,14 @@ export function createWorkflowRuntimeService(
   dependencies: WorkflowRuntimeServiceDependencies,
 ): WorkflowRuntimeService {
   const { store, authorizer, providers, requirementsResolver, evidenceResolver, runtimeContext } = dependencies;
+  const invocationLedger: AgentStepModelInvocationLedger | undefined =
+    typeof store.reserveModelInvocation === "function"
+      && typeof store.recordModelInvocationOutcome === "function"
+      ? {
+          reserve: (input) => store.reserveModelInvocation!(input),
+          recordOutcome: (input) => store.recordModelInvocationOutcome!(input),
+        }
+      : undefined;
 
   async function load(runId: string, reasons: MutableReasons): Promise<WorkflowRuntimeState | null> {
     try {
@@ -1346,8 +1357,9 @@ export function createWorkflowRuntimeService(
                 return store.checkRiskApproval(scope);
               },
             },
+            invocationLedger,
           );
-          executionOutcomeKnown = true;
+          executionOutcomeKnown = agentDecision.status !== "recovery_required";
           if (!agentDecision.previousSnapshot
             || agentDecision.previousSnapshot.runId !== state.snapshot.runId
             || agentDecision.previousSnapshot.revision !== state.snapshot.revision) {
@@ -1408,7 +1420,11 @@ export function createWorkflowRuntimeService(
               }
             } else {
               addReason(reasons, "agent_runtime_denied", "executeAgentStep", "Agent Step Runtime did not produce a committable snapshot.", command.runId, step.id);
-              const status = agentDecision.status === "unsupported_runtime" ? "unsupported_runtime" : "denied";
+              const status = agentDecision.status === "unsupported_runtime"
+                ? "unsupported_runtime"
+                : agentDecision.status === "recovery_required"
+                  ? "recovery_required"
+                  : "denied";
               claimedResponse = response("deny", status, reasons, state, latestResult);
             }
           } else {

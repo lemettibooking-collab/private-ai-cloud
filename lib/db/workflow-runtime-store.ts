@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   WorkflowRuntimeCommandBeginDecision,
   WorkflowRuntimeCommandBeginInput,
@@ -12,10 +12,16 @@ import type {
   WorkflowRuntimeState,
   WorkflowRuntimeStateStore,
 } from "../workflows/workflow-runtime-service";
+import type {
+  AgentStepModelInvocationOutcome,
+  AgentStepModelInvocationReservation,
+} from "../workflows/agent-step-runtime";
 // @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
 import { cloneModelProviderAdapterData, freezeModelProviderAdapterData, snapshotModelProviderAdapterInput } from "../contracts/model-provider-adapter.ts";
 // @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
 import { workflowRunStatuses } from "../contracts/workflow-run.ts";
+// @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
+import { modelInvocationFinishReasons, modelInvocationLimits } from "../contracts/model-invocation.ts";
 // @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
 import { normalizeWorkflowRuntimeState, workflowRuntimeServiceStatuses, workflowRuntimeServiceVerdicts } from "../workflows/workflow-runtime-service.ts";
 
@@ -44,6 +50,7 @@ export const postgresWorkflowRuntimeStoreLimits = Object.freeze({
   minimumCommandLeaseDurationMs: 30 * 1_000,
   maximumCommandLeaseDurationMs: 15 * 60 * 1_000,
   maxStoredResponseReasons: 256,
+  maxInvocationErrorCodeLength: 128,
 });
 
 export type PostgresWorkflowRuntimeStoreOptions = Readonly<{
@@ -123,9 +130,49 @@ type RuntimeApprovalRow = Record<string, unknown> & {
   decision: "approved" | "rejected" | null;
 };
 
+type ModelInvocationRow = Record<string, unknown> & {
+  workflow_execution_id: string;
+  reservation_token: string;
+  invocation_id: string;
+  run_revision: string | number;
+  project_id: string;
+  workflow_id: string;
+  agent_id: string;
+  agent_binding_id: string;
+  step_id: string;
+  attempt_number: number;
+  model_profile_id: string;
+  request_fingerprint: string;
+  status: "running" | "succeeded" | "failed" | "outcome_unknown";
+  provider_id: string;
+  deployment_id: string;
+  provider_model_id: string;
+  provider_model_version: string;
+  outcome: "succeeded" | "failed" | null;
+  finish_reason: string | null;
+  input_tokens: string | number | null;
+  output_tokens: string | number | null;
+  total_tokens: string | number | null;
+  latency_ms: string | number | null;
+  cost_usd_micros: string | number | null;
+  error_code: string | null;
+};
+
+type WorkflowExecutionIdentityRow = Record<string, unknown> & {
+  workflow_execution_id: string;
+  db_run_id: string;
+  execution_id: string;
+  step_id: string;
+  attempt_number: number;
+  expected_revision: string | number;
+  execution_status: string;
+  run_revision: string | number;
+};
+
 const stableIdPattern = /^[a-z0-9][a-z0-9._-]{0,63}$/u;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const fingerprintPattern = /^[0-9a-f]{64}$/u;
+const invocationFingerprintPattern = /^sha256:[0-9a-f]{64}$/u;
 const actorIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}$/u;
 const forbiddenStoredKeys = new Set([
   "apiKey",
@@ -403,6 +450,93 @@ function validApprovalMutation(
     && state.pause === null;
 }
 
+function safeProviderIdentifier(input: unknown): input is string {
+  return typeof input === "string" && input.length >= 1 && input.length <= 256
+    && !/[\u0000-\u001f\u007f\r\n]/u.test(input);
+}
+
+function validInvocationReservation(input: AgentStepModelInvocationReservation): boolean {
+  return stableIdPattern.test(input.workspaceId)
+    && stableIdPattern.test(input.runId)
+    && stableIdPattern.test(input.workflowExecutionId)
+    && stableIdPattern.test(input.invocationId)
+    && safeInteger(input.runRevision)
+    && stableIdPattern.test(input.projectId)
+    && stableIdPattern.test(input.workflowId)
+    && stableIdPattern.test(input.agentId)
+    && stableIdPattern.test(input.agentBindingId)
+    && stableIdPattern.test(input.stepId)
+    && Number.isSafeInteger(input.attemptNumber) && input.attemptNumber >= 1
+    && stableIdPattern.test(input.modelProfileId)
+    && invocationFingerprintPattern.test(input.requestFingerprint)
+    && safeProviderIdentifier(input.providerId)
+    && safeProviderIdentifier(input.deploymentId)
+    && safeProviderIdentifier(input.providerModelId)
+    && safeProviderIdentifier(input.providerModelVersion);
+}
+
+function validInvocationOutcome(input: AgentStepModelInvocationOutcome): boolean {
+  const hasUsage = input.outcome !== null || input.finishReason !== null
+    || input.inputTokens !== null || input.outputTokens !== null || input.totalTokens !== null
+    || input.latencyMs !== null || input.costUsdMicros !== null;
+  const values = [input.inputTokens, input.outputTokens, input.totalTokens, input.latencyMs,
+    input.costUsdMicros];
+  return stableIdPattern.test(input.workspaceId)
+    && stableIdPattern.test(input.runId)
+    && stableIdPattern.test(input.invocationId)
+    && invocationFingerprintPattern.test(input.requestFingerprint)
+    && ["succeeded", "failed", "outcome_unknown"].includes(input.status)
+    && (input.errorCode === null || (typeof input.errorCode === "string"
+      && input.errorCode.length >= 1
+      && input.errorCode.length <= postgresWorkflowRuntimeStoreLimits.maxInvocationErrorCodeLength
+      && !/[\u0000-\u001f\u007f\r\n]/u.test(input.errorCode)))
+    && [input.inputTokens, input.outputTokens, input.totalTokens].every(
+      (value) => value === null || (safeInteger(value) && value <= modelInvocationLimits.maxTokenCount),
+    )
+    && (input.latencyMs === null || (safeInteger(input.latencyMs)
+      && input.latencyMs <= modelInvocationLimits.maxLatencyMs))
+    && (input.costUsdMicros === null || (safeInteger(input.costUsdMicros)
+      && input.costUsdMicros <= modelInvocationLimits.maxCostUsdMicros))
+    && ((hasUsage
+      && input.status !== "outcome_unknown"
+      && ["succeeded", "failed"].includes(input.outcome ?? "")
+      && modelInvocationFinishReasons.includes(input.finishReason as never)
+      && values.every((value) => value !== null)
+      && input.totalTokens === (input.inputTokens as number) + (input.outputTokens as number)
+      && (input.status === "succeeded") === (input.outcome === "succeeded")
+      && (input.status === "succeeded" ? input.errorCode === null : true))
+      || (!hasUsage && input.status !== "succeeded" && input.errorCode !== null));
+}
+
+function sameReservation(row: ModelInvocationRow, input: AgentStepModelInvocationReservation): boolean {
+  return row.invocation_id === input.invocationId
+    && databaseInteger(row.run_revision) === input.runRevision
+    && row.project_id === input.projectId
+    && row.workflow_id === input.workflowId
+    && row.agent_id === input.agentId
+    && row.agent_binding_id === input.agentBindingId
+    && row.step_id === input.stepId
+    && row.attempt_number === input.attemptNumber
+    && row.model_profile_id === input.modelProfileId
+    && row.request_fingerprint === input.requestFingerprint
+    && row.provider_id === input.providerId
+    && row.deployment_id === input.deploymentId
+    && row.provider_model_id === input.providerModelId
+    && row.provider_model_version === input.providerModelVersion;
+}
+
+function sameOutcome(row: ModelInvocationRow, input: AgentStepModelInvocationOutcome): boolean {
+  return row.status === input.status
+    && row.outcome === input.outcome
+    && row.finish_reason === input.finishReason
+    && (row.input_tokens === null ? null : databaseInteger(row.input_tokens)) === input.inputTokens
+    && (row.output_tokens === null ? null : databaseInteger(row.output_tokens)) === input.outputTokens
+    && (row.total_tokens === null ? null : databaseInteger(row.total_tokens)) === input.totalTokens
+    && (row.latency_ms === null ? null : databaseInteger(row.latency_ms)) === input.latencyMs
+    && (row.cost_usd_micros === null ? null : databaseInteger(row.cost_usd_micros)) === input.costUsdMicros
+    && row.error_code === input.errorCode;
+}
+
 export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateStore {
   readonly #database: WorkflowRuntimeDatabase;
   readonly #workspaceId: string;
@@ -440,6 +574,85 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
       throw persistenceError("Workflow runtime store clock is invalid.");
     }
     return new Date(value.getTime());
+  }
+
+  async #appendAuditEvent(
+    client: WorkflowRuntimeSqlClient,
+    input: Readonly<{
+      runId: string;
+      eventKey: string;
+      eventType: string;
+      actorKind: "owner" | "workflow_runtime" | "agent_runtime";
+      actorId: string;
+      metadata: Readonly<Record<string, string | number | null>>;
+    }>,
+  ): Promise<void> {
+    if (!stableIdPattern.test(input.runId) || input.eventKey.length > 256
+      || !/^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,255}$/u.test(input.eventKey)
+      || !/^[a-z][a-z0-9._-]{0,127}$/u.test(input.eventType)
+      || !actorIdPattern.test(input.actorId) || containsForbiddenStoredKey(input.metadata)) {
+      throw persistenceError("Workflow runtime audit event is invalid.");
+    }
+    await client.query(
+      `/* workflow-runtime:audit-event */
+       insert into audit_events (
+         workspace_id, actor_kind, actor_id, event_type, entity_type,
+         runtime_run_id, runtime_event_key, metadata
+       ) values ($1, $2, $3, $4, 'workflow_runtime', $5, $6, $7)
+       on conflict (workspace_id, runtime_event_key)
+         where runtime_event_key is not null
+       do nothing`,
+      [
+        this.#workspaceDatabaseId,
+        input.actorKind,
+        input.actorId,
+        input.eventType,
+        input.runId,
+        input.eventKey,
+        input.metadata,
+      ],
+    );
+  }
+
+  async #readModelInvocation(
+    runId: string,
+    invocationId: string,
+  ): Promise<ModelInvocationRow | null> {
+    let client: WorkflowRuntimeSqlClient | null = null;
+    try {
+      client = await this.#database.connect();
+      const result = await client.query<ModelInvocationRow>(
+        `/* workflow-runtime:read-model-invocation */
+         select invocation.workflow_execution_id::text as workflow_execution_id,
+                invocation.reservation_token::text as reservation_token,
+                invocation.invocation_id, invocation.run_revision::text as run_revision,
+                invocation.project_id, invocation.workflow_id, invocation.agent_id,
+                invocation.agent_binding_id, invocation.step_id, invocation.attempt_number,
+                invocation.model_profile_id, invocation.request_fingerprint, invocation.status,
+                invocation.provider_id, invocation.deployment_id,
+                invocation.provider_model_id, invocation.provider_model_version,
+                invocation.outcome, invocation.finish_reason,
+                invocation.input_tokens::text as input_tokens,
+                invocation.output_tokens::text as output_tokens,
+                invocation.total_tokens::text as total_tokens,
+                invocation.latency_ms::text as latency_ms,
+                invocation.cost_usd_micros::text as cost_usd_micros,
+                invocation.error_code
+         from workflow_model_invocations as invocation
+         join workflow_runs as run on run.id = invocation.workflow_run_id
+         where invocation.workspace_id = $1 and run.workspace_id = $1
+           and run.runtime_id = $2 and invocation.invocation_id = $3`,
+        [this.#workspaceDatabaseId, runId, invocationId],
+      );
+      if (result.rowCount === 0) return null;
+      if (result.rowCount !== 1) throw persistenceError("Model invocation lookup is ambiguous.");
+      return result.rows[0];
+    } catch (error) {
+      if (error instanceof WorkflowRuntimePersistenceError) throw error;
+      throw persistenceError("Model invocation lookup failed closed.");
+    } finally {
+      client?.release();
+    }
   }
 
   async #approvalMutationObserved(
@@ -559,6 +772,19 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
           throw persistenceError("Workflow runtime step projection creation failed closed.");
         }
       }
+      await this.#appendAuditEvent(client, {
+        runId: state.snapshot.runId,
+        eventKey: `${state.snapshot.runId}:created`,
+        eventType: "workflow.run_created",
+        actorKind: "workflow_runtime",
+        actorId: "workflow-runtime",
+        metadata: {
+          runId: state.snapshot.runId,
+          projectId: state.snapshot.projectId,
+          workflowId: state.snapshot.workflowId,
+          revision: state.snapshot.revision,
+        },
+      });
     });
   }
 
@@ -1181,6 +1407,254 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
     });
   }
 
+  async reserveModelInvocation(
+    input: AgentStepModelInvocationReservation,
+  ): Promise<Readonly<{ status: "reserved" | "replay" | "conflict" | "recovery_required" }>> {
+    if (!validInvocationReservation(input) || input.workspaceId !== this.#workspaceId) {
+      return { status: "conflict" };
+    }
+    const reservationToken = randomUUID();
+    try {
+      return await transaction(this.#database, async (client) => {
+        const execution = await client.query<WorkflowExecutionIdentityRow>(
+          `/* workflow-runtime:model-invocation-execution */
+           select execution.id::text as workflow_execution_id,
+                  run.id::text as db_run_id, execution.execution_id,
+                  execution.step_id, execution.attempt_number,
+                  execution.expected_revision::text as expected_revision,
+                  execution.status as execution_status,
+                  run.revision::text as run_revision
+           from workflow_runtime_executions as execution
+           join workflow_runs as run on run.id = execution.run_id
+           where execution.workspace_id = $1 and run.workspace_id = $1
+             and run.runtime_id = $2 and execution.execution_id = $3
+           for update of execution, run`,
+          [this.#workspaceDatabaseId, input.runId, input.workflowExecutionId],
+        );
+        if (execution.rowCount !== 1) return { status: "conflict" as const };
+        const factual = execution.rows[0];
+        const expectedRevision = databaseInteger(factual.expected_revision);
+        const runRevision = databaseInteger(factual.run_revision);
+        if (factual.execution_id !== input.workflowExecutionId
+          || factual.step_id !== input.stepId
+          || factual.attempt_number !== input.attemptNumber
+          || factual.execution_status !== "running"
+          || expectedRevision === null || runRevision !== expectedRevision
+          || input.runRevision !== expectedRevision + 1) {
+          return { status: "conflict" as const };
+        }
+        const inserted = await client.query(
+          `/* workflow-runtime:reserve-model-invocation */
+           insert into workflow_model_invocations (
+             workspace_id, workflow_run_id, workflow_execution_id,
+             invocation_id, run_revision, project_id, workflow_id, agent_id,
+             agent_binding_id, step_id, attempt_number, model_profile_id,
+             request_fingerprint, reservation_token, status, provider_id, deployment_id,
+             provider_model_id, provider_model_version, created_at, started_at
+           ) values (
+             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+             $13, $14, 'running', $15, $16, $17, $18, $19, $19
+           ) on conflict do nothing`,
+          [
+            this.#workspaceDatabaseId,
+            factual.db_run_id,
+            factual.workflow_execution_id,
+            input.invocationId,
+            input.runRevision,
+            input.projectId,
+            input.workflowId,
+            input.agentId,
+            input.agentBindingId,
+            input.stepId,
+            input.attemptNumber,
+            input.modelProfileId,
+            input.requestFingerprint,
+            reservationToken,
+            input.providerId,
+            input.deploymentId,
+            input.providerModelId,
+            input.providerModelVersion,
+            this.#trustedNow(),
+          ],
+        );
+        if (inserted.rowCount === 1) {
+          await this.#appendAuditEvent(client, {
+            runId: input.runId,
+            eventKey: `${input.runId}:invocation:${input.invocationId}:started`,
+            eventType: "workflow.step_model_invocation_started",
+            actorKind: "agent_runtime",
+            actorId: "agent-step-runtime",
+            metadata: {
+              runId: input.runId,
+              invocationId: input.invocationId,
+              stepId: input.stepId,
+              attemptNumber: input.attemptNumber,
+              runRevision: input.runRevision,
+              requestFingerprint: input.requestFingerprint,
+              providerId: input.providerId,
+              deploymentId: input.deploymentId,
+            },
+          });
+          return { status: "reserved" as const };
+        }
+        const existing = await client.query<ModelInvocationRow>(
+          `/* workflow-runtime:read-reserved-model-invocation */
+           select workflow_execution_id::text as workflow_execution_id,
+                  reservation_token::text as reservation_token, invocation_id,
+                  run_revision::text as run_revision, project_id,
+                  workflow_id, agent_id, agent_binding_id, step_id, attempt_number,
+                  model_profile_id, request_fingerprint, status, provider_id,
+                  deployment_id, provider_model_id, provider_model_version,
+                  outcome, finish_reason, input_tokens::text as input_tokens,
+                  output_tokens::text as output_tokens, total_tokens::text as total_tokens,
+                  latency_ms::text as latency_ms, cost_usd_micros::text as cost_usd_micros,
+                  error_code
+           from workflow_model_invocations
+           where workspace_id = $1 and workflow_run_id = $2
+             and (invocation_id = $3 or workflow_execution_id = $4)
+           for update`,
+          [
+            this.#workspaceDatabaseId,
+            factual.db_run_id,
+            input.invocationId,
+            factual.workflow_execution_id,
+          ],
+        );
+        if (existing.rowCount !== 1 || !sameReservation(existing.rows[0], input)
+          || existing.rows[0].workflow_execution_id !== factual.workflow_execution_id) {
+          return { status: "conflict" as const };
+        }
+        return {
+          status: ["succeeded", "failed", "outcome_unknown"].includes(existing.rows[0].status)
+            ? "replay" as const
+            : "recovery_required" as const,
+        };
+      });
+    } catch (error) {
+      if (!(error instanceof WorkflowRuntimeCommitAmbiguousError)) throw error;
+      let existing: ModelInvocationRow | null;
+      try {
+        existing = await this.#readModelInvocation(input.runId, input.invocationId);
+      } catch {
+        return { status: "recovery_required" };
+      }
+      if (!existing) return { status: "recovery_required" };
+      if (!sameReservation(existing, input)) return { status: "conflict" };
+      if (["succeeded", "failed", "outcome_unknown"].includes(existing.status)) {
+        return { status: "replay" };
+      }
+      if (existing.status !== "running") return { status: "recovery_required" };
+      return existing.reservation_token === reservationToken
+        ? { status: "reserved" }
+        : { status: "recovery_required" };
+    }
+  }
+
+  async recordModelInvocationOutcome(
+    input: AgentStepModelInvocationOutcome,
+  ): Promise<Readonly<{ status: "recorded" | "idempotent" | "conflict" | "recovery_required" }>> {
+    if (!validInvocationOutcome(input) || input.workspaceId !== this.#workspaceId) {
+      return { status: "conflict" };
+    }
+    try {
+      return await transaction(this.#database, async (client) => {
+        const current = await client.query<ModelInvocationRow & { db_run_id: string }>(
+          `/* workflow-runtime:lock-model-invocation */
+           select invocation.workflow_execution_id::text as workflow_execution_id,
+                  run.id::text as db_run_id, invocation.invocation_id,
+                  invocation.run_revision::text as run_revision, invocation.project_id,
+                  invocation.workflow_id, invocation.agent_id, invocation.agent_binding_id,
+                  invocation.step_id, invocation.attempt_number, invocation.model_profile_id,
+                  invocation.request_fingerprint, invocation.status, invocation.provider_id,
+                  invocation.deployment_id, invocation.provider_model_id,
+                  invocation.provider_model_version, invocation.outcome,
+                  invocation.finish_reason, invocation.input_tokens::text as input_tokens,
+                  invocation.output_tokens::text as output_tokens,
+                  invocation.total_tokens::text as total_tokens,
+                  invocation.latency_ms::text as latency_ms,
+                  invocation.cost_usd_micros::text as cost_usd_micros,
+                  invocation.error_code
+           from workflow_model_invocations as invocation
+           join workflow_runs as run on run.id = invocation.workflow_run_id
+           where invocation.workspace_id = $1 and run.workspace_id = $1
+             and run.runtime_id = $2 and invocation.invocation_id = $3
+           for update of invocation`,
+          [this.#workspaceDatabaseId, input.runId, input.invocationId],
+        );
+        if (current.rowCount !== 1
+          || current.rows[0].request_fingerprint !== input.requestFingerprint) {
+          return { status: "conflict" as const };
+        }
+        if (current.rows[0].status !== "running") {
+          return { status: sameOutcome(current.rows[0], input) ? "idempotent" as const : "conflict" as const };
+        }
+        const completedAt = this.#trustedNow();
+        const updated = await client.query(
+          `/* workflow-runtime:complete-model-invocation */
+           update workflow_model_invocations
+           set status = $4, outcome = $5, finish_reason = $6,
+               input_tokens = $7, output_tokens = $8, total_tokens = $9,
+               latency_ms = $10, cost_usd_micros = $11, error_code = $12,
+               completed_at = $13
+           where workspace_id = $1 and workflow_run_id = $2 and invocation_id = $3
+             and status = 'running'`,
+          [
+            this.#workspaceDatabaseId,
+            current.rows[0].db_run_id,
+            input.invocationId,
+            input.status,
+            input.outcome,
+            input.finishReason,
+            input.inputTokens,
+            input.outputTokens,
+            input.totalTokens,
+            input.latencyMs,
+            input.costUsdMicros,
+            input.errorCode,
+            completedAt,
+          ],
+        );
+        if (updated.rowCount !== 1) throw persistenceError("Model invocation outcome conflicted.");
+        await this.#appendAuditEvent(client, {
+          runId: input.runId,
+          eventKey: `${input.runId}:invocation:${input.invocationId}:${input.status}`,
+          eventType: input.status === "succeeded"
+            ? "workflow.step_model_invocation_completed"
+            : "workflow.step_model_invocation_failed",
+          actorKind: "agent_runtime",
+          actorId: "agent-step-runtime",
+          metadata: {
+            runId: input.runId,
+            invocationId: input.invocationId,
+            status: input.status,
+            outcome: input.outcome,
+            finishReason: input.finishReason,
+            inputTokens: input.inputTokens,
+            outputTokens: input.outputTokens,
+            totalTokens: input.totalTokens,
+            latencyMs: input.latencyMs,
+            costUsdMicros: input.costUsdMicros,
+            errorCode: input.errorCode,
+          },
+        });
+        return { status: "recorded" as const };
+      });
+    } catch (error) {
+      if (!(error instanceof WorkflowRuntimeCommitAmbiguousError)) throw error;
+      let existing: ModelInvocationRow | null;
+      try {
+        existing = await this.#readModelInvocation(input.runId, input.invocationId);
+      } catch {
+        return { status: "recovery_required" };
+      }
+      if (!existing) return { status: "recovery_required" };
+      if (existing.request_fingerprint !== input.requestFingerprint) return { status: "conflict" };
+      return sameOutcome(existing, input)
+        ? { status: "recorded" }
+        : existing.status === "running" ? { status: "recovery_required" } : { status: "conflict" };
+    }
+  }
+
   async checkRiskApproval(
     input: WorkflowRuntimeRiskApprovalCheckInput,
   ): Promise<Readonly<{ approved: boolean }>> {
@@ -1255,9 +1729,10 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
         db_run_id: string;
         revision: string | number;
         runtime_pause: unknown;
+        status: string;
       }>(
         `/* workflow-runtime:cas-run */
-         select id::text as db_run_id, revision::text as revision, runtime_pause
+         select id::text as db_run_id, revision::text as revision, runtime_pause, status
          from workflow_runs
          where workspace_id = $1 and runtime_id = $2 for update`,
         [this.#workspaceDatabaseId, input.runId],
@@ -1388,7 +1863,11 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
          update workflow_runs
          set status = $3, revision = $4, runtime_snapshot = $5, runtime_pause = $6,
              project_id = $7, workflow_id = $8, project_registry = $9,
-             model_provider_registry = $10, updated_at = now()
+             model_provider_registry = $10,
+             started_at = case when $3 = 'running' then coalesce(started_at, now()) else started_at end,
+             completed_at = case when $3 = 'completed' then coalesce(completed_at, now()) else completed_at end,
+             failed_at = case when $3 in ('failed', 'blocked') then coalesce(failed_at, now()) else failed_at end,
+             updated_at = now()
          where workspace_id = $1 and id = $2 and revision = $11`,
         [
           this.#workspaceDatabaseId, run.rows[0].db_run_id, state.snapshot.status,
@@ -1444,6 +1923,72 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
           ],
         );
         if (execution.rowCount !== 1) throw persistenceError("Workflow execution completion failed closed.");
+      }
+      if (run.rows[0].status !== "running" && state.snapshot.status === "running") {
+        await this.#appendAuditEvent(client, {
+          runId: state.snapshot.runId,
+          eventKey: `${state.snapshot.runId}:started`,
+          eventType: "workflow.run_started",
+          actorKind: "workflow_runtime",
+          actorId: "workflow-runtime",
+          metadata: { runId: state.snapshot.runId, revision: state.snapshot.revision },
+        });
+      }
+      if (approvalMutation?.kind === "create") {
+        await this.#appendAuditEvent(client, {
+          runId: state.snapshot.runId,
+          eventKey: `${state.snapshot.runId}:approval:${approvalMutation.scope.approvalRequestId}:requested`,
+          eventType: "workflow.approval_requested",
+          actorKind: "workflow_runtime",
+          actorId: approvalMutation.requestedByActorId,
+          metadata: {
+            runId: state.snapshot.runId,
+            stepId: approvalMutation.scope.stepId,
+            attemptNumber: approvalMutation.scope.attemptNumber,
+            approvalRequestId: approvalMutation.scope.approvalRequestId,
+            policyFingerprint: approvalMutation.scope.policyFingerprint,
+            requestFingerprint: approvalMutation.scope.requestFingerprint,
+            requestedCapability: approvalMutation.scope.requestedCapability,
+            riskLevel: approvalMutation.scope.riskLevel,
+          },
+        });
+      } else if (approvalMutation?.kind === "resolve") {
+        await this.#appendAuditEvent(client, {
+          runId: state.snapshot.runId,
+          eventKey: `${state.snapshot.runId}:approval:${approvalMutation.approvalRequestId}:${approvalMutation.decision}`,
+          eventType: `workflow.approval_${approvalMutation.decision}`,
+          actorKind: "owner",
+          actorId: approvalMutation.decidedByActorId,
+          metadata: {
+            runId: state.snapshot.runId,
+            approvalRequestId: approvalMutation.approvalRequestId,
+            decision: approvalMutation.decision,
+          },
+        });
+      } else if (approvalMutation?.kind === "cancel") {
+        await this.#appendAuditEvent(client, {
+          runId: state.snapshot.runId,
+          eventKey: `${state.snapshot.runId}:approval:${approvalMutation.approvalRequestId}:cancelled`,
+          eventType: "workflow.approval_cancelled",
+          actorKind: "owner",
+          actorId: approvalMutation.cancelledByActorId,
+          metadata: {
+            runId: state.snapshot.runId,
+            approvalRequestId: approvalMutation.approvalRequestId,
+          },
+        });
+      }
+      if (run.rows[0].status !== "cancelled" && state.snapshot.status === "cancelled") {
+        await this.#appendAuditEvent(client, {
+          runId: state.snapshot.runId,
+          eventKey: `${state.snapshot.runId}:cancelled`,
+          eventType: "workflow.run_cancelled",
+          actorKind: approvalMutation?.kind === "cancel" ? "owner" : "workflow_runtime",
+          actorId: approvalMutation?.kind === "cancel"
+            ? approvalMutation.cancelledByActorId
+            : "workflow-runtime",
+          metadata: { runId: state.snapshot.runId, revision: state.snapshot.revision },
+        });
       }
         return { committed: true as const };
       });
