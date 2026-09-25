@@ -149,6 +149,9 @@ export interface AgentStepModelInvocationLedger {
   reserve(input: AgentStepModelInvocationReservation): Promise<Readonly<{
     status: "reserved" | "replay" | "conflict" | "recovery_required";
   }>>;
+  authorizeProviderStart(input: AgentStepModelInvocationReservation): Promise<Readonly<{
+    status: "started" | "conflict" | "recovery_required";
+  }>>;
   recordOutcome(input: AgentStepModelInvocationOutcome): Promise<Readonly<{
     status: "recorded" | "idempotent" | "conflict" | "recovery_required";
   }>>;
@@ -237,6 +240,7 @@ type CapturedRiskApprovalResolver = Readonly<{
 type CapturedRuntimeContext = Readonly<{ now: () => unknown }>;
 type CapturedInvocationLedger = Readonly<{
   reserve: AgentStepModelInvocationLedger["reserve"];
+  authorizeProviderStart: AgentStepModelInvocationLedger["authorizeProviderStart"];
   recordOutcome: AgentStepModelInvocationLedger["recordOutcome"];
 }>;
 
@@ -258,7 +262,11 @@ const factsResolverFields = Object.freeze(["resolve"] as const);
 const requirementsResolverFields = Object.freeze(["resolve"] as const);
 const riskApprovalResolverFields = Object.freeze(["resolve"] as const);
 const runtimeContextFields = Object.freeze(["now"] as const);
-const invocationLedgerFields = Object.freeze(["reserve", "recordOutcome"] as const);
+const invocationLedgerFields = Object.freeze([
+  "reserve",
+  "authorizeProviderStart",
+  "recordOutcome",
+] as const);
 const stableIdPattern = /^[a-z0-9][a-z0-9._-]{0,63}$/u;
 const canonicalTimestampPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
 
@@ -600,11 +608,14 @@ function captureInvocationLedger(
       || keys.length !== invocationLedgerFields.length
       || !invocationLedgerFields.every((field) => keys.includes(field))) throw new Error("invalid");
     const reserve = ownDataDescriptor(input, "reserve");
+    const authorizeProviderStart = ownDataDescriptor(input, "authorizeProviderStart");
     const recordOutcome = ownDataDescriptor(input, "recordOutcome");
     if (!reserve || typeof reserve.value !== "function"
+      || !authorizeProviderStart || typeof authorizeProviderStart.value !== "function"
       || !recordOutcome || typeof recordOutcome.value !== "function") throw new Error("invalid");
     return {
       reserve: reserve.value as AgentStepModelInvocationLedger["reserve"],
+      authorizeProviderStart: authorizeProviderStart.value as AgentStepModelInvocationLedger["authorizeProviderStart"],
       recordOutcome: recordOutcome.value as AgentStepModelInvocationLedger["recordOutcome"],
     };
   } catch {
@@ -1255,28 +1266,29 @@ export async function executeAgentStep(
       previousSnapshot,
     });
   }
+  const reservationInput = freezeModelProviderAdapterData({
+    workspaceId: request.workspaceId,
+    runId: request.runId,
+    workflowExecutionId: executionId,
+    invocationId: request.invocationId,
+    runRevision: request.runRevision,
+    projectId: request.projectId,
+    workflowId: request.workflowId,
+    agentId: request.agentId,
+    agentBindingId: request.agentBindingId,
+    stepId: request.stepId,
+    attemptNumber: request.attemptNumber,
+    modelProfileId: request.modelProfileId,
+    requestFingerprint,
+    providerId: primary.providerId,
+    deploymentId: primary.deploymentId,
+    providerModelId: primary.providerModelId,
+    providerModelVersion: primary.providerModelVersion,
+  });
   if (capturedInvocationLedger) {
     let reservation: Awaited<ReturnType<AgentStepModelInvocationLedger["reserve"]>>;
     try {
-      reservation = await capturedInvocationLedger.reserve(freezeModelProviderAdapterData({
-        workspaceId: request.workspaceId,
-        runId: request.runId,
-        workflowExecutionId: executionId,
-        invocationId: request.invocationId,
-        runRevision: request.runRevision,
-        projectId: request.projectId,
-        workflowId: request.workflowId,
-        agentId: request.agentId,
-        agentBindingId: request.agentBindingId,
-        stepId: request.stepId,
-        attemptNumber: request.attemptNumber,
-        modelProfileId: request.modelProfileId,
-        requestFingerprint,
-        providerId: primary.providerId,
-        deploymentId: primary.deploymentId,
-        providerModelId: primary.providerModelId,
-        providerModelVersion: primary.providerModelVersion,
-      }));
+      reservation = await capturedInvocationLedger.reserve(reservationInput);
     } catch {
       addReason(
         reasons,
@@ -1325,6 +1337,30 @@ export async function executeAgentStep(
         reasons,
         { stepId, capabilityDecision, previousSnapshot },
       );
+    }
+    let providerStart: Awaited<ReturnType<AgentStepModelInvocationLedger["authorizeProviderStart"]>>;
+    try {
+      providerStart = await capturedInvocationLedger.authorizeProviderStart(reservationInput);
+    } catch {
+      providerStart = { status: "recovery_required" };
+    }
+    if (!providerStart || providerStart.status !== "started") {
+      addReason(
+        reasons,
+        providerStart?.status === "conflict"
+          ? "invocation_ledger_conflict"
+          : providerStart?.status === "recovery_required"
+            ? "invocation_ledger_recovery_required"
+            : "invocation_ledger_failed",
+        "invocationLedger.authorizeProviderStart",
+        "Durable provider-start authority could not be established factually.",
+        { runId: request.runId, stepId, invocationId: request.invocationId },
+      );
+      return decision("deny", "recovery_required", reasons, {
+        stepId,
+        capabilityDecision,
+        previousSnapshot,
+      });
     }
   }
 

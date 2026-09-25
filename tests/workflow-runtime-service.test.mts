@@ -593,6 +593,7 @@ class FakeStore implements RuntimeStore {
 
 type DurableInvocationRecord = {
   fingerprint: string;
+  workflowExecutionId: string;
   status: "running" | "succeeded" | "failed" | "outcome_unknown";
   outcome: unknown | null;
 };
@@ -601,6 +602,7 @@ class LedgerFakeStore extends FakeStore {
   readonly durableInvocations: Map<string, DurableInvocationRecord>;
   reservationFailure: "conflict" | "recovery_required" | null = null;
   recordOutcomeFailure: "conflict" | "recovery_required" | null = null;
+  reservationHook: (() => Promise<void>) | null = null;
 
   constructor(state: RuntimeState, durableInvocations = new Map<string, DurableInvocationRecord>()) {
     super(state);
@@ -616,9 +618,11 @@ class LedgerFakeStore extends FakeStore {
     if (!existing) {
       this.durableInvocations.set(key, {
         fingerprint: input.requestFingerprint,
+        workflowExecutionId: input.workflowExecutionId,
         status: "running",
         outcome: null,
       });
+      await this.reservationHook?.();
       return { status: "reserved" as const };
     }
     if (existing.fingerprint !== input.requestFingerprint) return { status: "conflict" as const };
@@ -646,6 +650,7 @@ class LedgerFakeStore extends FakeStore {
     existing.outcome = clone(input);
     return { status: "recorded" as const };
   }
+
 }
 
 function capability(taskClass = "analysis", requestedCapability = "reasoning") {
@@ -1520,6 +1525,69 @@ test("different-owner ambiguous reservation recovery performs zero provider call
   assert.deepEqual(runtimeProvider.counts(), { health: 0, run: 0 });
 });
 
+test("expired authority after durable reservation fences the stale executor before provider start", async () => {
+  const store = new LedgerFakeStore(initialState("single"));
+  const runtimeProvider = provider();
+  const workerA = createWorkflowRuntimeService(dependencies(store, runtimeProvider));
+  const workerB = createWorkflowRuntimeService(dependencies(store, runtimeProvider));
+  await start(workerA);
+
+  let releaseReservation: () => void = () => { throw new Error("not ready"); };
+  const reservationBlocked = new Promise<void>((resolve) => { releaseReservation = resolve; });
+  let notifyReservation: () => void = () => { throw new Error("not ready"); };
+  const reservationCommitted = new Promise<void>((resolve) => { notifyReservation = resolve; });
+  store.reservationHook = async () => {
+    notifyReservation();
+    await reservationBlocked;
+  };
+
+  const staleAdvance = workerA.advance(advanceCommand(1, ["step-a"], "stale-after-reservation"));
+  await reservationCommitted;
+  store.recoverPreparedClaims = true;
+  const recovery = await workerB.advance(advanceCommand(1, ["step-a"], "recover-after-expiry"));
+  assert.equal(recovery.status, "recovery_required");
+  assert.deepEqual(store.recoveredClaims, [{ oldClaimId: "claim-1", newClaimId: "claim-2" }]);
+  releaseReservation();
+
+  const result = await staleAdvance;
+  assert.equal(["conflict", "recovery_required"].includes(result.status), true);
+  assert.deepEqual(runtimeProvider.counts(), { health: 0, run: 0 });
+  assert.equal(store.state.snapshot.status, "running");
+});
+
+test("cancellation after reservation but before provider-start authority performs no provider call", async () => {
+  const store = new LedgerFakeStore(initialState("single"));
+  const runtimeProvider = provider();
+  const service = createWorkflowRuntimeService(dependencies(store, runtimeProvider));
+  await start(service);
+
+  let releaseReservation: () => void = () => { throw new Error("not ready"); };
+  const reservationBlocked = new Promise<void>((resolve) => { releaseReservation = resolve; });
+  let notifyReservation: () => void = () => { throw new Error("not ready"); };
+  const reservationCommitted = new Promise<void>((resolve) => { notifyReservation = resolve; });
+  store.reservationHook = async () => {
+    notifyReservation();
+    await reservationBlocked;
+  };
+
+  const staleAdvance = service.advance(advanceCommand(1, ["step-a"], "cancel-after-reservation"));
+  await reservationCommitted;
+  const cancelled = await service.cancel({
+    kind: "cancel",
+    commandId: "cancel-before-provider-start",
+    runId: "run-one",
+    expectedRevision: 1,
+    actorId: "owner-one",
+  });
+  assert.equal(cancelled.status, "cancelled");
+  releaseReservation();
+
+  const result = await staleAdvance;
+  assert.equal(["conflict", "recovery_required"].includes(result.status), true);
+  assert.deepEqual(runtimeProvider.counts(), { health: 0, run: 0 });
+  assert.equal(store.state.snapshot.status, "cancelled");
+});
+
 test("ambiguous terminal ledger COMMIT preserves outer outcome_unknown and requires recovery", async () => {
   const store = new LedgerFakeStore(initialState("single"));
   store.recordOutcomeFailure = "recovery_required";
@@ -1930,7 +1998,7 @@ test("abandonCommand exception is reported separately without exposing store tex
 });
 
 test("cancellation wins a race and late AI-029 completion cannot overwrite it", async () => {
-  const store = new FakeStore(initialState("single"));
+  const store = new LedgerFakeStore(initialState("single"));
   let releaseHealth: (value: unknown) => void = () => { throw new Error("not ready"); };
   const pendingHealth = new Promise<unknown>((resolve) => { releaseHealth = resolve; });
   let notifyHealth: () => void = () => { throw new Error("not ready"); };

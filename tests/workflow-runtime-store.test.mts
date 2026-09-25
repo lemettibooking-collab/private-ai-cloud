@@ -61,7 +61,7 @@ function invocationReservation(overrides: Record<string, unknown> = {}) {
   } as import("../lib/workflows/agent-step-runtime").AgentStepModelInvocationReservation;
 }
 
-function executionIdentityRow() {
+function executionIdentityRow(overrides: Record<string, unknown> = {}) {
   return {
     workflow_execution_id: "00000000-0000-4000-8000-000000000971",
     db_run_id: dbRunId,
@@ -69,8 +69,9 @@ function executionIdentityRow() {
     step_id: "step-one",
     attempt_number: 1,
     expected_revision: "1",
-    execution_status: "running",
+    execution_status: "prepared",
     run_revision: "1",
+    ...overrides,
   };
 }
 
@@ -1238,6 +1239,68 @@ test("startExecution transitions only an unexpired prepared intent to running", 
   assert.equal((await createStore(database).startExecution({ runId: "run-one", claimId })).status, "started");
 });
 
+test("provider-start fence atomically requires the exact running invocation reservation", async () => {
+  const database = new ScriptedDatabase([
+    {
+      tag: "workflow-runtime:read-execution",
+      rows: [executionBoundaryRow()],
+    },
+    {
+      tag: "workflow-runtime:provider-start-invocation",
+      rows: [{ status: "running" }],
+      inspect(values) {
+        assert.deepEqual(values, [
+          workspaceDatabaseId,
+          "run-one",
+          claimId,
+          "runtime-one",
+          "invocation-one",
+          invocationRequestFingerprint,
+          2,
+          "step-one",
+          1,
+          "project-one",
+          "workflow-one",
+          "agent-one",
+          "binding-agent-one",
+          "model-one",
+          "provider-one",
+          "deployment-one",
+          "provider/model:v1",
+          "version-1",
+        ]);
+      },
+    },
+    { tag: "workflow-runtime:start-execution", rowCount: 1 },
+  ]);
+  assert.deepEqual(await createStore(database).startExecution({
+    runId: "run-one",
+    claimId,
+    providerStart: invocationReservation(),
+  }), { status: "started" });
+  assert.deepEqual(database.transactions, ["begin", "commit"]);
+  database.done();
+});
+
+test("provider-start fence denies missing or terminal invocation authority without starting execution", async () => {
+  for (const [rows, expected] of [
+    [[], "conflict"],
+    [[{ status: "outcome_unknown" }], "recovery_required"],
+  ] as const) {
+    const database = new ScriptedDatabase([
+      { tag: "workflow-runtime:read-execution", rows: [executionBoundaryRow()] },
+      { tag: "workflow-runtime:provider-start-invocation", rows },
+    ]);
+    assert.deepEqual(await createStore(database).startExecution({
+      runId: "run-one",
+      claimId,
+      providerStart: invocationReservation(),
+    }), { status: expected });
+    assert.equal(database.queries.some((query) => query.tag === "workflow-runtime:start-execution"), false);
+    database.done();
+  }
+});
+
 for (const fixture of [
   {
     name: "factual Run revision advanced",
@@ -1285,6 +1348,7 @@ test("startExecution locks and factually links Run, claim, and execution at one 
   assert.match(startBoundary, /for update of run, claim, execution/u);
   assert.match(startBoundary, /run\.runtime_pause/u);
   assert.match(startBoundary, /run\.status as run_status/u);
+  assert.match(source, /workflow-runtime:provider-start-invocation[\s\S]+?for update of invocation/u);
 });
 
 test("already-running execution is recovery_required and is never started twice", async () => {
@@ -1915,6 +1979,19 @@ test("model invocation reservation is factual, precedes any provider boundary, a
     "utf8",
   );
   assert.equal(readModelSource.includes("reservation_token"), false);
+  database.done();
+});
+
+test("model invocation reservation is pre-provider authority and only accepts a prepared execution", async () => {
+  const database = new ScriptedDatabase([{
+    tag: "workflow-runtime:model-invocation-execution",
+    rows: [executionIdentityRow({ execution_status: "running" })],
+  }]);
+  assert.deepEqual(
+    await createStore(database).reserveModelInvocation(invocationReservation()),
+    { status: "conflict" },
+  );
+  assert.equal(database.queries.some((query) => query.tag === "workflow-runtime:reserve-model-invocation"), false);
   database.done();
 });
 

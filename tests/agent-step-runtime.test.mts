@@ -969,6 +969,12 @@ test("durable invocation ledger reserves before provider and records bounded fac
       assert.match((value as any).requestFingerprint, /^sha256:[0-9a-f]{64}$/u);
       return { status: "reserved" as const };
     },
+    async authorizeProviderStart(value: unknown) {
+      calls.push("fence");
+      assert.deepEqual(value, reservation);
+      assert.deepEqual({ health: counters.health, run: counters.run }, { health: 0, run: 0 });
+      return { status: "started" as const };
+    },
     async recordOutcome(value: unknown) {
       calls.push("outcome");
       assert.equal(counters.run, 1);
@@ -988,7 +994,7 @@ test("durable invocation ledger reserves before provider and records bounded fac
     ledger,
   );
   assert.equal(decision.verdict, "allow", JSON.stringify(decision.reasons));
-  assert.deepEqual(calls, ["reserve", "outcome"]);
+  assert.deepEqual(calls, ["reserve", "fence", "outcome"]);
   assert.deepEqual(reservation, {
     workspaceId: "workspace-primary",
     runId: "run-one",
@@ -1047,6 +1053,7 @@ test("durable replay, collision, and unresolved invocation stop before provider"
       undefined,
       {
         async reserve() { return { status: ledgerStatus }; },
+        async authorizeProviderStart() { return { status: "started" as const }; },
         async recordOutcome() { outcomeCalls += 1; return { status: "recorded" as const }; },
       },
     );
@@ -1075,6 +1082,7 @@ test("provider run ambiguity is durably outcome_unknown without fabricated usage
     undefined,
     {
       async reserve() { return { status: "reserved" as const }; },
+      async authorizeProviderStart() { return { status: "started" as const }; },
       async recordOutcome(value) { recorded = clone(value); return { status: "recorded" as const }; },
     },
   );
@@ -1110,6 +1118,10 @@ test("hostile or malformed invocation ledger fails closed before runtime facts a
   Object.defineProperty(hostile, "recordOutcome", {
     enumerable: true,
     value: async () => ({ status: "recorded" }),
+  });
+  Object.defineProperty(hostile, "authorizeProviderStart", {
+    enumerable: true,
+    value: async () => ({ status: "started" }),
   });
   const decision = await executeAgentStep(
     input,

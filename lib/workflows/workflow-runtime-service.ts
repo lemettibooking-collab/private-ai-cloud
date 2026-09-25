@@ -7,6 +7,7 @@ import type { WorkflowRunSnapshot, WorkflowRunStatus } from "../contracts/workfl
 import type {
   AgentStepCapabilityRequirementsResolver,
   AgentStepModelInvocationLedger,
+  AgentStepModelInvocationReservation,
   AgentStepRiskApprovalQuery,
   AgentStepRuntimeFactsQuery,
   AgentStepRuntimeContext,
@@ -294,6 +295,7 @@ export interface WorkflowRuntimeStateStore {
   startExecution(input: Readonly<{
     runId: string;
     claimId: string;
+    providerStart?: AgentStepModelInvocationReservation;
   }>): Promise<WorkflowRuntimeExecutionStartDecision>;
   recordKnownExecutionOutcome(input: Readonly<{
     runId: string;
@@ -750,14 +752,19 @@ export function createWorkflowRuntimeService(
   dependencies: WorkflowRuntimeServiceDependencies,
 ): WorkflowRuntimeService {
   const { store, authorizer, providers, requirementsResolver, evidenceResolver, runtimeContext } = dependencies;
-  const invocationLedger: AgentStepModelInvocationLedger | undefined =
-    typeof store.reserveModelInvocation === "function"
-      && typeof store.recordModelInvocationOutcome === "function"
-      ? {
-          reserve: (input) => store.reserveModelInvocation!(input),
-          recordOutcome: (input) => store.recordModelInvocationOutcome!(input),
-        }
-      : undefined;
+  const durableInvocationLedgerAvailable = typeof store.reserveModelInvocation === "function"
+    && typeof store.recordModelInvocationOutcome === "function";
+
+  function invocationLedgerForClaim(runId: string, claimId: string): AgentStepModelInvocationLedger | undefined {
+    if (!durableInvocationLedgerAvailable) return undefined;
+    return {
+      reserve: (input) => store.reserveModelInvocation!(input),
+      authorizeProviderStart: (input) => input.runId === runId
+        ? store.startExecution({ runId, claimId, providerStart: input })
+        : Promise.resolve({ status: "conflict" }),
+      recordOutcome: (input) => store.recordModelInvocationOutcome!(input),
+    };
+  }
 
   async function load(runId: string, reasons: MutableReasons): Promise<WorkflowRuntimeState | null> {
     try {
@@ -1281,12 +1288,10 @@ export function createWorkflowRuntimeService(
       let committedAgentResult: WorkflowRuntimeLastStepResult | null = latestResult;
       let executionOutcomeKnown = false;
       try {
-        const executionStart = await safeStartExecution(
-          command.runId,
-          claim.claimId,
-          step.id,
-          reasons,
-        );
+        const invocationLedger = invocationLedgerForClaim(command.runId, claim.claimId);
+        const executionStart = invocationLedger
+          ? { status: "started" as const }
+          : await safeStartExecution(command.runId, claim.claimId, step.id, reasons);
         if (!executionStart) {
           claimedResponse = response("deny", "denied", reasons, state, latestResult);
         } else if (executionStart.status !== "started") {

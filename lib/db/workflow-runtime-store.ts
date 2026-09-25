@@ -116,6 +116,10 @@ type ExecutionRow = Record<string, unknown> & {
   run_status: string;
 };
 
+type ProviderStartInvocationRow = Record<string, unknown> & {
+  status: "running" | "succeeded" | "failed" | "outcome_unknown";
+};
+
 type RuntimeApprovalRow = Record<string, unknown> & {
   runtime_approval_id: string;
   status: "pending" | "approved" | "rejected" | "cancelled";
@@ -1317,8 +1321,15 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
   async startExecution(input: Readonly<{
     runId: string;
     claimId: string;
+    providerStart?: AgentStepModelInvocationReservation;
   }>): Promise<WorkflowRuntimeExecutionStartDecision> {
     if (!stableIdPattern.test(input.runId) || !uuidPattern.test(input.claimId)) {
+      return { status: "conflict" };
+    }
+    if (input.providerStart
+      && (!validInvocationReservation(input.providerStart)
+        || input.providerStart.workspaceId !== this.#workspaceId
+        || input.providerStart.runId !== input.runId)) {
       return { status: "conflict" };
     }
     return transaction(this.#database, async (client) => {
@@ -1357,6 +1368,56 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
         || claimRevision === null || executionRevision !== claimRevision || runRevision !== claimRevision
         || value.runtime_pause !== null || value.run_status !== "running") {
         return { status: "conflict" as const };
+      }
+      if (input.providerStart) {
+        const reservation = input.providerStart;
+        if (runRevision === null || reservation.runRevision !== runRevision + 1) {
+          return { status: "conflict" as const };
+        }
+        const invocation = await client.query<ProviderStartInvocationRow>(
+          `/* workflow-runtime:provider-start-invocation */
+           select invocation.status
+           from workflow_model_invocations as invocation
+           join workflow_runtime_executions as execution
+             on execution.id = invocation.workflow_execution_id
+            and execution.workspace_id = invocation.workspace_id
+           join workflow_runtime_claims as claim
+             on claim.id = execution.claim_id and claim.run_id = execution.run_id
+           join workflow_runs as run on run.id = execution.run_id
+           where invocation.workspace_id = $1 and claim.workspace_id = $1
+             and run.workspace_id = $1 and run.runtime_id = $2 and claim.id = $3
+             and execution.execution_id = $4 and invocation.invocation_id = $5
+             and invocation.request_fingerprint = $6 and invocation.run_revision = $7
+             and invocation.step_id = $8 and invocation.attempt_number = $9
+             and invocation.project_id = $10 and invocation.workflow_id = $11
+             and invocation.agent_id = $12 and invocation.agent_binding_id = $13
+             and invocation.model_profile_id = $14 and invocation.provider_id = $15
+             and invocation.deployment_id = $16 and invocation.provider_model_id = $17
+             and invocation.provider_model_version = $18
+           for update of invocation`,
+          [
+            this.#workspaceDatabaseId,
+            input.runId,
+            input.claimId,
+            reservation.workflowExecutionId,
+            reservation.invocationId,
+            reservation.requestFingerprint,
+            reservation.runRevision,
+            reservation.stepId,
+            reservation.attemptNumber,
+            reservation.projectId,
+            reservation.workflowId,
+            reservation.agentId,
+            reservation.agentBindingId,
+            reservation.modelProfileId,
+            reservation.providerId,
+            reservation.deploymentId,
+            reservation.providerModelId,
+            reservation.providerModelVersion,
+          ],
+        );
+        if (invocation.rowCount !== 1) return { status: "conflict" as const };
+        if (invocation.rows[0].status !== "running") return { status: "recovery_required" as const };
       }
       const started = await client.query(
         `/* workflow-runtime:start-execution */
@@ -1438,7 +1499,7 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
         if (factual.execution_id !== input.workflowExecutionId
           || factual.step_id !== input.stepId
           || factual.attempt_number !== input.attemptNumber
-          || factual.execution_status !== "running"
+          || factual.execution_status !== "prepared"
           || expectedRevision === null || runRevision !== expectedRevision
           || input.runRevision !== expectedRevision + 1) {
           return { status: "conflict" as const };
