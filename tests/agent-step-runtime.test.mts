@@ -1087,6 +1087,9 @@ test("provider run ambiguity is durably outcome_unknown without fabricated usage
     },
   );
   assert.equal(decision.verdict, "deny");
+  assert.equal(decision.status, "recovery_required");
+  assert.equal(decision.nextSnapshot, null);
+  assert.equal(decision.normalizedResult, null);
   assert.equal(counters.run, 1);
   assert.deepEqual(recorded, {
     workspaceId: "workspace-primary",
@@ -1437,13 +1440,6 @@ for (const scenario of [
     options: { throwHealth: true },
     expectedHealth: 1,
     expectedRun: 0,
-    reasonCode: "provider_exception",
-  },
-  {
-    name: "provider run exception",
-    options: { throwRun: true },
-    expectedHealth: 1,
-    expectedRun: 1,
     reasonCode: "provider_exception",
   },
 ] as const) {

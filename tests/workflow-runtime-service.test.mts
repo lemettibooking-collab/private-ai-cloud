@@ -447,7 +447,9 @@ class FakeStore implements RuntimeStore {
     await this.markCommandEffectfulHook?.(input);
   }
 
-  async claim(input: ClaimInput) {
+  async claim(input: ClaimInput): Promise<import(
+    "../lib/workflows/workflow-runtime-service"
+  ).WorkflowRuntimeClaimDecision> {
     if (this.state.pause !== null) {
       return { status: "conflict" as const, claimId: null };
     }
@@ -609,6 +611,23 @@ class LedgerFakeStore extends FakeStore {
     this.durableInvocations = durableInvocations;
   }
 
+  async claim(input: ClaimInput) {
+    const unresolved = [...this.claims.values()].find((claim) => claim.stepId === input.stepId
+      && claim.expectedRevision === input.expectedRevision
+      && this.executionJournal.get(claim.claimId) === "outcome_unknown");
+    if (unresolved) return { status: "recovery_required" as const, claimId: null };
+    return super.claim(input);
+  }
+
+  async releaseClaim(input: { runId: string; claimId: string }) {
+    if (this.executionJournal.get(input.claimId) === "running") {
+      this.releaseAttempts += 1;
+      this.executionJournal.set(input.claimId, "outcome_unknown");
+      return;
+    }
+    await super.releaseClaim(input);
+  }
+
   async reserveModelInvocation(
     input: import("../lib/workflows/agent-step-runtime").AgentStepModelInvocationReservation,
   ) {
@@ -670,6 +689,7 @@ function capability(taskClass = "analysis", requestedCapability = "reasoning") {
 function provider(options: {
   healthStatuses?: string[];
   throwHealth?: boolean;
+  loseRunResponse?: boolean;
   pendingHealth?: Promise<unknown>;
   onHealth?: () => void;
   onRun?: (stepId: string, agentId: string) => void;
@@ -704,6 +724,22 @@ function provider(options: {
         assert.ok(requestDecision.normalizedRequest);
         const request = requestDecision.normalizedRequest;
         options.onRun?.(request.stepId, request.agentId);
+        if (options.loseRunResponse) {
+          return {
+            verdict: "deny" as const,
+            reasons: [{
+              code: "provider_exception",
+              path: "response",
+              message: "Provider request outcome is unknown after dispatch.",
+              providerId: "provider-mock",
+              deploymentId: "deployment-mock",
+              invocationId: request.invocationId,
+            }],
+            requestDecision,
+            resultDecision: null,
+            normalizedResult: null,
+          };
+        }
         const normalizedResult = {
           invocationId: request.invocationId,
           outcome: "succeeded",
@@ -880,6 +916,43 @@ test("transient provider failure commits retry-ready state and later advance own
   assert.equal(completed.status, "completed", JSON.stringify(completed.reasons));
   assert.deepEqual(runtimeProvider.counts(), { health: 2, run: 1 });
   assert.equal(store.state.snapshot.stepStates[0]?.attemptCount, 2);
+});
+
+test("ambiguous provider outcome requires recovery and cannot automatically dispatch attempt two", async () => {
+  const store = new LedgerFakeStore(initialState("single"));
+  let providerCompleted = 0;
+  const runtimeProvider = provider({
+    loseRunResponse: true,
+    onRun() { providerCompleted += 1; },
+  });
+  const service = createWorkflowRuntimeService(dependencies(store, runtimeProvider));
+  await start(service);
+  const command = advanceCommand(1, ["step-a"], "ambiguous-provider-one");
+  const ambiguous = await service.advance(command);
+  assert.equal(ambiguous.status, "recovery_required");
+  assert.equal(ambiguous.retryPending, null);
+  assert.deepEqual(runtimeProvider.counts(), { health: 1, run: 1 });
+  assert.equal(providerCompleted, 1);
+  assert.deepEqual([...store.executionJournal.values()], ["outcome_unknown"]);
+  assert.deepEqual([...store.durableInvocations.values()].map((entry) => entry.status), ["outcome_unknown"]);
+  assert.equal(store.state.snapshot.status, "running");
+  assert.equal(store.state.snapshot.stepStates[0]?.status, "pending");
+  assert.equal(store.state.snapshot.stepStates[0]?.attemptCount, 0);
+
+  const exactReplay = await service.advance(command);
+  assert.equal(exactReplay.verdict, "idempotent");
+  assert.equal(exactReplay.status, "recovery_required");
+  assert.equal(exactReplay.retryPending, null);
+  assert.equal(exactReplay.revision, ambiguous.revision);
+  assert.deepEqual(runtimeProvider.counts(), { health: 1, run: 1 });
+
+  const automaticRetry = await service.advance(
+    advanceCommand(1, ["step-a"], "ambiguous-provider-two", "two"),
+  );
+  assert.equal(automaticRetry.status, "recovery_required");
+  assert.equal(automaticRetry.retryPending, null);
+  assert.deepEqual(runtimeProvider.counts(), { health: 1, run: 1 });
+  assert.equal(providerCompleted, 1);
 });
 
 test("permanent AI-029 provider failure commits canonical Workflow failure", async () => {

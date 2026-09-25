@@ -1370,15 +1370,21 @@ export async function executeAgentStep(
     evidenceResolver,
     { now: () => occurredAt },
   );
-  if (capturedInvocationLedger) {
-    const result = modelExecutionDecision.normalizedResult;
-    const providerBoundaryAmbiguous = modelExecutionDecision.reasons.some(
+  const providerResult = modelExecutionDecision.normalizedResult;
+  const providerBoundaryAmbiguous = !providerResult && (
+    modelExecutionDecision.reasons.some(
       (item) => item.code === "provider_exception" && item.path.endsWith(".run"),
-    ) || modelExecutionDecision.reasons.some((item) => item.code === "invalid_provider_decision");
-    const status = result
-      ? result.outcome === "succeeded" ? "succeeded" : "failed"
+    )
+    || modelExecutionDecision.reasons.some((item) => item.code === "invalid_provider_decision")
+    || modelExecutionDecision.providerDecision?.reasons.some(
+      (item) => item.code === "provider_exception",
+    ) === true
+  );
+  if (capturedInvocationLedger) {
+    const status = providerResult
+      ? providerResult.outcome === "succeeded" ? "succeeded" : "failed"
       : providerBoundaryAmbiguous ? "outcome_unknown" : "failed";
-    const errorCode = result?.error?.code
+    const errorCode = providerResult?.error?.code
       ?? (status === "succeeded" ? null : modelExecutionDecision.reasons[0]?.code ?? "model_execution_denied");
     let recorded: Awaited<ReturnType<AgentStepModelInvocationLedger["recordOutcome"]>>;
     try {
@@ -1388,13 +1394,13 @@ export async function executeAgentStep(
         invocationId: request.invocationId,
         requestFingerprint,
         status,
-        outcome: result?.outcome ?? null,
-        finishReason: result?.finishReason ?? null,
-        inputTokens: result?.usage.inputTokens ?? null,
-        outputTokens: result?.usage.outputTokens ?? null,
-        totalTokens: result?.usage.totalTokens ?? null,
-        latencyMs: result?.latencyMs ?? null,
-        costUsdMicros: result?.costUsdMicros ?? null,
+        outcome: providerResult?.outcome ?? null,
+        finishReason: providerResult?.finishReason ?? null,
+        inputTokens: providerResult?.usage.inputTokens ?? null,
+        outputTokens: providerResult?.usage.outputTokens ?? null,
+        totalTokens: providerResult?.usage.totalTokens ?? null,
+        latencyMs: providerResult?.latencyMs ?? null,
+        costUsdMicros: providerResult?.costUsdMicros ?? null,
         errorCode,
       }));
     } catch {
@@ -1419,6 +1425,21 @@ export async function executeAgentStep(
         previousSnapshot,
       });
     }
+  }
+  if (providerBoundaryAmbiguous) {
+    addReason(
+      reasons,
+      "model_execution_denied",
+      "modelExecutionDecision",
+      "Provider outcome is unknown and requires explicit recovery before retry.",
+      { runId: previousSnapshot.runId, stepId, invocationId: request.invocationId },
+    );
+    return decision("deny", "recovery_required", reasons, {
+      stepId,
+      capabilityDecision,
+      modelExecutionDecision,
+      previousSnapshot,
+    });
   }
   if (modelExecutionDecision.verdict !== "allow" || !modelExecutionDecision.normalizedResult) {
     addReason(

@@ -154,6 +154,7 @@ type ErrorClassification = Readonly<{
   message: string;
   retryable: boolean;
   transient: boolean;
+  outcomeAmbiguous: boolean;
 }>;
 
 type MappedResponse =
@@ -512,24 +513,24 @@ function responseInput(request: ModelInvocationRequest, config: OpenAIModelProvi
 
 function classifyError(error: unknown): ErrorClassification {
   if (error instanceof APIConnectionTimeoutError) {
-    return { category: "timeout", code: "openai_timeout", message: "OpenAI request timed out.", retryable: true, transient: true };
+    return { category: "timeout", code: "openai_timeout", message: "OpenAI request timed out.", retryable: true, transient: true, outcomeAmbiguous: true };
   }
   if (error instanceof RateLimitError) {
-    return { category: "rate_limited", code: "openai_rate_limited", message: "OpenAI rate limit was reached.", retryable: true, transient: true };
+    return { category: "rate_limited", code: "openai_rate_limited", message: "OpenAI rate limit was reached.", retryable: true, transient: true, outcomeAmbiguous: false };
   }
   if (error instanceof APIConnectionError) {
-    return { category: "unavailable", code: "openai_connection_unavailable", message: "OpenAI connection is unavailable.", retryable: true, transient: true };
+    return { category: "unavailable", code: "openai_connection_unavailable", message: "OpenAI connection is unavailable.", retryable: true, transient: true, outcomeAmbiguous: true };
   }
   if (error instanceof InternalServerError
     || (error instanceof APIError && typeof error.status === "number" && error.status >= 500)) {
-    return { category: "unavailable", code: "openai_service_unavailable", message: "OpenAI service is unavailable.", retryable: true, transient: true };
+    return { category: "unavailable", code: "openai_service_unavailable", message: "OpenAI service is unavailable.", retryable: true, transient: true, outcomeAmbiguous: true };
   }
   if (error instanceof AuthenticationError || error instanceof PermissionDeniedError
     || error instanceof BadRequestError || error instanceof NotFoundError
     || error instanceof UnprocessableEntityError) {
-    return { category: "provider_error", code: "openai_request_rejected", message: "OpenAI rejected the request.", retryable: false, transient: false };
+    return { category: "provider_error", code: "openai_request_rejected", message: "OpenAI rejected the request.", retryable: false, transient: false, outcomeAmbiguous: false };
   }
-  return { category: "unknown", code: "openai_unknown_error", message: "OpenAI request failed safely.", retryable: false, transient: false };
+  return { category: "unknown", code: "openai_unknown_error", message: "OpenAI request failed safely.", retryable: false, transient: false, outcomeAmbiguous: true };
 }
 
 function usageFromResponse(
@@ -814,6 +815,16 @@ function createProvider(
         const latencyMs = elapsedMilliseconds(start, dependencies.monotonicNow());
         if (latencyMs === null) {
           return runDeny(publicIdentity, "provider_exception", "response", "OpenAI request failed with invalid latency.", requestDecision);
+        }
+        const classification = classifyError(error);
+        if (classification.outcomeAmbiguous) {
+          return runDeny(
+            publicIdentity,
+            "provider_exception",
+            "response",
+            "OpenAI request outcome is unknown after dispatch.",
+            requestDecision,
+          );
         }
         return validateProviderResult(
           publicIdentity,

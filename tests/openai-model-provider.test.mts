@@ -301,21 +301,33 @@ test("simultaneous text and refusal content denies without exposing the refusal"
   assert.equal(result.verdict, "deny"); assert.equal(result.normalizedResult, null); assert.equal(JSON.stringify(result).includes("raw-contradictory-refusal"), false);
 });
 
-test("SDK transport/API errors become factual safe failures with no raw leakage", async () => {
+test("dispatch-ambiguous SDK errors deny without fabricating a failed zero-cost result", async () => {
   const headers = new Headers();
   const cases = [
-    [new APIConnectionTimeoutError({ message: "raw-timeout-secret" }), "timeout", true],
+    new APIConnectionTimeoutError({ message: "raw-timeout-secret" }),
+    new APIConnectionError({ message: "raw-connection-secret" }),
+    APIError.generate(500, {}, "raw-server-secret", headers),
+    new Error("raw-unknown-secret"),
+  ] as const;
+  for (const error of cases) {
+    const state = fakeState(); state.responseError = error;
+    const { decision } = factory(state); assert.ok(decision.provider);
+    const result = await decision.provider.run(factualRequest());
+    assert.equal(result.verdict, "deny"); assert.deepEqual(codes(result), ["provider_exception"]); assert.equal(result.normalizedResult, null); assert.equal(result.resultDecision, null); assert.equal(JSON.stringify(result).includes(error.message), false); assert.equal(state.requests.length, 1);
+  }
+});
+
+test("explicit provider rejection remains a factual failed result", async () => {
+  const headers = new Headers();
+  const cases = [
     [APIError.generate(429, {}, "raw-rate-secret", headers), "rate_limited", true],
-    [new APIConnectionError({ message: "raw-connection-secret" }), "unavailable", true],
-    [APIError.generate(500, {}, "raw-server-secret", headers), "unavailable", true],
     [APIError.generate(401, {}, "raw-auth-secret", headers), "provider_error", false],
-    [new Error("raw-unknown-secret"), "unknown", false],
   ] as const;
   for (const [error, category, retryable] of cases) {
     const state = fakeState(); state.responseError = error;
     const { decision } = factory(state); assert.ok(decision.provider);
     const result = await decision.provider.run(factualRequest());
-    assert.equal(result.verdict, "allow", JSON.stringify(result.reasons)); assert.equal(result.normalizedResult?.outcome, "failed"); assert.equal(result.normalizedResult?.finishReason, "error"); assert.equal(result.normalizedResult?.error?.category, category); assert.equal(result.normalizedResult?.error?.retryable, retryable); assert.deepEqual(result.normalizedResult?.usage, { inputTokens: 0, outputTokens: 0, totalTokens: 0 }); assert.equal(result.normalizedResult?.costUsdMicros, 0); assert.equal(JSON.stringify(result).includes(error.message), false); assert.equal(state.requests.length, 1);
+    assert.equal(result.verdict, "allow", JSON.stringify(result.reasons)); assert.equal(result.normalizedResult?.outcome, "failed"); assert.equal(result.normalizedResult?.error?.category, category); assert.equal(result.normalizedResult?.error?.retryable, retryable); assert.deepEqual(result.normalizedResult?.usage, { inputTokens: 0, outputTokens: 0, totalTokens: 0 }); assert.equal(result.normalizedResult?.costUsdMicros, 0); assert.equal(JSON.stringify(result).includes(error.message), false); assert.equal(state.requests.length, 1);
   }
 });
 
