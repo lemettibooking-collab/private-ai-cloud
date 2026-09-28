@@ -17,6 +17,7 @@ import type {
   AgentStepModelInvocationOutcome,
   AgentStepModelInvocationReservation,
 } from "../workflows/agent-step-runtime";
+import type { ResolvedWorkflowRuntimeTenant } from "./workflow-runtime-tenant";
 // @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
 import { cloneModelProviderAdapterData, freezeModelProviderAdapterData, snapshotModelProviderAdapterInput } from "../contracts/model-provider-adapter.ts";
 // @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
@@ -25,6 +26,8 @@ import { workflowRunStatuses } from "../contracts/workflow-run.ts";
 import { modelInvocationFinishReasons, modelInvocationLimits } from "../contracts/model-invocation.ts";
 // @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
 import { normalizeWorkflowRuntimeState, workflowRuntimeServiceStatuses, workflowRuntimeServiceVerdicts } from "../workflows/workflow-runtime-service.ts";
+// @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
+import { isResolvedWorkflowRuntimeTenant } from "./workflow-runtime-tenant.ts";
 
 export type WorkflowRuntimeSqlResult<Row extends Record<string, unknown>> = Readonly<{
   rows: readonly Row[];
@@ -56,8 +59,7 @@ export const postgresWorkflowRuntimeStoreLimits = Object.freeze({
 
 export type PostgresWorkflowRuntimeStoreOptions = Readonly<{
   database: WorkflowRuntimeDatabase;
-  workspaceId: string;
-  workspaceDatabaseId: string;
+  tenant: ResolvedWorkflowRuntimeTenant;
   leaseDurationMs?: number;
   commandLeaseDurationMs?: number;
   recoverAbandonedCommands?: boolean;
@@ -715,8 +717,7 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
   readonly #now: () => Date;
 
   constructor(options: PostgresWorkflowRuntimeStoreOptions) {
-    if (!plainRecord(options) || !stableIdPattern.test(options.workspaceId)
-      || !uuidPattern.test(options.workspaceDatabaseId)
+    if (!plainRecord(options) || !isResolvedWorkflowRuntimeTenant(options.tenant)
       || typeof options.database?.connect !== "function"
       || (options.recoverAbandonedCommands !== undefined
         && typeof options.recoverAbandonedCommands !== "boolean")
@@ -726,8 +727,8 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
       throw persistenceError("Workflow runtime store configuration is invalid.");
     }
     this.#database = options.database;
-    this.#workspaceId = options.workspaceId;
-    this.#workspaceDatabaseId = options.workspaceDatabaseId;
+    this.#workspaceId = options.tenant.workspaceId;
+    this.#workspaceDatabaseId = options.tenant.workspaceDatabaseId;
     this.#leaseDurationMs = leaseDuration(options.leaseDurationMs);
     this.#commandLeaseDurationMs = commandLeaseDuration(options.commandLeaseDurationMs);
     this.#recoverAbandonedCommands = options.recoverAbandonedCommands ?? false;
@@ -760,7 +761,7 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
       || !actorIdPattern.test(input.actorId) || containsForbiddenStoredKey(input.metadata)) {
       throw persistenceError("Workflow runtime audit event is invalid.");
     }
-    await client.query(
+    const inserted = await client.query(
       `/* workflow-runtime:audit-event */
        insert into audit_events (
          workspace_id, actor_kind, actor_id, event_type, entity_type,
@@ -768,7 +769,8 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
        ) values ($1, $2, $3, $4, 'workflow_runtime', $5, $6, $7)
        on conflict (workspace_id, runtime_event_key)
          where runtime_event_key is not null
-       do nothing`,
+       do nothing
+       returning id`,
       [
         this.#workspaceDatabaseId,
         input.actorKind,
@@ -779,6 +781,40 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
         input.metadata,
       ],
     );
+    if (inserted.rowCount === 1) return;
+    if (inserted.rowCount !== 0) {
+      throw persistenceError("Workflow runtime audit insert result is invalid.");
+    }
+    const existing = await client.query<{
+      workspace_id: unknown;
+      actor_kind: unknown;
+      actor_id: unknown;
+      event_type: unknown;
+      entity_type: unknown;
+      runtime_run_id: unknown;
+      runtime_event_key: unknown;
+      metadata: unknown;
+    }>(
+      `/* workflow-runtime:audit-event-existing */
+       select workspace_id::text as workspace_id, actor_kind, actor_id, event_type,
+              entity_type, runtime_run_id, runtime_event_key, metadata
+       from audit_events
+       where workspace_id = $1 and runtime_event_key = $2
+       for share`,
+      [this.#workspaceDatabaseId, input.eventKey],
+    );
+    const row = existing.rows[0];
+    if (existing.rowCount !== 1 || existing.rows.length !== 1
+      || row.workspace_id !== this.#workspaceDatabaseId
+      || row.actor_kind !== input.actorKind
+      || row.actor_id !== input.actorId
+      || row.event_type !== input.eventType
+      || row.entity_type !== "workflow_runtime"
+      || row.runtime_run_id !== input.runId
+      || row.runtime_event_key !== input.eventKey
+      || canonicalData(row.metadata) !== canonicalData(input.metadata)) {
+      throw persistenceError("Workflow runtime audit event collision.");
+    }
   }
 
   async #readModelInvocation(

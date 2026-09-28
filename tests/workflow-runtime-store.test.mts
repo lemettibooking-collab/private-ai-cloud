@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import test from "node:test";
 
 const storeContract = (await import(
@@ -10,6 +10,10 @@ const {
   PostgresWorkflowRuntimeStateStore,
   postgresWorkflowRuntimeStoreLimits,
 } = storeContract;
+const tenantContract = (await import(
+  new URL("../lib/db/workflow-runtime-tenant.ts", import.meta.url).href
+)) as typeof import("../lib/db/workflow-runtime-tenant");
+const { createPostgresWorkflowRuntimeTenantResolver } = tenantContract;
 const fixtureContract = (await import(
   new URL("./helpers/workflow-runtime-state-fixture.mts", import.meta.url).href
 )) as {
@@ -273,7 +277,8 @@ class ScriptedDatabase {
         const match = text.match(/\/\* ([^*]+) \*\//u);
         assert.ok(match, `Missing SQL operation tag: ${text}`);
         const tag = match[1];
-        if (tag === "workflow-runtime:audit-event") {
+        if (tag === "workflow-runtime:audit-event"
+          && this.steps[0]?.tag !== "workflow-runtime:audit-event") {
           this.queries.push({ tag, values });
           return { rows: [], rowCount: 1 } as import("../lib/db/workflow-runtime-store").WorkflowRuntimeSqlResult<Row>;
         }
@@ -297,14 +302,33 @@ class ScriptedDatabase {
   }
 }
 
+const tenant = await createPostgresWorkflowRuntimeTenantResolver({
+  async connect() {
+    return {
+      async query() {
+        return {
+          rows: [{
+            workspace_database_id: workspaceDatabaseId,
+            domain_workspace_id: "workspace-primary",
+            status: "active",
+          }],
+          rowCount: 1,
+        };
+      },
+      release() {},
+    };
+  },
+}).resolve("workspace-primary");
+if (!tenant) throw new Error("Test tenant resolution failed.");
+const resolvedTenant = tenant;
+
 function createStore(
   database: ScriptedDatabase,
   overrides: Readonly<Record<string, unknown>> = {},
 ) {
   return new PostgresWorkflowRuntimeStateStore({
     database,
-    workspaceId: "workspace-primary",
-    workspaceDatabaseId,
+    tenant: resolvedTenant,
     now: () => new Date("2026-09-01T10:00:00.000Z"),
     ...overrides,
   });
@@ -428,6 +452,212 @@ function commandInput() {
 
 function commandOwnershipInput() {
   return { ...commandInput(), ownershipToken: commandOwnershipToken };
+}
+
+test("runtime persistence rejects an independently paired domain workspace and DB UUID", () => {
+  const database = new ScriptedDatabase([]);
+  assert.throws(() => new PostgresWorkflowRuntimeStateStore({
+    database,
+    workspaceId: "workspace-a",
+    workspaceDatabaseId: "00000000-0000-4000-8000-000000000002",
+  } as never), /configuration is invalid/u);
+});
+
+test("migration 0007 defines a same-workspace document-to-collection relationship", () => {
+  const migrationUrl = new URL(
+    "../db/migrations/0007_workspace_tenant_integrity.sql",
+    import.meta.url,
+  );
+  assert.equal(existsSync(migrationUrl), true);
+  const migration = readFileSync(migrationUrl, "utf8").toLowerCase();
+  assert.match(
+    migration,
+    /foreign key \(workspace_id, collection_id\)[\s\S]+references knowledge_collections \(workspace_id, id\)/u,
+  );
+});
+
+test("migration 0007 preserves the complete Workspace tenant-integrity boundary", () => {
+  const migration = readFileSync(
+    new URL("../db/migrations/0007_workspace_tenant_integrity.sql", import.meta.url),
+    "utf8",
+  ).toLowerCase();
+  for (const token of [
+    "domain_workspace_id text",
+    "workspaces_domain_workspace_id_required",
+    "workspaces_domain_workspace_id_unique",
+    "knowledge_documents_collection_workspace_fk",
+    "document_chunks_document_workspace_fk",
+    "assistant_messages_thread_workspace_fk",
+    "workflow_step_runs_run_workspace_fk",
+    "workflow_runtime_commands_run_workspace_fk",
+    "workflow_runtime_claims_run_workspace_fk",
+    "workflow_runtime_executions_run_workspace_fk",
+    "workflow_runtime_executions_claim_workspace_fk",
+    "approval_requests_run_workspace_fk",
+    "workflow_model_budget_reservations_invocation_workspace_fk",
+    "audit_events_runtime_run_workspace_fk",
+    "workflow_runs_approval_request_workspace_fk",
+    "member_role_assignments_workspace_trigger",
+    "roles_assignments_workspace_update_trigger",
+    "workspace_members_assignments_workspace_update_trigger",
+    "roles_global_system_check",
+    "knowledge_collections_created_by_member_fk",
+    "knowledge_documents_uploaded_by_member_fk",
+    "assistant_threads_created_by_member_fk",
+    "assistant_messages_created_by_member_fk",
+    "workflow_runs_created_by_member_fk",
+    "workflow_runs_assigned_to_member_fk",
+    "approval_requests_requested_by_member_fk",
+    "approval_requests_approved_by_member_fk",
+    "approval_requests_rejected_by_member_fk",
+    "audit_events_actor_user_member_fk",
+  ]) assert.equal(migration.includes(token), true, token);
+  assert.match(
+    migration,
+    /where id = '00000000-0000-4000-8000-000000000001'[\s\S]+slug = 'smart-algorithms-demo'/u,
+  );
+  assert.equal(migration.includes("lower(name)"), false);
+  assert.equal(migration.includes("delete from"), false);
+});
+
+test("demo seed explicitly preserves the factual domain Workspace mapping across upgrade order", () => {
+  const seed = readFileSync(
+    new URL("../db/seeds/0001_seed_smart_algorithms_demo.sql", import.meta.url),
+    "utf8",
+  ).toLowerCase();
+  assert.match(seed, /domain_workspace_id[\s\S]+smart-algorithms-demo/u);
+  assert.match(seed, /information_schema\.columns/u);
+});
+
+test("migration rejects runtime audit identity when its Workspace is NULL", () => {
+  const migration = readFileSync(
+    new URL("../db/migrations/0007_workspace_tenant_integrity.sql", import.meta.url),
+    "utf8",
+  ).toLowerCase();
+  assert.match(
+    migration,
+    /audit_events_runtime_workspace_required[\s\S]+runtime_run_id is null or workspace_id is not null/u,
+  );
+});
+
+test("migration preserves historical member attribution while allowing current assignment cleanup", () => {
+  const migration = readFileSync(
+    new URL("../db/migrations/0007_workspace_tenant_integrity.sql", import.meta.url),
+    "utf8",
+  ).toLowerCase();
+  for (const column of [
+    "created_by",
+    "requested_by",
+    "approved_by",
+    "rejected_by",
+    "actor_user_id",
+  ]) {
+    assert.doesNotMatch(migration, new RegExp(`on delete set null \\(${column}\\)`, "u"));
+  }
+  assert.match(
+    migration,
+    /workflow_runs_assigned_to_member_fk[\s\S]+on delete set null \(assigned_to\)/u,
+  );
+});
+
+test("demo seed fails closed instead of rebinding its canonical Workspace identity", () => {
+  const seed = readFileSync(
+    new URL("../db/seeds/0001_seed_smart_algorithms_demo.sql", import.meta.url),
+    "utf8",
+  ).toLowerCase();
+  assert.equal(seed.includes("on conflict (slug) do update"), false);
+  assert.match(seed, /smart_algorithms_demo_workspace_identity/u);
+  assert.match(seed, /domain_workspace_id = 'smart-algorithms-demo'[\s\S]+id <> '00000000-0000-4000-8000-000000000001'/u);
+});
+
+test("contradictory runtime audit collision rolls back its surrounding state mutation", async () => {
+  const state = createWorkflowRuntimeStateFixture() as RuntimeState;
+  const database = new ScriptedDatabase([
+    { tag: "workflow-runtime:create-run", rows: [{ id: dbRunId }] },
+    { tag: "workflow-runtime:create-step", rowCount: 1 },
+    { tag: "workflow-runtime:audit-event", rowCount: 0 },
+    {
+      tag: "workflow-runtime:audit-event-existing",
+      rows: [{
+        workspace_id: workspaceDatabaseId,
+        actor_kind: "workflow_runtime",
+        actor_id: "workflow-runtime",
+        event_type: "workflow.contradictory_event",
+        entity_type: "workflow_runtime",
+        runtime_run_id: "run-one",
+        runtime_event_key: "run-one:created",
+        metadata: { runId: "run-one", revision: 999 },
+      }],
+    },
+  ]);
+  await assert.rejects(createStore(database).create({ state }), /audit event collision/u);
+  assert.deepEqual(database.transactions, ["begin", "rollback"]);
+  database.done();
+});
+
+test("exact runtime audit replay is idempotent inside its state transaction", async () => {
+  const state = createWorkflowRuntimeStateFixture() as RuntimeState;
+  const database = new ScriptedDatabase([
+    { tag: "workflow-runtime:create-run", rows: [{ id: dbRunId }] },
+    { tag: "workflow-runtime:create-step", rowCount: 1 },
+    { tag: "workflow-runtime:audit-event", rowCount: 0 },
+    {
+      tag: "workflow-runtime:audit-event-existing",
+      rows: [{
+        workspace_id: workspaceDatabaseId,
+        actor_kind: "workflow_runtime",
+        actor_id: "workflow-runtime",
+        event_type: "workflow.run_created",
+        entity_type: "workflow_runtime",
+        runtime_run_id: "run-one",
+        runtime_event_key: "run-one:created",
+        metadata: {
+          runId: "run-one",
+          projectId: state.snapshot.projectId,
+          workflowId: state.snapshot.workflowId,
+          revision: state.snapshot.revision,
+        },
+      }],
+    },
+  ]);
+  await createStore(database).create({ state });
+  assert.deepEqual(database.transactions, ["begin", "commit"]);
+  database.done();
+});
+
+for (const [label, existingOverride] of [
+  ["event type", { event_type: "workflow.changed" }],
+  ["Run", { runtime_run_id: "run-other" }],
+  ["actor", { actor_id: "owner-other" }],
+  ["metadata", { metadata: { runId: "run-one", revision: 999 } }],
+] as const) {
+  test(`runtime audit same-key collision with changed ${label} fails closed`, async () => {
+    const state = createWorkflowRuntimeStateFixture() as RuntimeState;
+    const existing = Object.assign({
+      workspace_id: workspaceDatabaseId,
+      actor_kind: "workflow_runtime",
+      actor_id: "workflow-runtime",
+      event_type: "workflow.run_created",
+      entity_type: "workflow_runtime",
+      runtime_run_id: "run-one",
+      runtime_event_key: "run-one:created",
+      metadata: {
+        runId: "run-one",
+        projectId: state.snapshot.projectId,
+        workflowId: state.snapshot.workflowId,
+        revision: state.snapshot.revision,
+      },
+    }, existingOverride);
+    const database = new ScriptedDatabase([
+      { tag: "workflow-runtime:create-run", rows: [{ id: dbRunId }] },
+      { tag: "workflow-runtime:create-step", rowCount: 1 },
+      { tag: "workflow-runtime:audit-event", rowCount: 0 },
+      { tag: "workflow-runtime:audit-event-existing", rows: [existing] },
+    ]);
+    await assert.rejects(createStore(database).create({ state }), /audit event collision/u);
+    assert.deepEqual(database.transactions, ["begin", "rollback"]);
+    database.done();
+  });
 }
 
 test("migration adds canonical runtime columns and broadens legacy statuses without rewriting migration 0001", () => {

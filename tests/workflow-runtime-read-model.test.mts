@@ -11,6 +11,10 @@ const fixtureContract = (await import(
 };
 
 const { PostgresWorkflowRuntimeReadModel, workflowRuntimeReadModelLimits } = readContract;
+const tenantContract = (await import(
+  new URL("../lib/db/workflow-runtime-tenant.ts", import.meta.url).href
+)) as typeof import("../lib/db/workflow-runtime-tenant");
+const { createPostgresWorkflowRuntimeTenantResolver } = tenantContract;
 const workspaceDatabaseId = "00000000-0000-4000-8000-000000000001";
 
 type SqlClient = import("../lib/db/workflow-runtime-store").WorkflowRuntimeSqlClient;
@@ -44,6 +48,26 @@ class ReadDatabase {
   done() { assert.deepEqual(this.steps, []); }
 }
 
+const tenant = await createPostgresWorkflowRuntimeTenantResolver({
+  async connect() {
+    return {
+      async query() {
+        return {
+          rows: [{
+            workspace_database_id: workspaceDatabaseId,
+            domain_workspace_id: "workspace-primary",
+            status: "active",
+          }],
+          rowCount: 1,
+        };
+      },
+      release() {},
+    };
+  },
+}).resolve("workspace-primary");
+if (!tenant) throw new Error("Test tenant resolution failed.");
+const resolvedTenant = tenant;
+
 function usageRow(overrides: Record<string, unknown> = {}) {
   return {
     invocation_count: "1",
@@ -64,7 +88,7 @@ function usageRow(overrides: Record<string, unknown> = {}) {
 }
 
 function model(database: ReadDatabase) {
-  return new PostgresWorkflowRuntimeReadModel({ database, workspaceDatabaseId });
+  return new PostgresWorkflowRuntimeReadModel({ database, tenant: resolvedTenant });
 }
 
 test("Run overview is workspace scoped and exposes rejected approval without calling a provider", async () => {

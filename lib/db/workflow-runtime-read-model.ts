@@ -1,9 +1,12 @@
 import type { WorkflowRuntimeDatabase, WorkflowRuntimeSqlClient } from "./workflow-runtime-store";
+import type { ResolvedWorkflowRuntimeTenant } from "./workflow-runtime-tenant";
 import type { WorkflowRunStatus } from "../contracts/workflow-run";
 // @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
 import { cloneModelProviderAdapterData, freezeModelProviderAdapterData, snapshotModelProviderAdapterInput } from "../contracts/model-provider-adapter.ts";
 // @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
 import { validateAndNormalizeWorkflowRunSnapshot } from "../contracts/workflow-run.ts";
+// @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
+import { isResolvedWorkflowRuntimeTenant } from "./workflow-runtime-tenant.ts";
 
 export const workflowRuntimeReadModelLimits = Object.freeze({
   defaultLimit: 25,
@@ -87,11 +90,10 @@ export type WorkflowRuntimeAuditTimelineItem = Readonly<{
 
 export type PostgresWorkflowRuntimeReadModelOptions = Readonly<{
   database: WorkflowRuntimeDatabase;
-  workspaceDatabaseId: string;
+  tenant: ResolvedWorkflowRuntimeTenant;
 }>;
 
 type Row = Record<string, unknown>;
-const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const stableIdPattern = /^[a-z0-9][a-z0-9._-]{0,63}$/u;
 const fingerprintPattern = /^sha256:[0-9a-f]{64}$/u;
 const safeTextPattern = /^[^\u0000-\u001f\u007f\r\n]+$/u;
@@ -245,11 +247,11 @@ export class PostgresWorkflowRuntimeReadModel {
 
   constructor(options: PostgresWorkflowRuntimeReadModelOptions) {
     if (!options || typeof options.database?.connect !== "function"
-      || !uuidPattern.test(options.workspaceDatabaseId)) {
+      || !isResolvedWorkflowRuntimeTenant(options.tenant)) {
       throw new Error("Workflow runtime read model configuration is invalid.");
     }
     this.#database = options.database;
-    this.#workspaceDatabaseId = options.workspaceDatabaseId;
+    this.#workspaceDatabaseId = options.tenant.workspaceDatabaseId;
   }
 
   async #withClient<T>(operation: (client: WorkflowRuntimeSqlClient) => Promise<T>): Promise<T> {
