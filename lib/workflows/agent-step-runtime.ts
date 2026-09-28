@@ -146,15 +146,38 @@ export type AgentStepModelInvocationOutcome = Readonly<{
   errorCode: string | null;
 }>;
 
+export type AgentStepModelBudgetReservation = AgentStepModelInvocationReservation & Readonly<{
+  departmentId: string;
+  workflowBindingId: string;
+  workflowBindingVersion: number;
+  inputEnvelopeFingerprint: string;
+  canonicalRequestFingerprint: string;
+  inputTokenCount: number;
+  effectiveMaxOutputTokens: number;
+  reservedTotalTokens: number;
+  reservedCostUsdMicros: number;
+  dailyTokenBudget: number;
+  monthlyCostBudgetUsdMicros: number;
+}>;
+
 export interface AgentStepModelInvocationLedger {
   reserve(input: AgentStepModelInvocationReservation): Promise<Readonly<{
     status: "reserved" | "replay" | "conflict" | "recovery_required";
   }>>;
-  authorizeProviderStart(input: AgentStepModelInvocationReservation): Promise<Readonly<{
+  authorizePreflight(input: AgentStepModelInvocationReservation): Promise<Readonly<{
+    status: "authorized" | "conflict" | "recovery_required";
+  }>>;
+  reserveBudget(input: AgentStepModelBudgetReservation): Promise<Readonly<{
+    status: "reserved" | "replay" | "budget_exceeded" | "conflict" | "recovery_required";
+  }>>;
+  authorizeProviderStart(input: AgentStepModelBudgetReservation): Promise<Readonly<{
     status: "started" | "conflict" | "recovery_required";
   }>>;
+  releaseBudget(input: AgentStepModelBudgetReservation): Promise<Readonly<{
+    status: "released" | "idempotent" | "conflict" | "recovery_required";
+  }>>;
   recordOutcome(input: AgentStepModelInvocationOutcome): Promise<Readonly<{
-    status: "recorded" | "idempotent" | "conflict" | "recovery_required";
+    status: "recorded" | "idempotent" | "invariant_violation" | "conflict" | "recovery_required";
   }>>;
 }
 
@@ -241,7 +264,10 @@ type CapturedRiskApprovalResolver = Readonly<{
 type CapturedRuntimeContext = Readonly<{ now: () => unknown }>;
 type CapturedInvocationLedger = Readonly<{
   reserve: AgentStepModelInvocationLedger["reserve"];
+  authorizePreflight: AgentStepModelInvocationLedger["authorizePreflight"];
+  reserveBudget: AgentStepModelInvocationLedger["reserveBudget"];
   authorizeProviderStart: AgentStepModelInvocationLedger["authorizeProviderStart"];
+  releaseBudget: AgentStepModelInvocationLedger["releaseBudget"];
   recordOutcome: AgentStepModelInvocationLedger["recordOutcome"];
 }>;
 
@@ -265,7 +291,10 @@ const riskApprovalResolverFields = Object.freeze(["resolve"] as const);
 const runtimeContextFields = Object.freeze(["now"] as const);
 const invocationLedgerFields = Object.freeze([
   "reserve",
+  "authorizePreflight",
+  "reserveBudget",
   "authorizeProviderStart",
+  "releaseBudget",
   "recordOutcome",
 ] as const);
 const stableIdPattern = /^[a-z0-9][a-z0-9._-]{0,63}$/u;
@@ -609,14 +638,23 @@ function captureInvocationLedger(
       || keys.length !== invocationLedgerFields.length
       || !invocationLedgerFields.every((field) => keys.includes(field))) throw new Error("invalid");
     const reserve = ownDataDescriptor(input, "reserve");
+    const authorizePreflight = ownDataDescriptor(input, "authorizePreflight");
+    const reserveBudget = ownDataDescriptor(input, "reserveBudget");
     const authorizeProviderStart = ownDataDescriptor(input, "authorizeProviderStart");
+    const releaseBudget = ownDataDescriptor(input, "releaseBudget");
     const recordOutcome = ownDataDescriptor(input, "recordOutcome");
     if (!reserve || typeof reserve.value !== "function"
+      || !authorizePreflight || typeof authorizePreflight.value !== "function"
+      || !reserveBudget || typeof reserveBudget.value !== "function"
       || !authorizeProviderStart || typeof authorizeProviderStart.value !== "function"
+      || !releaseBudget || typeof releaseBudget.value !== "function"
       || !recordOutcome || typeof recordOutcome.value !== "function") throw new Error("invalid");
     return {
       reserve: reserve.value as AgentStepModelInvocationLedger["reserve"],
+      authorizePreflight: authorizePreflight.value as AgentStepModelInvocationLedger["authorizePreflight"],
+      reserveBudget: reserveBudget.value as AgentStepModelInvocationLedger["reserveBudget"],
       authorizeProviderStart: authorizeProviderStart.value as AgentStepModelInvocationLedger["authorizeProviderStart"],
+      releaseBudget: releaseBudget.value as AgentStepModelInvocationLedger["releaseBudget"],
       recordOutcome: recordOutcome.value as AgentStepModelInvocationLedger["recordOutcome"],
     };
   } catch {
@@ -1342,48 +1380,147 @@ export async function executeAgentStep(
         { stepId, capabilityDecision, previousSnapshot },
       );
     }
-    let providerStart: Awaited<ReturnType<AgentStepModelInvocationLedger["authorizeProviderStart"]>>;
-    try {
-      providerStart = await capturedInvocationLedger.authorizeProviderStart(reservationInput);
-    } catch {
-      providerStart = { status: "recovery_required" };
-    }
-    if (!providerStart || providerStart.status !== "started") {
-      addReason(
-        reasons,
-        providerStart?.status === "conflict"
-          ? "invocation_ledger_conflict"
-          : providerStart?.status === "recovery_required"
-            ? "invocation_ledger_recovery_required"
-            : "invocation_ledger_failed",
-        "invocationLedger.authorizeProviderStart",
-        "Durable provider-start authority could not be established factually.",
-        { runId: request.runId, stepId, invocationId: request.invocationId },
-      );
-      return decision("deny", "recovery_required", reasons, {
-        stepId,
-        capabilityDecision,
-        previousSnapshot,
-      });
-    }
   }
 
+  let budgetReservation: AgentStepModelBudgetReservation | null = null;
+  let generationAuthorized = false;
+  let authorityFailure: "budget_exceeded" | "conflict" | "recovery_required" | null = null;
   const modelExecutionDecision = await executeModelInvocation(
     { routeInput, candidateIdentity: identityForPrimary(primary) },
     providers,
     evidenceResolver,
     { now: () => occurredAt },
+    capturedInvocationLedger ? {
+      async prepare(context) {
+        const preparedRequestFingerprint = createModelInvocationRequestFingerprint(context.request);
+        if (!preparedRequestFingerprint) {
+          return { status: "denied" as const, preflight: null };
+        }
+        let preflightAuthority: Awaited<ReturnType<AgentStepModelInvocationLedger["authorizePreflight"]>>;
+        try {
+          preflightAuthority = await capturedInvocationLedger.authorizePreflight(reservationInput);
+        } catch {
+          preflightAuthority = { status: "recovery_required" };
+        }
+        if (!preflightAuthority || preflightAuthority.status !== "authorized") {
+          authorityFailure = preflightAuthority?.status === "conflict"
+            ? "conflict"
+            : "recovery_required";
+          return { status: authorityFailure === "conflict" ? "denied" as const : "recovery_required" as const, preflight: null };
+        }
+        let preflightDecision;
+        try {
+          preflightDecision = await context.invoke({
+            authorizedMaxInputTokens: capabilityDecision.budget?.maxInputTokens ?? 0,
+            authorizedMaxOutputTokens: capabilityDecision.budget?.maxOutputTokens ?? 0,
+            maxCostUsdMicros: capabilityDecision.budget?.maxCostUsdMicros ?? 0,
+            deploymentMaxInputTokens: primary.maxInputTokens,
+            deploymentMaxOutputTokens: primary.maxOutputTokens,
+            inputCostUsdMicrosPerMillionTokens: primary.inputCostUsdMicrosPerMillionTokens,
+            outputCostUsdMicrosPerMillionTokens: primary.outputCostUsdMicrosPerMillionTokens,
+          });
+        } catch {
+          return { status: "denied" as const, preflight: null };
+        }
+        const preflight = preflightDecision.normalizedPreflight;
+        if (preflightDecision.verdict !== "allow" || !preflight
+          || preflight.sourceRequestFingerprint !== preparedRequestFingerprint
+          || preflight.providerId !== primary.providerId
+          || preflight.deploymentId !== primary.deploymentId
+          || preflight.providerModelId !== primary.providerModelId
+          || preflight.providerRequestModelId !== primary.providerRequestModelId
+          || preflight.providerModelVersion !== primary.providerModelVersion
+          || preflight.maximumTotalTokens !== preflight.inputTokenCount
+            + preflight.effectiveMaxOutputTokens
+          || preflight.inputTokenCount > (capabilityDecision.budget?.maxInputTokens ?? -1)
+          || preflight.effectiveMaxOutputTokens > (capabilityDecision.budget?.maxOutputTokens ?? -1)
+          || preflight.maximumCostUsdMicros > (capabilityDecision.budget?.maxCostUsdMicros ?? -1)) {
+          return { status: "denied" as const, preflight: null };
+        }
+        budgetReservation = freezeModelProviderAdapterData({
+          ...cloneModelProviderAdapterData(reservationInput),
+          departmentId: startedSnapshot.departmentId,
+          workflowBindingId: startedSnapshot.workflowBindingId,
+          workflowBindingVersion: startedSnapshot.workflowBindingVersion,
+          inputEnvelopeFingerprint: preflight.inputEnvelopeFingerprint,
+          canonicalRequestFingerprint: preflight.canonicalRequestFingerprint,
+          inputTokenCount: preflight.inputTokenCount,
+          effectiveMaxOutputTokens: preflight.effectiveMaxOutputTokens,
+          reservedTotalTokens: preflight.maximumTotalTokens,
+          reservedCostUsdMicros: preflight.maximumCostUsdMicros,
+          dailyTokenBudget: startedSnapshot.executionProfile.budget.dailyTokenBudget,
+          monthlyCostBudgetUsdMicros:
+            startedSnapshot.executionProfile.budget.monthlyCostBudgetUsdCents * 10_000,
+        });
+        return { status: "ready" as const, preflight };
+      },
+      async authorizeGeneration(context) {
+        const reservation = budgetReservation;
+        if (!reservation
+          || context.preflight.canonicalRequestFingerprint !== reservation.canonicalRequestFingerprint
+          || context.preflight.inputEnvelopeFingerprint !== reservation.inputEnvelopeFingerprint) {
+          authorityFailure = "conflict";
+          return { status: "denied" as const };
+        }
+        let budgetDecision: Awaited<ReturnType<AgentStepModelInvocationLedger["reserveBudget"]>>;
+        try {
+          budgetDecision = await capturedInvocationLedger.reserveBudget(reservation);
+        } catch {
+          budgetDecision = { status: "recovery_required" };
+        }
+        if (!budgetDecision || !["reserved", "replay"].includes(budgetDecision.status)) {
+          authorityFailure = budgetDecision?.status === "budget_exceeded"
+            ? "budget_exceeded"
+            : budgetDecision?.status === "conflict" ? "conflict" : "recovery_required";
+          return { status: authorityFailure === "recovery_required" ? "recovery_required" as const : "denied" as const };
+        }
+        let providerStart: Awaited<ReturnType<AgentStepModelInvocationLedger["authorizeProviderStart"]>>;
+        try {
+          providerStart = await capturedInvocationLedger.authorizeProviderStart(reservation);
+        } catch {
+          providerStart = { status: "recovery_required" };
+        }
+        if (!providerStart || providerStart.status !== "started") {
+          try {
+            await capturedInvocationLedger.releaseBudget(reservation);
+          } catch {
+            authorityFailure = "recovery_required";
+            return { status: "recovery_required" as const };
+          }
+          authorityFailure = providerStart?.status === "conflict" ? "conflict" : "recovery_required";
+          return { status: authorityFailure === "conflict" ? "denied" as const : "recovery_required" as const };
+        }
+        generationAuthorized = true;
+        return { status: "authorized" as const };
+      },
+    } : undefined,
   );
   const providerResult = modelExecutionDecision.normalizedResult;
-  const providerBoundaryAmbiguous = !providerResult && (
-    modelExecutionDecision.reasons.some(
-      (item) => item.code === "provider_exception" && item.path.endsWith(".run"),
-    )
-    || modelExecutionDecision.reasons.some((item) => item.code === "invalid_provider_decision")
-    || modelExecutionDecision.providerDecision?.reasons.some(
-      (item) => item.code === "provider_exception",
-    ) === true
-  );
+  if (authorityFailure === "recovery_required" || authorityFailure === "conflict") {
+    addReason(
+      reasons,
+      "invocation_ledger_recovery_required",
+      "invocationLedger",
+      "Durable preflight, budget, or final generation authority requires recovery.",
+      { runId: request.runId, stepId, invocationId: request.invocationId },
+    );
+    return decision("deny", "recovery_required", reasons, {
+      stepId,
+      capabilityDecision,
+      modelExecutionDecision,
+      previousSnapshot,
+    });
+  }
+  if (authorityFailure === "budget_exceeded") {
+    addReason(
+      reasons,
+      "budget_exceeded",
+      "invocationLedger.reserveBudget",
+      "Aggregate daily token or monthly cost budget denied generation.",
+      { runId: request.runId, stepId, invocationId: request.invocationId },
+    );
+  }
+  const providerBoundaryAmbiguous = generationAuthorized && !providerResult;
   if (capturedInvocationLedger) {
     const status = providerResult
       ? providerResult.outcome === "succeeded" ? "succeeded" : "failed"

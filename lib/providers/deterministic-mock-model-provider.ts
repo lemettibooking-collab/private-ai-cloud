@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
   ModelInvocationRequest,
   ModelInvocationResult,
@@ -10,6 +11,8 @@ import type {
   ModelProviderAdapterRunDecision,
   ModelProviderHealth,
   ModelProviderIdentity,
+  ModelProviderPreflightBudget,
+  ModelProviderPreflightDecision,
 } from "../contracts/model-provider-adapter";
 // @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
 import { validateAndNormalizeModelInvocationRequest, validateAndNormalizeModelInvocationResult } from "../contracts/model-invocation.ts";
@@ -25,6 +28,8 @@ import { snapshotModelProviderAdapterInput } from "../contracts/model-provider-a
 import { validateAndNormalizeModelProviderHealth } from "../contracts/model-provider-adapter.ts";
 // @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
 import { validateAndNormalizeModelProviderIdentity } from "../contracts/model-provider-adapter.ts";
+// @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
+import { createModelInvocationRequestFingerprint } from "../contracts/model-invocation-data-handling.ts";
 
 export const mockModelProviderLimits = Object.freeze({
   maxScripts: modelProviderAdapterLimits.maxScripts,
@@ -162,6 +167,23 @@ function sameData(left: unknown, right: unknown): boolean {
       && leftKeys.every((key) => Object.hasOwn(right, key) && sameData(left[key], right[key]));
   }
   return false;
+}
+
+function canonicalData(input: unknown): string {
+  if (input === null) return "null";
+  if (typeof input === "string") return `s${input.length}:${input}`;
+  if (typeof input === "number") return `n:${String(input)}`;
+  if (typeof input === "boolean") return input ? "b:1" : "b:0";
+  if (Array.isArray(input)) return `a${input.length}:${input.map(canonicalData).join("")}`;
+  const record = input as Record<string, unknown>;
+  const keys = Object.keys(record).sort();
+  return `o${keys.length}:${keys.map(
+    (key) => `k${key.length}:${key}${canonicalData(record[key])}`,
+  ).join("")}`;
+}
+
+function fingerprint(input: unknown): string {
+  return `sha256:${createHash("sha256").update(canonicalData(input)).digest("hex")}`;
 }
 
 function validateScriptIdentities(
@@ -382,11 +404,102 @@ function createProvider(config: MockModelProviderConfig): ModelProvider {
 
   const provider: ModelProvider = {
     identity: publicIdentity,
+    async preflight(
+      input: unknown,
+      budget: ModelProviderPreflightBudget,
+    ): Promise<ModelProviderPreflightDecision> {
+      const requestDecision = validateAndNormalizeModelInvocationRequest(input);
+      const request = requestDecision.normalizedRequest;
+      const deny = (code: string, message: string): ModelProviderPreflightDecision => freezeModelProviderAdapterData({
+        verdict: "deny",
+        reasons: [adapterReason(code, "$", message, publicIdentity, request?.invocationId ?? null)],
+        requestDecision,
+        normalizedPreflight: null,
+      });
+      if (requestDecision.verdict !== "allow" || !request) {
+        return deny("invalid_request", "Request failed factual AI-022 validation.");
+      }
+      const script = internalConfig.scripts.find(
+        (candidate) => candidate.request.invocationId === request.invocationId,
+      );
+      if (!script || !sameData(request, script.request)) {
+        return deny("script_not_found", "No exact scripted request exists for preflight.");
+      }
+      const values = [
+        budget.authorizedMaxInputTokens,
+        budget.authorizedMaxOutputTokens,
+        budget.maxCostUsdMicros,
+        budget.deploymentMaxInputTokens,
+        budget.deploymentMaxOutputTokens,
+        budget.inputCostUsdMicrosPerMillionTokens,
+        budget.outputCostUsdMicrosPerMillionTokens,
+      ];
+      if (!values.every((value) => Number.isSafeInteger(value) && value >= 0)
+        || budget.authorizedMaxInputTokens < 1 || budget.authorizedMaxOutputTokens < 1
+        || budget.deploymentMaxInputTokens < 1 || budget.deploymentMaxOutputTokens < 1
+        || budget.maxCostUsdMicros < 1) {
+        return deny("invalid_input", "Preflight budget is invalid.");
+      }
+      const inputTokenCount = script.result.usage.inputTokens;
+      if (inputTokenCount > Math.min(
+        budget.authorizedMaxInputTokens,
+        budget.deploymentMaxInputTokens,
+      )) return deny("limit_exceeded", "Scripted input usage exceeds the authorized input limit.");
+      const million = BigInt(1_000_000);
+      const inputNumerator = BigInt(inputTokenCount)
+        * BigInt(budget.inputCostUsdMicrosPerMillionTokens);
+      const maximumNumerator = BigInt(budget.maxCostUsdMicros) * million;
+      if (inputNumerator > maximumNumerator) return deny("limit_exceeded", "Input cost exceeds the authorized cost limit.");
+      const baseOutput = Math.min(
+        budget.authorizedMaxOutputTokens,
+        budget.deploymentMaxOutputTokens,
+      );
+      const outputPrice = BigInt(budget.outputCostUsdMicrosPerMillionTokens);
+      const affordable = outputPrice === BigInt(0)
+        ? BigInt(baseOutput)
+        : (maximumNumerator - inputNumerator) / outputPrice;
+      const effectiveBig = affordable < BigInt(baseOutput) ? affordable : BigInt(baseOutput);
+      if (effectiveBig < BigInt(1)) return deny("limit_exceeded", "No positive output budget remains.");
+      const effectiveMaxOutputTokens = Number(effectiveBig);
+      const maximumTotalTokens = inputTokenCount + effectiveMaxOutputTokens;
+      const maximumCostUsdMicros = Number(
+        (inputNumerator + effectiveBig * outputPrice + BigInt(999_999)) / million,
+      );
+      const sourceRequestFingerprint = createModelInvocationRequestFingerprint(request);
+      if (!sourceRequestFingerprint) return deny("invalid_request", "Request fingerprint failed.");
+      const envelope = {
+        providerRequestModelId: publicIdentity.providerRequestModelId,
+        sourceRequestFingerprint,
+      };
+      const canonical = { ...envelope, effectiveMaxOutputTokens };
+      return freezeModelProviderAdapterData({
+        verdict: "allow",
+        reasons: [],
+        requestDecision,
+        normalizedPreflight: {
+          providerId: publicIdentity.providerId,
+          deploymentId: publicIdentity.deploymentId,
+          providerModelId: publicIdentity.providerModelId,
+          providerRequestModelId: publicIdentity.providerRequestModelId,
+          providerModelVersion: publicIdentity.providerModelVersion,
+          sourceRequestFingerprint,
+          inputEnvelopeFingerprint: fingerprint(envelope),
+          canonicalRequestFingerprint: fingerprint(canonical),
+          inputTokenCount,
+          effectiveMaxOutputTokens,
+          maximumTotalTokens,
+          maximumCostUsdMicros,
+        },
+      });
+    },
     async run(input: unknown): Promise<ModelProviderAdapterRunDecision> {
       let requestDecision: ModelInvocationRequestValidationDecision | null = null;
       let resultDecision: ModelInvocationResultValidationDecision | null = null;
       try {
-        requestDecision = validateAndNormalizeModelInvocationRequest(input);
+        const runInput = isPlainRecord(input) && hasExactFields(input, ["request", "preflight"])
+          ? input.request
+          : input;
+        requestDecision = validateAndNormalizeModelInvocationRequest(runInput);
         if (requestDecision.verdict !== "allow" || !requestDecision.normalizedRequest) {
           return runDeny([
             adapterReason(

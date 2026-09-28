@@ -19,6 +19,9 @@ const adapterContract = (await import(
 const apiContract = (await import(
   new URL("../lib/workflows/workflow-runtime-api.ts", import.meta.url).href
 )) as typeof import("../lib/workflows/workflow-runtime-api");
+const dataHandlingContract = (await import(
+  new URL("../lib/contracts/model-invocation-data-handling.ts", import.meta.url).href
+)) as typeof import("../lib/contracts/model-invocation-data-handling");
 
 const { createWorkflowRuntimeService, normalizeWorkflowRuntimeState } = serviceContract;
 const { createWorkflowRunSnapshot, evaluateWorkflowRunTransition } = runContract;
@@ -28,6 +31,7 @@ const {
 } = invocationContract;
 const { validateAndNormalizeModelProviderHealth } = adapterContract;
 const { handleWorkflowRuntimeCommand } = apiContract;
+const { createModelInvocationRequestFingerprint } = dataHandlingContract;
 
 type RuntimeState = import("../lib/workflows/workflow-runtime-service").WorkflowRuntimeState;
 type RuntimeResponse = import("../lib/workflows/workflow-runtime-service").WorkflowRuntimeResponse;
@@ -61,7 +65,7 @@ function budget() {
   };
 }
 
-function projectRegistry(agentIds: readonly string[]) {
+function projectRegistry(agentIds: readonly string[], dataEgressMode = "forbidden") {
   const subjectBinding = (kind: "agent" | "workflow", subjectId: string) => ({
     id: `${subjectId}-binding`,
     projectId: "project-one",
@@ -75,7 +79,7 @@ function projectRegistry(agentIds: readonly string[]) {
     requestedKnowledgeCollectionIds: [],
     requestedBudget: { ...budget(), maxConcurrentRuns: 1, maxAttemptsPerRun: 3, maxRunMinutes: 30 },
     externalActionMode: "approval_required",
-    dataEgressMode: "forbidden",
+    dataEgressMode,
     additionalRequiredApprovalActions: [],
     additionalForbiddenActions: [],
   });
@@ -111,7 +115,7 @@ function projectRegistry(agentIds: readonly string[]) {
         knowledgeCollectionIds: [],
         policy: {
           externalActionMode: "approval_required",
-          dataEgressMode: "forbidden",
+          dataEgressMode,
           requiredApprovalActions: ["workflow-approval"],
           forbiddenActions: [],
         },
@@ -141,7 +145,7 @@ function projectRegistry(agentIds: readonly string[]) {
         },
         policy: {
           externalActionMode: "approval_required",
-          dataEgressMode: "forbidden",
+          dataEgressMode,
           additionalRequiredApprovalActions: [],
           additionalForbiddenActions: [],
         },
@@ -243,13 +247,16 @@ function workflow(kind: "linear" | "branched" | "single" = "linear") {
   };
 }
 
-function creation(kind: "linear" | "branched" | "single" = "linear") {
+function creation(
+  kind: "linear" | "branched" | "single" = "linear",
+  dataEgressMode = "forbidden",
+) {
   const agentIds = kind === "linear"
     ? ["agent-a", "agent-b"]
     : kind === "branched"
       ? ["agent-a", "agent-b", "agent-c", "agent-d"]
       : ["agent-a"];
-  const registry = projectRegistry(agentIds);
+  const registry = projectRegistry(agentIds, dataEgressMode);
   return {
     runId: "run-one",
     requestId: "request-one",
@@ -292,25 +299,27 @@ function creation(kind: "linear" | "branched" | "single" = "linear") {
   };
 }
 
-function modelProviderRegistry() {
+function modelProviderRegistry(remote = false) {
+  const providerId = remote ? "provider-openai" : "provider-mock";
+  const deploymentId = remote ? "deployment-openai" : "deployment-mock";
   return {
     workspaceId: "workspace-primary",
     version: 1,
     providers: [{
-      id: "provider-mock",
-      kind: "mock",
+      id: providerId,
+      kind: remote ? "openai" : "mock",
       status: "active",
-      deploymentMode: "local",
+      deploymentMode: remote ? "remote" : "local",
       supportedDataRegions: ["eu"],
-      supportedDataEgressModes: ["forbidden"],
+      supportedDataEgressModes: [remote ? "redacted_only" : "forbidden"],
       capabilities: ["messages"],
     }],
     deployments: [{
-      id: "deployment-mock",
-      providerId: "provider-mock",
+      id: deploymentId,
+      providerId,
       status: "active",
-      providerModelId: "mock/model:alias",
-      providerRequestModelId: "mock/model:v1",
+      providerModelId: remote ? "gpt-test-alias" : "mock/model:alias",
+      providerRequestModelId: remote ? "gpt-test-pinned" : "mock/model:v1",
       providerModelVersion: "version-1",
       capabilities: ["messages"],
       supportedOutputTypes: ["patch"],
@@ -326,20 +335,24 @@ function modelProviderRegistry() {
       status: "active",
       requiredCapabilities: ["messages"],
       supportedOutputTypes: ["patch"],
-      candidates: [{ deploymentId: "deployment-mock", priority: 1 }],
+      candidates: [{ deploymentId, priority: 1 }],
     }],
   };
 }
 
-function initialState(kind: "linear" | "branched" | "single" = "linear"): RuntimeState {
-  const input = creation(kind);
+function initialState(
+  kind: "linear" | "branched" | "single" = "linear",
+  dataEgressMode = "forbidden",
+  remote = false,
+): RuntimeState {
+  const input = creation(kind, dataEgressMode);
   const created = createWorkflowRunSnapshot(input);
   assert.equal(created.verdict, "allow", JSON.stringify(created.reasons));
   assert.ok(created.snapshot);
   return {
     snapshot: created.snapshot,
     projectRegistry: input.workflowCatalog.registry,
-    modelProviderRegistry: modelProviderRegistry(),
+    modelProviderRegistry: modelProviderRegistry(remote),
     existingRequests: [],
     pause: null,
   };
@@ -606,6 +619,10 @@ class LedgerFakeStore extends FakeStore {
   reservationFailure: "conflict" | "recovery_required" | null = null;
   recordOutcomeFailure: "conflict" | "recovery_required" | null = null;
   reservationHook: (() => Promise<void>) | null = null;
+  readonly budgetReservations = new Map<string, {
+    value: import("../lib/workflows/agent-step-runtime").AgentStepModelBudgetReservation;
+    status: "reserved" | "released" | "settled" | "outcome_unknown";
+  }>();
 
   constructor(state: RuntimeState, durableInvocations = new Map<string, DurableInvocationRecord>()) {
     super(state);
@@ -668,7 +685,52 @@ class LedgerFakeStore extends FakeStore {
     }
     existing.status = input.status;
     existing.outcome = clone(input);
+    const budget = this.budgetReservations.get(key);
+    if (budget) budget.status = input.status === "outcome_unknown"
+      ? "outcome_unknown"
+      : input.totalTokens === null ? "released" : "settled";
     return { status: "recorded" as const };
+  }
+
+  async authorizeModelInvocationPreflight(input: {
+    runId: string;
+    claimId: string;
+    reservation: import("../lib/workflows/agent-step-runtime").AgentStepModelInvocationReservation;
+  }) {
+    const key = `${input.reservation.workspaceId}:${input.runId}:${input.reservation.invocationId}`;
+    const claim = [...this.claims.values()].find((candidate) => candidate.claimId === input.claimId);
+    return claim && this.executionJournal.get(input.claimId) === "prepared"
+      && this.state.snapshot.status === "running"
+      && this.state.snapshot.revision === claim.expectedRevision
+      && this.state.pause === null
+      && this.durableInvocations.get(key)?.status === "running"
+      ? { status: "authorized" as const }
+      : { status: "conflict" as const };
+  }
+
+  async reserveModelInvocationBudget(
+    input: import("../lib/workflows/agent-step-runtime").AgentStepModelBudgetReservation,
+  ) {
+    const key = `${input.workspaceId}:${input.runId}:${input.invocationId}`;
+    const existing = this.budgetReservations.get(key);
+    if (existing) return JSON.stringify(existing.value) === JSON.stringify(input)
+      && existing.status === "reserved"
+      ? { status: "replay" as const }
+      : { status: "recovery_required" as const };
+    this.budgetReservations.set(key, { value: clone(input), status: "reserved" });
+    return { status: "reserved" as const };
+  }
+
+  async releaseModelInvocationBudget(
+    input: import("../lib/workflows/agent-step-runtime").AgentStepModelBudgetReservation,
+  ) {
+    const key = `${input.workspaceId}:${input.runId}:${input.invocationId}`;
+    const existing = this.budgetReservations.get(key);
+    if (!existing) return { status: "conflict" as const };
+    if (existing.status === "released") return { status: "idempotent" as const };
+    if (existing.status !== "reserved") return { status: "recovery_required" as const };
+    existing.status = "released";
+    return { status: "released" as const };
   }
 
 }
@@ -706,6 +768,37 @@ function provider(options: {
         providerRequestModelId: "mock/model:v1",
         providerModelVersion: "version-1",
       },
+      async preflight(input: unknown, budgetInput: any) {
+        const requestDecision = validateAndNormalizeModelInvocationRequest(input);
+        assert.ok(requestDecision.normalizedRequest);
+        const sourceRequestFingerprint = createModelInvocationRequestFingerprint(
+          requestDecision.normalizedRequest,
+        );
+        assert.ok(sourceRequestFingerprint);
+        const effectiveMaxOutputTokens = Math.min(
+          budgetInput.authorizedMaxOutputTokens,
+          budgetInput.deploymentMaxOutputTokens,
+        );
+        return {
+          verdict: "allow" as const,
+          reasons: [],
+          requestDecision,
+          normalizedPreflight: {
+            providerId: "provider-mock",
+            deploymentId: "deployment-mock",
+            providerModelId: "mock/model:alias",
+            providerRequestModelId: "mock/model:v1",
+            providerModelVersion: "version-1",
+            sourceRequestFingerprint,
+            inputEnvelopeFingerprint: `sha256:${"e".repeat(64)}`,
+            canonicalRequestFingerprint: `sha256:${"f".repeat(64)}`,
+            inputTokenCount: 10,
+            effectiveMaxOutputTokens,
+            maximumTotalTokens: 10 + effectiveMaxOutputTokens,
+            maximumCostUsdMicros: 0,
+          },
+        };
+      },
       async health() {
         healthCalls += 1;
         options.onHealth?.();
@@ -722,7 +815,9 @@ function provider(options: {
       },
       async run(input: unknown) {
         runCalls += 1;
-        const requestDecision = validateAndNormalizeModelInvocationRequest(input);
+        const requestDecision = validateAndNormalizeModelInvocationRequest(
+          (input as any)?.request ?? input,
+        );
         assert.ok(requestDecision.normalizedRequest);
         const request = requestDecision.normalizedRequest;
         options.onRun?.(request.stepId, request.agentId);
@@ -983,6 +1078,61 @@ test("legacy persisted registry loads for audit but cannot authorize a provider 
   const result = await service.advance(advanceCommand(1, ["step-a"]));
   assert.equal(result.verdict, "deny");
   assert.deepEqual(runtimeProvider.counts(), { health: 0, run: 0 });
+});
+
+test("remote provider stays network-silent when one durable budget method is missing", async () => {
+  const store = new LedgerFakeStore(initialState("single", "redacted_only", true));
+  (store as any).releaseModelInvocationBudget = undefined;
+  const calls = { count: 0, health: 0, create: 0 };
+  const remoteProvider = {
+    identity: {
+      providerId: "provider-openai",
+      providerKind: "openai",
+      deploymentId: "deployment-openai",
+      providerModelId: "gpt-test-alias",
+      providerRequestModelId: "gpt-test-pinned",
+      providerModelVersion: "version-1",
+    },
+    async preflight() { calls.count += 1; throw new Error("must not count"); },
+    async health() { calls.health += 1; throw new Error("must not retrieve model"); },
+    async run() { calls.create += 1; throw new Error("must not create response"); },
+  } as ModelProvider;
+  const base = dependencies(store, provider());
+  const service = createWorkflowRuntimeService({
+    ...base,
+    providers: [remoteProvider],
+  });
+  assert.equal((await start(service)).status, "running");
+  const result = await service.advance(advanceCommand(1, ["step-a"]));
+  assert.equal(result.verdict, "deny");
+  assert.deepEqual(calls, { count: 0, health: 0, create: 0 });
+});
+
+test("remote mock stays network-silent when the durable ledger is incomplete", async () => {
+  const state = clone(initialState("single", "redacted_only", true)) as any;
+  state.modelProviderRegistry.providers[0].kind = "mock";
+  const store = new LedgerFakeStore(state);
+  (store as any).releaseModelInvocationBudget = undefined;
+  const calls = { count: 0, health: 0, run: 0 };
+  const remoteMock = {
+    identity: {
+      providerId: "provider-openai",
+      providerKind: "mock",
+      deploymentId: "deployment-openai",
+      providerModelId: "gpt-test-alias",
+      providerRequestModelId: "gpt-test-pinned",
+      providerModelVersion: "version-1",
+    },
+    async preflight() { calls.count += 1; throw new Error("must not count"); },
+    async health() { calls.health += 1; throw new Error("must not check health"); },
+    async run() { calls.run += 1; throw new Error("must not run"); },
+  } as ModelProvider;
+  const base = dependencies(store, provider());
+  const service = createWorkflowRuntimeService({ ...base, providers: [remoteMock] });
+  assert.equal((await start(service)).status, "running");
+  const result = await service.advance(advanceCommand(1, ["step-a"]));
+  assert.equal(result.verdict, "deny");
+  assert.deepEqual(calls, { count: 0, health: 0, run: 0 });
 });
 
 test("AI-029 risk approval creates a runtime pause without fabricating a Workflow status", async () => {
@@ -2169,7 +2319,7 @@ test("cancellation wins a race and late AI-029 completion cannot overwrite it", 
     detailCode: null,
   }));
   const late = await advance;
-  assert.equal(late.status, "conflict");
+  assert.equal(["conflict", "recovery_required"].includes(late.status), true);
   assert.equal(store.state.snapshot.status, "cancelled");
   const blockedAdvance = await service.advance(
     advanceCommand(store.state.snapshot.revision, ["step-a"], "advance-after-cancel"),

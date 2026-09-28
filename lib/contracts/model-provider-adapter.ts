@@ -96,8 +96,49 @@ export type ModelProviderAdapterRunDecision = Readonly<{
   normalizedResult: ModelInvocationResult | null;
 }>;
 
+export type ModelProviderPreflightBudget = Readonly<{
+  authorizedMaxInputTokens: number;
+  authorizedMaxOutputTokens: number;
+  maxCostUsdMicros: number;
+  deploymentMaxInputTokens: number;
+  deploymentMaxOutputTokens: number;
+  inputCostUsdMicrosPerMillionTokens: number;
+  outputCostUsdMicrosPerMillionTokens: number;
+}>;
+
+export type ModelProviderPreflight = Readonly<{
+  providerId: string;
+  deploymentId: string;
+  providerModelId: string;
+  providerRequestModelId: string;
+  providerModelVersion: string;
+  sourceRequestFingerprint: string;
+  inputEnvelopeFingerprint: string;
+  canonicalRequestFingerprint: string;
+  inputTokenCount: number;
+  effectiveMaxOutputTokens: number;
+  maximumTotalTokens: number;
+  maximumCostUsdMicros: number;
+}>;
+
+export type ModelProviderPreflightDecision = Readonly<{
+  verdict: ModelProviderAdapterVerdict;
+  reasons: readonly ModelProviderAdapterReason[];
+  requestDecision: ModelInvocationRequestValidationDecision | null;
+  normalizedPreflight: ModelProviderPreflight | null;
+}>;
+
+export type ModelProviderGenerationInput = Readonly<{
+  request: unknown;
+  preflight: unknown;
+}>;
+
 export interface ModelProvider {
   readonly identity: ModelProviderIdentity;
+  preflight(
+    input: unknown,
+    budget: ModelProviderPreflightBudget,
+  ): Promise<ModelProviderPreflightDecision>;
   run(input: unknown): Promise<ModelProviderAdapterRunDecision>;
   health(): Promise<ModelProviderHealthValidationDecision>;
 }

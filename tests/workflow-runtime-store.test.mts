@@ -37,6 +37,7 @@ const approvalRequestFingerprint = "b".repeat(64);
 const approvalPolicyFingerprint = "c".repeat(64);
 const invocationRequestFingerprint = `sha256:${"d".repeat(64)}`;
 const otherReservationToken = "00000000-0000-4000-8000-000000000972";
+const modelInvocationDatabaseId = "00000000-0000-4000-8000-000000000973";
 
 function invocationReservation(overrides: Record<string, unknown> = {}) {
   return {
@@ -62,6 +63,24 @@ function invocationReservation(overrides: Record<string, unknown> = {}) {
   } as import("../lib/workflows/agent-step-runtime").AgentStepModelInvocationReservation;
 }
 
+function budgetReservation(overrides: Record<string, unknown> = {}) {
+  return {
+    ...invocationReservation(),
+    departmentId: "department-one",
+    workflowBindingId: "workflow-binding-one",
+    workflowBindingVersion: 8,
+    inputEnvelopeFingerprint: `sha256:${"e".repeat(64)}`,
+    canonicalRequestFingerprint: `sha256:${"f".repeat(64)}`,
+    inputTokenCount: 10,
+    effectiveMaxOutputTokens: 4_000,
+    reservedTotalTokens: 4_010,
+    reservedCostUsdMicros: 8_010,
+    dailyTokenBudget: 1_000_000,
+    monthlyCostBudgetUsdMicros: 2_500_000_000,
+    ...overrides,
+  } as import("../lib/workflows/agent-step-runtime").AgentStepModelBudgetReservation;
+}
+
 function executionIdentityRow(overrides: Record<string, unknown> = {}) {
   return {
     workflow_execution_id: "00000000-0000-4000-8000-000000000971",
@@ -78,6 +97,7 @@ function executionIdentityRow(overrides: Record<string, unknown> = {}) {
 
 function invocationRow(overrides: Record<string, unknown> = {}) {
   return {
+    model_invocation_id: modelInvocationDatabaseId,
     workflow_execution_id: "00000000-0000-4000-8000-000000000971",
     reservation_token: otherReservationToken,
     invocation_id: "invocation-one",
@@ -97,6 +117,7 @@ function invocationRow(overrides: Record<string, unknown> = {}) {
     provider_request_model_id: "provider/model:v1",
     provider_model_version: "version-1",
     provider_identity_version: 2,
+    execution_status: "running",
     outcome: null,
     finish_reason: null,
     input_tokens: null,
@@ -105,6 +126,38 @@ function invocationRow(overrides: Record<string, unknown> = {}) {
     latency_ms: null,
     cost_usd_micros: null,
     error_code: null,
+    ...overrides,
+  };
+}
+
+function budgetReservationRow(overrides: Record<string, unknown> = {}) {
+  return {
+    model_invocation_id: modelInvocationDatabaseId,
+    status: "reserved",
+    invocation_id: "invocation-one",
+    project_id: "project-one",
+    department_id: "department-one",
+    workflow_id: "workflow-one",
+    workflow_binding_id: "workflow-binding-one",
+    workflow_binding_version: "8",
+    request_fingerprint: invocationRequestFingerprint,
+    input_envelope_fingerprint: `sha256:${"e".repeat(64)}`,
+    canonical_request_fingerprint: `sha256:${"f".repeat(64)}`,
+    provider_id: "provider-one",
+    deployment_id: "deployment-one",
+    provider_model_id: "provider/model:alias",
+    provider_request_model_id: "provider/model:v1",
+    provider_model_version: "version-1",
+    input_token_count: "10",
+    effective_max_output_tokens: "4000",
+    reserved_total_tokens: "4010",
+    reserved_cost_usd_micros: "8010",
+    daily_token_budget: "1000000",
+    monthly_cost_budget_usd_micros: "2500000000",
+    daily_window_start: "2026-09-01",
+    monthly_window_start: "2026-09-01",
+    actual_total_tokens: null,
+    actual_cost_usd_micros: null,
     ...overrides,
   };
 }
@@ -1372,7 +1425,7 @@ test("provider-start fence atomically requires the exact running invocation rese
     },
     {
       tag: "workflow-runtime:provider-start-invocation",
-      rows: [{ status: "running" }],
+      rows: [{ status: "running", budget_status: "reserved" }],
       inspect(values) {
         assert.deepEqual(values, [
           workspaceDatabaseId,
@@ -1394,6 +1447,17 @@ test("provider-start fence atomically requires the exact running invocation rese
           "provider/model:alias",
           "provider/model:v1",
           "version-1",
+          "department-one",
+          "workflow-binding-one",
+          8,
+          `sha256:${"e".repeat(64)}`,
+          `sha256:${"f".repeat(64)}`,
+          10,
+          4_000,
+          4_010,
+          8_010,
+          1_000_000,
+          2_500_000_000,
         ]);
       },
     },
@@ -1402,7 +1466,7 @@ test("provider-start fence atomically requires the exact running invocation rese
   assert.deepEqual(await createStore(database).startExecution({
     runId: "run-one",
     claimId,
-    providerStart: invocationReservation(),
+    providerStart: budgetReservation(),
   }), { status: "started" });
   assert.deepEqual(database.transactions, ["begin", "commit"]);
   database.done();
@@ -1420,7 +1484,7 @@ test("provider-start fence denies missing or terminal invocation authority witho
     assert.deepEqual(await createStore(database).startExecution({
       runId: "run-one",
       claimId,
-      providerStart: invocationReservation(),
+      providerStart: budgetReservation(),
     }), { status: expected });
     assert.equal(database.queries.some((query) => query.tag === "workflow-runtime:start-execution"), false);
     database.done();
@@ -1429,8 +1493,8 @@ test("provider-start fence denies missing or terminal invocation authority witho
 
 test("provider-start fence binds the pinned request model and cannot authorize legacy identity", async () => {
   for (const providerStart of [
-    invocationReservation({ providerRequestModelId: "provider/model:v2" }),
-    invocationReservation(),
+    budgetReservation({ providerRequestModelId: "provider/model:v2" }),
+    budgetReservation(),
   ]) {
     const database = new ScriptedDatabase([
       { tag: "workflow-runtime:read-execution", rows: [executionBoundaryRow()] },
@@ -2317,6 +2381,108 @@ test("ambiguous reservation with an unknown stored lifecycle fails closed", asyn
   database.done();
 });
 
+test("aggregate budget reservation uses trusted UTC windows and exact replay never double charges", async () => {
+  const invocation = { ...invocationRow(), db_run_id: dbRunId };
+  const database = new ScriptedDatabase([
+    { tag: "workflow-runtime:budget-lock-invocation", rows: [invocation] },
+    { tag: "workflow-runtime:read-budget-reservation", rows: [] },
+    {
+      tag: "workflow-runtime:budget-windows",
+      rows: [{ daily_window_start: "2026-09-01", monthly_window_start: "2026-09-01" }],
+    },
+    { tag: "workflow-runtime:ensure-budget-windows", rowCount: 2 },
+    { tag: "workflow-runtime:lock-budget-windows", rows: [
+      { window_kind: "daily_tokens", reserved_amount: "0", consumed_amount: "0" },
+      { window_kind: "monthly_cost", reserved_amount: "0", consumed_amount: "0" },
+    ] },
+    {
+      tag: "workflow-runtime:insert-budget-reservation",
+      rowCount: 1,
+      inspect(values) {
+        assert.deepEqual(values.slice(26, 28), ["2026-09-01", "2026-09-01"]);
+      },
+    },
+    { tag: "workflow-runtime:charge-budget-reservation", rowCount: 2 },
+    { tag: "workflow-runtime:budget-lock-invocation", rows: [invocation] },
+    { tag: "workflow-runtime:read-budget-reservation", rows: [budgetReservationRow()] },
+  ]);
+  const store = createStore(database);
+  assert.deepEqual(await store.reserveModelInvocationBudget(budgetReservation()), {
+    status: "reserved",
+  });
+  assert.deepEqual(await store.reserveModelInvocationBudget(budgetReservation()), {
+    status: "replay",
+  });
+  assert.equal(database.queries.filter((query) => query.tag === "workflow-runtime:charge-budget-reservation").length, 1);
+  database.done();
+});
+
+test("aggregate daily and monthly ceilings deny before inserting a reservation", async () => {
+  for (const rows of [
+    [
+      { window_kind: "daily_tokens", reserved_amount: "996000", consumed_amount: "0" },
+      { window_kind: "monthly_cost", reserved_amount: "0", consumed_amount: "0" },
+    ],
+    [
+      { window_kind: "daily_tokens", reserved_amount: "0", consumed_amount: "0" },
+      { window_kind: "monthly_cost", reserved_amount: "2499995000", consumed_amount: "0" },
+    ],
+  ]) {
+    const database = new ScriptedDatabase([
+      { tag: "workflow-runtime:budget-lock-invocation", rows: [{ ...invocationRow(), db_run_id: dbRunId }] },
+      { tag: "workflow-runtime:read-budget-reservation", rows: [] },
+      {
+        tag: "workflow-runtime:budget-windows",
+        rows: [{ daily_window_start: "2026-09-01", monthly_window_start: "2026-09-01" }],
+      },
+      { tag: "workflow-runtime:ensure-budget-windows", rowCount: 2 },
+      { tag: "workflow-runtime:lock-budget-windows", rows },
+    ]);
+    assert.deepEqual(await createStore(database).reserveModelInvocationBudget(budgetReservation()), {
+      status: "budget_exceeded",
+    });
+    assert.equal(database.queries.some((query) => query.tag === "workflow-runtime:insert-budget-reservation"), false);
+    database.done();
+  }
+});
+
+test("same invocation with a changed canonical request fingerprint conflicts", async () => {
+  const database = new ScriptedDatabase([
+    { tag: "workflow-runtime:budget-lock-invocation", rows: [{ ...invocationRow(), db_run_id: dbRunId }] },
+    { tag: "workflow-runtime:read-budget-reservation", rows: [budgetReservationRow()] },
+  ]);
+  assert.deepEqual(await createStore(database).reserveModelInvocationBudget(budgetReservation({
+    canonicalRequestFingerprint: `sha256:${"a".repeat(64)}`,
+  })), { status: "conflict" });
+  database.done();
+});
+
+test("pre-generation budget release is idempotent and never increases consumed totals", async () => {
+  const database = new ScriptedDatabase([
+    { tag: "workflow-runtime:lock-budget-release", rows: [budgetReservationRow()] },
+    {
+      tag: "workflow-runtime:release-budget-windows",
+      rowCount: 2,
+      inspect(values) { assert.deepEqual(values.slice(5), [4_010, 8_010]); },
+    },
+    {
+      tag: "workflow-runtime:mark-budget-released",
+      rowCount: 1,
+      inspect(values) { assert.equal(values[1], modelInvocationDatabaseId); },
+    },
+    { tag: "workflow-runtime:lock-budget-release", rows: [budgetReservationRow({ status: "released" })] },
+  ]);
+  const store = createStore(database);
+  assert.deepEqual(await store.releaseModelInvocationBudget(budgetReservation()), {
+    status: "released",
+  });
+  assert.deepEqual(await store.releaseModelInvocationBudget(budgetReservation()), {
+    status: "idempotent",
+  });
+  assert.equal(database.queries.filter((query) => query.tag === "workflow-runtime:release-budget-windows").length, 1);
+  database.done();
+});
+
 test("unreadable lost reservation or terminal acknowledgement requires recovery", async () => {
   const reservationDatabase = new ScriptedDatabase([
     { tag: "workflow-runtime:model-invocation-execution", rows: [executionIdentityRow()] },
@@ -2331,6 +2497,9 @@ test("unreadable lost reservation or terminal acknowledgement requires recovery"
 
   const outcomeDatabase = new ScriptedDatabase([
     { tag: "workflow-runtime:lock-model-invocation", rows: [{ ...invocationRow(), db_run_id: dbRunId }] },
+    { tag: "workflow-runtime:lock-terminal-budget", rows: [budgetReservationRow()] },
+    { tag: "workflow-runtime:reconcile-budget-windows", rowCount: 2 },
+    { tag: "workflow-runtime:complete-budget-reservation", rowCount: 1 },
     { tag: "workflow-runtime:complete-model-invocation", rowCount: 1 },
     { tag: "workflow-runtime:read-model-invocation", error: new Error("unreadable") },
   ]);
@@ -2346,6 +2515,9 @@ test("unreadable lost reservation or terminal acknowledgement requires recovery"
 test("model invocation terminal usage is exact-once and conflicting terminal data fails closed", async () => {
   const database = new ScriptedDatabase([
     { tag: "workflow-runtime:lock-model-invocation", rows: [{ ...invocationRow(), db_run_id: dbRunId }] },
+    { tag: "workflow-runtime:lock-terminal-budget", rows: [budgetReservationRow()] },
+    { tag: "workflow-runtime:reconcile-budget-windows", rowCount: 2 },
+    { tag: "workflow-runtime:complete-budget-reservation", rowCount: 1 },
     {
       tag: "workflow-runtime:complete-model-invocation",
       rowCount: 1,
@@ -2389,6 +2561,8 @@ test("ambiguous model outcome stores no fabricated usage and lost terminal COMMI
   });
   const database = new ScriptedDatabase([
     { tag: "workflow-runtime:lock-model-invocation", rows: [{ ...invocationRow(), db_run_id: dbRunId }] },
+    { tag: "workflow-runtime:lock-terminal-budget", rows: [budgetReservationRow()] },
+    { tag: "workflow-runtime:hold-unknown-budget", rowCount: 1 },
     {
       tag: "workflow-runtime:complete-model-invocation",
       rowCount: 1,
@@ -2397,11 +2571,243 @@ test("ambiguous model outcome stores no fabricated usage and lost terminal COMMI
       },
     },
     { tag: "workflow-runtime:read-model-invocation", rows: [terminal] },
+    { tag: "workflow-runtime:read-model-budget-reservation", rows: [budgetReservationRow({
+      status: "outcome_unknown",
+    })] },
   ]);
   database.commitErrors = 1;
   assert.deepEqual(await createStore(database).recordModelInvocationOutcome(ambiguous), { status: "recorded" });
   assert.equal(database.queries.filter((query) => query.tag === "workflow-runtime:audit-event").length, 1);
   database.done();
+});
+
+test("definitive pre-generation failure terminalizes without a fabricated budget reservation", async () => {
+  const failure = invocationOutcome({
+    status: "failed", outcome: null, finishReason: null,
+    inputTokens: null, outputTokens: null, totalTokens: null,
+    latencyMs: null, costUsdMicros: null, errorCode: "provider_preflight_denied",
+  });
+  const database = new ScriptedDatabase([
+    {
+      tag: "workflow-runtime:lock-model-invocation",
+      rows: [{ ...invocationRow({ execution_status: "prepared" }), db_run_id: dbRunId }],
+    },
+    { tag: "workflow-runtime:lock-terminal-budget", rows: [] },
+    { tag: "workflow-runtime:complete-model-invocation", rowCount: 1 },
+  ]);
+  assert.deepEqual(await createStore(database).recordModelInvocationOutcome(failure), {
+    status: "recorded",
+  });
+  assert.equal(database.queries.some((query) => query.tag === "workflow-runtime:reconcile-budget-windows"), false);
+  database.done();
+});
+
+test("lost pre-generation failure acknowledgement reconciles without a fabricated budget reservation", async () => {
+  const failure = invocationOutcome({
+    status: "failed", outcome: null, finishReason: null,
+    inputTokens: null, outputTokens: null, totalTokens: null,
+    latencyMs: null, costUsdMicros: null, errorCode: "provider_preflight_denied",
+  });
+  const terminal = invocationRow({
+    status: "failed", outcome: null, finish_reason: null,
+    input_tokens: null, output_tokens: null, total_tokens: null,
+    latency_ms: null, cost_usd_micros: null, error_code: "provider_preflight_denied",
+  });
+  const database = new ScriptedDatabase([
+    {
+      tag: "workflow-runtime:lock-model-invocation",
+      rows: [{ ...invocationRow({ execution_status: "prepared" }), db_run_id: dbRunId }],
+    },
+    { tag: "workflow-runtime:lock-terminal-budget", rows: [] },
+    { tag: "workflow-runtime:complete-model-invocation", rowCount: 1 },
+    { tag: "workflow-runtime:read-model-invocation", rows: [terminal] },
+    { tag: "workflow-runtime:read-model-budget-reservation", rows: [] },
+  ]);
+  database.commitErrors = 1;
+  assert.deepEqual(await createStore(database).recordModelInvocationOutcome(failure), {
+    status: "recorded",
+  });
+  assert.equal(database.queries.some(
+    (query) => query.tag === "workflow-runtime:reconcile-budget-windows",
+  ), false);
+  database.done();
+});
+
+test("post-reservation failure without factual usage cannot release charged capacity", async () => {
+  const failure = invocationOutcome({
+    status: "failed", outcome: null, finishReason: null,
+    inputTokens: null, outputTokens: null, totalTokens: null,
+    latencyMs: null, costUsdMicros: null, errorCode: "invalid_provider_decision",
+  });
+  const database = new ScriptedDatabase([
+    { tag: "workflow-runtime:lock-model-invocation", rows: [{ ...invocationRow(), db_run_id: dbRunId }] },
+    { tag: "workflow-runtime:lock-terminal-budget", rows: [budgetReservationRow()] },
+  ]);
+  assert.deepEqual(await createStore(database).recordModelInvocationOutcome(failure), {
+    status: "recovery_required",
+  });
+  assert.equal(database.queries.some((query) => query.tag === "workflow-runtime:reconcile-budget-windows"), false);
+  database.done();
+});
+
+test("definitive factual zero-use failure releases its full reservation exactly once", async () => {
+  const failure = invocationOutcome({
+    status: "failed", outcome: "failed", finishReason: "error",
+    inputTokens: 0, outputTokens: 0, totalTokens: 0,
+    latencyMs: 7, costUsdMicros: 0, errorCode: "provider_rejected",
+  });
+  const database = new ScriptedDatabase([
+    { tag: "workflow-runtime:lock-model-invocation", rows: [{ ...invocationRow(), db_run_id: dbRunId }] },
+    { tag: "workflow-runtime:lock-terminal-budget", rows: [budgetReservationRow()] },
+    {
+      tag: "workflow-runtime:reconcile-budget-windows",
+      rowCount: 2,
+      inspect(values) { assert.deepEqual(values.slice(7, 9), [0, 0]); },
+    },
+    {
+      tag: "workflow-runtime:complete-budget-reservation",
+      rowCount: 1,
+      inspect(values) { assert.deepEqual(values.slice(2), ["released", null, null]); },
+    },
+    { tag: "workflow-runtime:complete-model-invocation", rowCount: 1 },
+  ]);
+  assert.deepEqual(await createStore(database).recordModelInvocationOutcome(failure), {
+    status: "recorded",
+  });
+  database.done();
+});
+
+test("factual usage above reservation is preserved and returns an invariant violation", async () => {
+  const overage = invocationOutcome({
+    inputTokens: 10,
+    outputTokens: 4_001,
+    totalTokens: 4_011,
+    costUsdMicros: 8_011,
+  });
+  const database = new ScriptedDatabase([
+    { tag: "workflow-runtime:lock-model-invocation", rows: [{ ...invocationRow(), db_run_id: dbRunId }] },
+    { tag: "workflow-runtime:lock-terminal-budget", rows: [budgetReservationRow()] },
+    {
+      tag: "workflow-runtime:reconcile-budget-windows",
+      rowCount: 2,
+      inspect(values) { assert.deepEqual(values.slice(7, 9), [4_011, 8_011]); },
+    },
+    { tag: "workflow-runtime:complete-budget-reservation", rowCount: 1 },
+    { tag: "workflow-runtime:complete-model-invocation", rowCount: 1 },
+  ]);
+  assert.deepEqual(await createStore(database).recordModelInvocationOutcome(overage), {
+    status: "invariant_violation",
+  });
+  database.done();
+});
+
+test("lost overage COMMIT acknowledgement preserves invariant violation without a second mutation", async () => {
+  const overage = invocationOutcome({
+    inputTokens: 10,
+    outputTokens: 4_001,
+    totalTokens: 4_011,
+    costUsdMicros: 8_011,
+  });
+  const terminal = invocationRow({
+    status: "succeeded", outcome: "succeeded", finish_reason: "stop",
+    input_tokens: "10", output_tokens: "4001", total_tokens: "4011",
+    latency_ms: "7", cost_usd_micros: "8011",
+  });
+  const database = new ScriptedDatabase([
+    { tag: "workflow-runtime:lock-model-invocation", rows: [{ ...invocationRow(), db_run_id: dbRunId }] },
+    { tag: "workflow-runtime:lock-terminal-budget", rows: [budgetReservationRow()] },
+    { tag: "workflow-runtime:reconcile-budget-windows", rowCount: 2 },
+    { tag: "workflow-runtime:complete-budget-reservation", rowCount: 1 },
+    { tag: "workflow-runtime:complete-model-invocation", rowCount: 1 },
+    { tag: "workflow-runtime:read-model-invocation", rows: [terminal] },
+    { tag: "workflow-runtime:read-model-budget-reservation", rows: [budgetReservationRow({
+      status: "settled", actual_total_tokens: "4011", actual_cost_usd_micros: "8011",
+    })] },
+  ]);
+  database.commitErrors = 1;
+  assert.deepEqual(await createStore(database).recordModelInvocationOutcome(overage), {
+    status: "invariant_violation",
+  });
+  assert.equal(database.queries.filter((query) => query.tag === "workflow-runtime:reconcile-budget-windows").length, 1);
+  database.done();
+});
+
+test("lost normal settlement acknowledgement proves the terminal budget without an invariant violation", async () => {
+  const terminal = invocationRow({
+    status: "succeeded", outcome: "succeeded", finish_reason: "stop",
+    input_tokens: "10", output_tokens: "5", total_tokens: "15",
+    latency_ms: "7", cost_usd_micros: "11",
+  });
+  const database = new ScriptedDatabase([
+    { tag: "workflow-runtime:lock-model-invocation", rows: [{ ...invocationRow(), db_run_id: dbRunId }] },
+    { tag: "workflow-runtime:lock-terminal-budget", rows: [budgetReservationRow()] },
+    { tag: "workflow-runtime:reconcile-budget-windows", rowCount: 2 },
+    { tag: "workflow-runtime:complete-budget-reservation", rowCount: 1 },
+    { tag: "workflow-runtime:complete-model-invocation", rowCount: 1 },
+    { tag: "workflow-runtime:read-model-invocation", rows: [terminal] },
+    { tag: "workflow-runtime:read-model-budget-reservation", rows: [budgetReservationRow({
+      status: "settled", actual_total_tokens: "15", actual_cost_usd_micros: "11",
+    })] },
+  ]);
+  database.commitErrors = 1;
+  assert.deepEqual(await createStore(database).recordModelInvocationOutcome(invocationOutcome()), {
+    status: "recorded",
+  });
+  database.done();
+});
+
+test("lost zero-use failure acknowledgement proves the released terminal budget", async () => {
+  const failure = invocationOutcome({
+    status: "failed", outcome: "failed", finishReason: "error",
+    inputTokens: 0, outputTokens: 0, totalTokens: 0,
+    latencyMs: 7, costUsdMicros: 0, errorCode: "provider_rejected",
+  });
+  const terminal = invocationRow({
+    status: "failed", outcome: "failed", finish_reason: "error",
+    input_tokens: "0", output_tokens: "0", total_tokens: "0",
+    latency_ms: "7", cost_usd_micros: "0", error_code: "provider_rejected",
+  });
+  const database = new ScriptedDatabase([
+    { tag: "workflow-runtime:lock-model-invocation", rows: [{ ...invocationRow(), db_run_id: dbRunId }] },
+    { tag: "workflow-runtime:lock-terminal-budget", rows: [budgetReservationRow()] },
+    { tag: "workflow-runtime:reconcile-budget-windows", rowCount: 2 },
+    { tag: "workflow-runtime:complete-budget-reservation", rowCount: 1 },
+    { tag: "workflow-runtime:complete-model-invocation", rowCount: 1 },
+    { tag: "workflow-runtime:read-model-invocation", rows: [terminal] },
+    { tag: "workflow-runtime:read-model-budget-reservation", rows: [budgetReservationRow({ status: "released" })] },
+  ]);
+  database.commitErrors = 1;
+  assert.deepEqual(await createStore(database).recordModelInvocationOutcome(failure), {
+    status: "recorded",
+  });
+  database.done();
+});
+
+test("ambiguous terminal outcome requires a mutually consistent terminal budget", async () => {
+  const terminal = invocationRow({
+    status: "succeeded", outcome: "succeeded", finish_reason: "stop",
+    input_tokens: "10", output_tokens: "5", total_tokens: "15",
+    latency_ms: "7", cost_usd_micros: "11",
+  });
+  for (const budgetRows of [
+    [],
+    [budgetReservationRow({ status: "settled", actual_total_tokens: "14", actual_cost_usd_micros: "11" })],
+  ]) {
+    const database = new ScriptedDatabase([
+      { tag: "workflow-runtime:lock-model-invocation", rows: [{ ...invocationRow(), db_run_id: dbRunId }] },
+      { tag: "workflow-runtime:lock-terminal-budget", rows: [budgetReservationRow()] },
+      { tag: "workflow-runtime:reconcile-budget-windows", rowCount: 2 },
+      { tag: "workflow-runtime:complete-budget-reservation", rowCount: 1 },
+      { tag: "workflow-runtime:complete-model-invocation", rowCount: 1 },
+      { tag: "workflow-runtime:read-model-invocation", rows: [terminal] },
+      { tag: "workflow-runtime:read-model-budget-reservation", rows: budgetRows },
+    ]);
+    database.commitErrors = 1;
+    assert.deepEqual(await createStore(database).recordModelInvocationOutcome(invocationOutcome()), {
+      status: "recovery_required",
+    });
+    database.done();
+  }
 });
 
 test("model invocation operations are workspace isolated and reject invalid identity before SQL", async () => {
@@ -2452,4 +2858,16 @@ test("production DB source is server-only, bounded, manual-migration-only, and c
   for (const token of ["prepared_provider_request", "api_key", "credential_value", "approval_evidence"]) {
     assert.equal(migration.includes(token), false, token);
   }
+});
+
+test("migration 0006 defines aggregate UTC budget windows and per-invocation reservations", () => {
+  const migration = readFileSync(
+    new URL("../db/migrations/0006_model_invocation_budgets.sql", import.meta.url),
+    "utf8",
+  );
+  assert.match(migration, /workflow_model_budget_windows/u);
+  assert.match(migration, /workflow_model_budget_reservations/u);
+  assert.match(migration, /reserved_amount/u);
+  assert.match(migration, /consumed_amount/u);
+  assert.match(migration, /outcome_unknown/u);
 });

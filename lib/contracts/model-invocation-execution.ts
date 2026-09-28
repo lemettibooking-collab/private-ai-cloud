@@ -17,6 +17,9 @@ import type {
   ModelProviderAdapterRunDecision,
   ModelProviderHealthValidationDecision,
   ModelProviderIdentity,
+  ModelProviderPreflight,
+  ModelProviderPreflightBudget,
+  ModelProviderPreflightDecision,
 } from "./model-provider-adapter";
 import type {
   ModelInvocationDataHandlingDecision,
@@ -83,6 +86,8 @@ export type ModelInvocationExecutionReasonCode =
   | "data_handling_invariant_violation"
   | "invalid_health_decision"
   | "provider_unavailable"
+  | "provider_preflight_denied"
+  | "generation_not_authorized"
   | "no_available_provider"
   | "provider_exception"
   | "invalid_provider_decision"
@@ -113,6 +118,28 @@ export type ModelInvocationExecutionInput = Readonly<{
 
 export interface ModelInvocationExecutionRuntimeContext {
   now(): string;
+}
+
+export type ModelInvocationExecutionPreflightContext = Readonly<{
+  request: ModelInvocationRequest;
+  candidate: ModelInvocationRouteCandidate;
+  invoke(budget: ModelProviderPreflightBudget): Promise<ModelProviderPreflightDecision>;
+}>;
+
+export type ModelInvocationExecutionGenerationContext = Readonly<{
+  request: ModelInvocationRequest;
+  candidate: ModelInvocationRouteCandidate;
+  preflight: ModelProviderPreflight;
+}>;
+
+export interface ModelInvocationExecutionAuthority {
+  prepare(input: ModelInvocationExecutionPreflightContext): Promise<Readonly<{
+    status: "ready" | "denied" | "recovery_required";
+    preflight: ModelProviderPreflight | null;
+  }>>;
+  authorizeGeneration(input: ModelInvocationExecutionGenerationContext): Promise<Readonly<{
+    status: "authorized" | "denied" | "recovery_required";
+  }>>;
 }
 
 type ModelInvocationDataHandlingEvidenceResolverInputCommon = Readonly<{
@@ -168,6 +195,7 @@ type CapturedProvider = Readonly<{
   sourceIndex: number;
   path: string;
   identity: ModelProviderIdentity;
+  preflight?: (input: unknown, budget: ModelProviderPreflightBudget) => unknown | Promise<unknown>;
   health: () => unknown | Promise<unknown>;
   run: (input: unknown) => unknown | Promise<unknown>;
 }>;
@@ -233,6 +261,7 @@ const legacyRouteInputFields = Object.freeze([
 ] as const);
 const evidenceResolverFields = Object.freeze(["resolve"] as const);
 const runtimeContextFields = Object.freeze(["now"] as const);
+const authorityFields = Object.freeze(["prepare", "authorizeGeneration"] as const);
 const canonicalTimestampPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
 
 function includes<T>(values: readonly T[], input: unknown): input is T {
@@ -375,7 +404,7 @@ function executionDeny(
 function executionAllow(
   routeDecision: ModelInvocationRouteResolutionDecision,
   candidate: ModelInvocationRouteCandidate,
-  healthDecision: ModelProviderHealthValidationDecision,
+  healthDecision: ModelProviderHealthValidationDecision | null,
   providerDecision: ModelProviderAdapterRunDecision,
   resultDecision: ModelInvocationResultDecision,
   result: ModelInvocationResult,
@@ -387,7 +416,7 @@ function executionAllow(
     reasons: [],
     routeDecision: auditSafeRouteDecision(routeDecision),
     selectedCandidate: cloneDecisionPart(candidate),
-    healthDecision: cloneDecisionPart(healthDecision),
+    healthDecision: healthDecision ? cloneDecisionPart(healthDecision) : null,
     providerDecision: cloneDecisionPart(providerDecision),
     resultDecision: cloneDecisionPart(resultDecision),
     normalizedResult: cloneDecisionPart(result),
@@ -525,6 +554,40 @@ function captureRuntimeContext(
   }
 }
 
+function captureAuthority(
+  input: unknown,
+  routeDecision: ModelInvocationRouteResolutionDecision,
+  reasons: MutableReasons,
+): ModelInvocationExecutionAuthority | null {
+  try {
+    if (!isPlainRecord(input)) {
+      addReason(reasons, "invalid_input", "authority", "Execution authority must be an ordinary object.", routeDecision);
+      return null;
+    }
+    const ownKeys = Reflect.ownKeys(input);
+    if (ownKeys.some((key) => typeof key !== "string")
+      || ownKeys.length !== authorityFields.length
+      || !authorityFields.every((field) => ownKeys.includes(field))) {
+      addReason(reasons, "invalid_input", "authority", "Execution authority must contain exactly both durable authority methods.", routeDecision);
+      return null;
+    }
+    const prepare = ownDataDescriptor(input, "prepare");
+    const authorizeGeneration = ownDataDescriptor(input, "authorizeGeneration");
+    if (!prepare || typeof prepare.value !== "function"
+      || !authorizeGeneration || typeof authorizeGeneration.value !== "function") {
+      addReason(reasons, "invalid_input", "authority", "Execution authority methods must be own callable data properties.", routeDecision);
+      return null;
+    }
+    return {
+      prepare: prepare.value as ModelInvocationExecutionAuthority["prepare"],
+      authorizeGeneration: authorizeGeneration.value as ModelInvocationExecutionAuthority["authorizeGeneration"],
+    };
+  } catch {
+    addReason(reasons, "invalid_input", "authority", "Execution authority could not be safely captured.", routeDecision);
+    return null;
+  }
+}
+
 function identityForCandidate(candidate: ModelInvocationRouteCandidate): ModelProviderIdentity {
   return {
     providerId: candidate.providerId,
@@ -539,6 +602,10 @@ function identityForCandidate(candidate: ModelInvocationRouteCandidate): ModelPr
 function requirementMatchesDeployment(candidate: ModelInvocationRouteCandidate): boolean {
   return (candidate.dataHandlingRequirement === "local_only" && candidate.deploymentMode === "local")
     || (candidate.dataHandlingRequirement !== "local_only" && candidate.deploymentMode === "remote");
+}
+
+function requiresDurableRemoteAuthority(candidate: ModelInvocationRouteCandidate): boolean {
+  return candidate.deploymentMode === "remote";
 }
 
 function evidenceResolverInput(
@@ -587,13 +654,14 @@ function captureProvider(
     }
     const ownKeys = Reflect.ownKeys(input);
     if (ownKeys.some((key) => typeof key !== "string")
-      || ownKeys.length !== providerFields.length
-      || !providerFields.every((field) => ownKeys.includes(field))) {
+      || (ownKeys.length !== providerFields.length && ownKeys.length !== providerFields.length + 1)
+      || !providerFields.every((field) => ownKeys.includes(field))
+      || (ownKeys.length === providerFields.length + 1 && !ownKeys.includes("preflight"))) {
       addReason(
         reasons,
         "invalid_provider_registry",
         path,
-        "Runtime provider must contain exactly identity, run, and health data properties.",
+        "Runtime provider must contain identity, run, health, and optionally preflight data properties.",
         routeDecision,
       );
       return null;
@@ -602,9 +670,13 @@ function captureProvider(
     const identityDescriptor = ownDataDescriptor(input, "identity");
     const runDescriptor = ownDataDescriptor(input, "run");
     const healthDescriptor = ownDataDescriptor(input, "health");
+    const preflightDescriptor = ownKeys.includes("preflight")
+      ? ownDataDescriptor(input, "preflight")
+      : null;
     if (!identityDescriptor || !runDescriptor || !healthDescriptor
       || typeof runDescriptor.value !== "function"
-      || typeof healthDescriptor.value !== "function") {
+      || typeof healthDescriptor.value !== "function"
+      || (preflightDescriptor !== null && typeof preflightDescriptor.value !== "function")) {
       addReason(
         reasons,
         "invalid_provider_registry",
@@ -631,6 +703,9 @@ function captureProvider(
       sourceIndex,
       path,
       identity: identityDecision.normalizedIdentity,
+      ...(preflightDescriptor
+        ? { preflight: preflightDescriptor.value as CapturedProvider["preflight"] }
+        : {}),
       run: runDescriptor.value as CapturedProvider["run"],
       health: healthDescriptor.value as CapturedProvider["health"],
     };
@@ -1003,6 +1078,7 @@ export async function executeModelInvocation(
   providers: unknown,
   evidenceResolver?: unknown,
   runtimeContext?: unknown,
+  authority?: ModelInvocationExecutionAuthority,
 ): Promise<ModelInvocationExecutionDecision> {
   const reasons: MutableReasons = [];
   const preflightRouteDecision = deniedRouteDecision();
@@ -1064,6 +1140,12 @@ export async function executeModelInvocation(
     reasons,
   );
   if (!capturedRuntimeContext) return executionDeny(preflightRouteDecision, reasons);
+  const capturedAuthority = authority === undefined
+    ? undefined
+    : captureAuthority(authority, preflightRouteDecision, reasons);
+  if (authority !== undefined && !capturedAuthority) {
+    return executionDeny(preflightRouteDecision, reasons);
+  }
 
   let rawEvaluatedAt: unknown;
   try {
@@ -1171,6 +1253,18 @@ export async function executeModelInvocation(
     );
     return executionDeny(routeDecision, reasons);
   }
+  const remoteAuthorityRequired = requiresDurableRemoteAuthority(candidate);
+  if (remoteAuthorityRequired && !capturedAuthority) {
+    addReason(
+      reasons,
+      "generation_not_authorized",
+      "authority",
+      "Remote provider execution requires complete durable invocation and budget authority.",
+      routeDecision,
+      candidate,
+    );
+    return executionDeny(routeDecision, reasons);
+  }
   const sourceRequestFingerprint = createModelInvocationRequestFingerprint(request);
   if (!sourceRequestFingerprint) {
     addReason(
@@ -1268,71 +1362,156 @@ export async function executeModelInvocation(
   const preparedRequest = dataHandlingDecision.preparedRequest as ModelInvocationRequest;
   const permit = dataHandlingDecision.permit as ModelInvocationDataHandlingPermit;
 
-  let rawHealthDecision: unknown;
-  try {
-    rawHealthDecision = await captured.health();
-  } catch {
-    addReason(
-      reasons,
-      "provider_exception",
-      `${captured.path}.health`,
-      "Provider health call failed closed.",
-      routeDecision,
-      candidate,
-    );
-    return executionDeny(routeDecision, reasons);
+  let providerPreflight: ModelProviderPreflight | null = null;
+  if (capturedAuthority || captured.preflight) {
+    const invoke = async (budget: ModelProviderPreflightBudget): Promise<ModelProviderPreflightDecision> => {
+      if (!captured.preflight) {
+        return freezeModelProviderAdapterData({
+          verdict: "deny",
+          reasons: [],
+          requestDecision: null,
+          normalizedPreflight: null,
+        });
+      }
+      return await captured.preflight(preparedRequest, budget) as ModelProviderPreflightDecision;
+    };
+    try {
+      if (capturedAuthority) {
+        const prepared = await capturedAuthority.prepare(freezeModelProviderAdapterData({
+          request: cloneDecisionPart(preparedRequest),
+          candidate: cloneDecisionPart(candidate),
+          invoke,
+        }));
+        providerPreflight = prepared?.status === "ready" ? prepared.preflight : null;
+      } else {
+        const prepared = await invoke({
+          authorizedMaxInputTokens: candidate.maxInputTokens,
+          authorizedMaxOutputTokens: candidate.maxOutputTokens,
+          maxCostUsdMicros: modelInvocationLimits.maxCostUsdMicros,
+          deploymentMaxInputTokens: candidate.maxInputTokens,
+          deploymentMaxOutputTokens: candidate.maxOutputTokens,
+          inputCostUsdMicrosPerMillionTokens: candidate.inputCostUsdMicrosPerMillionTokens,
+          outputCostUsdMicrosPerMillionTokens: candidate.outputCostUsdMicrosPerMillionTokens,
+        });
+        providerPreflight = prepared?.verdict === "allow" ? prepared.normalizedPreflight : null;
+      }
+    } catch {
+      providerPreflight = null;
+    }
+    if (!providerPreflight) {
+      addReason(
+        reasons,
+        "provider_preflight_denied",
+        `${captured.path}.preflight`,
+        "Provider input-token preflight or durable preflight authority denied generation.",
+        routeDecision,
+        candidate,
+      );
+      return executionDeny(routeDecision, reasons);
+    }
   }
-  const healthNormalization = normalizeHealthDecision(rawHealthDecision, candidate);
-  if (healthNormalization.kind === "identity_mismatch") {
-    addReason(
-      reasons,
-      "invalid_health_decision",
-      `${captured.path}.health.normalizedHealth`,
-      "Provider health identity does not match the factual execution candidate.",
-      routeDecision,
-      candidate,
-    );
-    return executionDeny(routeDecision, reasons, healthNormalization.decision);
+
+  let healthDecision: ModelProviderHealthValidationDecision | null = null;
+  if (!remoteAuthorityRequired) {
+    let rawHealthDecision: unknown;
+    try {
+      rawHealthDecision = await captured.health();
+    } catch {
+      addReason(
+        reasons,
+        "provider_exception",
+        `${captured.path}.health`,
+        "Provider health call failed closed.",
+        routeDecision,
+        candidate,
+      );
+      return executionDeny(routeDecision, reasons);
+    }
+    const healthNormalization = normalizeHealthDecision(rawHealthDecision, candidate);
+    if (healthNormalization.kind === "identity_mismatch") {
+      addReason(
+        reasons,
+        "invalid_health_decision",
+        `${captured.path}.health.normalizedHealth`,
+        "Provider health identity does not match the factual execution candidate.",
+        routeDecision,
+        candidate,
+      );
+      return executionDeny(routeDecision, reasons, healthNormalization.decision);
+    }
+    if (healthNormalization.kind === "invalid") {
+      addReason(
+        reasons,
+        "invalid_health_decision",
+        `${captured.path}.health`,
+        "Provider health returned an invalid decision.",
+        routeDecision,
+        candidate,
+      );
+      return executionDeny(routeDecision, reasons);
+    }
+    healthDecision = healthNormalization.decision;
+    if (healthDecision.verdict !== "allow" || !healthDecision.normalizedHealth) {
+      addReason(
+        reasons,
+        "invalid_health_decision",
+        `${captured.path}.health`,
+        "Provider health decision denied candidate use.",
+        routeDecision,
+        candidate,
+      );
+      return executionDeny(routeDecision, reasons, healthDecision);
+    }
+    if (healthDecision.normalizedHealth.status === "unavailable") {
+      addReason(
+        reasons,
+        "provider_unavailable",
+        `${captured.path}.health.normalizedHealth.status`,
+        "Provider reported unavailable health.",
+        routeDecision,
+        candidate,
+      );
+      return executionDeny(routeDecision, reasons, healthDecision);
+    }
   }
-  if (healthNormalization.kind === "invalid") {
-    addReason(
-      reasons,
-      "invalid_health_decision",
-      `${captured.path}.health`,
-      "Provider health returned an invalid decision.",
-      routeDecision,
-      candidate,
-    );
-    return executionDeny(routeDecision, reasons);
-  }
-  const healthDecision = healthNormalization.decision;
-  if (healthDecision.verdict !== "allow" || !healthDecision.normalizedHealth) {
-    addReason(
-      reasons,
-      "invalid_health_decision",
-      `${captured.path}.health`,
-      "Provider health decision denied candidate use.",
-      routeDecision,
-      candidate,
-    );
-    return executionDeny(routeDecision, reasons, healthDecision);
-  }
-  if (healthDecision.normalizedHealth.status === "unavailable") {
-    addReason(
-      reasons,
-      "provider_unavailable",
-      `${captured.path}.health.normalizedHealth.status`,
-      "Provider reported unavailable health.",
-      routeDecision,
-      candidate,
-    );
-    return executionDeny(routeDecision, reasons, healthDecision);
+
+  if (capturedAuthority) {
+    if (!providerPreflight) {
+      addReason(reasons, "generation_not_authorized", "authority", "Generation lacks preflight evidence.", routeDecision, candidate);
+      return executionDeny(routeDecision, reasons, healthDecision);
+    }
+    let authorization: Awaited<ReturnType<ModelInvocationExecutionAuthority["authorizeGeneration"]>>;
+    try {
+      authorization = await capturedAuthority.authorizeGeneration(freezeModelProviderAdapterData({
+        request: cloneDecisionPart(preparedRequest),
+        candidate: cloneDecisionPart(candidate),
+        preflight: cloneDecisionPart(providerPreflight),
+      }));
+    } catch {
+      authorization = { status: "recovery_required" };
+    }
+    if (!authorization || authorization.status !== "authorized") {
+      addReason(
+        reasons,
+        "generation_not_authorized",
+        "authority.authorizeGeneration",
+        "Final durable generation authority denied provider dispatch.",
+        routeDecision,
+        candidate,
+      );
+      return executionDeny(routeDecision, reasons, healthDecision);
+    }
   }
 
   let rawProviderDecision: unknown;
   try {
     const providerRequest = freezeModelProviderAdapterData(cloneDecisionPart(preparedRequest));
-    rawProviderDecision = await captured.run(providerRequest);
+    rawProviderDecision = await captured.run(providerPreflight
+      ? freezeModelProviderAdapterData({
+          request: providerRequest,
+          preflight: cloneDecisionPart(providerPreflight),
+        })
+      : providerRequest);
   } catch {
     addReason(
       reasons,

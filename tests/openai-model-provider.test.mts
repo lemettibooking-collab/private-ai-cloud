@@ -52,15 +52,18 @@ function assistantMessage(status: "completed" | "incomplete" = "completed", cont
 function reasoning(status: "completed" | "incomplete" = "completed") { return { id: "reasoning-one", type: "reasoning", status, summary: [{ type: "summary_text", text: "Private reasoning summary." }] }; }
 function response(overrides: Record<string, unknown> = {}) { return { model: "gpt-test-version", status: "completed", error: null, incomplete_details: null, output: [assistantMessage()], usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 }, ...overrides }; }
 
-type FakeState = { options: unknown[]; requests: unknown[]; models: string[]; responseValue: unknown; responseError: unknown; modelValue: unknown; modelError: unknown };
-function fakeState(): FakeState { return { options: [], requests: [], models: [], responseValue: response(), responseError: null, modelValue: { id: "gpt-test-pinned" }, modelError: null }; }
+type FakeState = { options: unknown[]; countRequests: unknown[]; requests: unknown[]; models: string[]; countValue: unknown; countError: unknown; responseValue: unknown; responseError: unknown; modelValue: unknown; modelError: unknown };
+function fakeState(): FakeState { return { options: [], countRequests: [], requests: [], models: [], countValue: { object: "response.input_tokens", input_tokens: 10 }, countError: null, responseValue: response(), responseError: null, modelValue: { id: "gpt-test-pinned" }, modelError: null }; }
 function factory(state = fakeState(), overrides: { config?: Record<string, unknown>; credentials?: unknown; times?: number[]; observedAt?: string } = {}) {
   const times = [...(overrides.times ?? [10, 15, 20, 25, 30, 35, 40, 45])];
   const decision = createOpenAIModelProvider(config(overrides.config), overrides.credentials ?? { apiKey: "sk-private-test-secret" }, {
     createClient(options) {
       state.options.push(clone(options));
       return {
-        responses: { async create(input) { state.requests.push(clone(input)); if (state.responseError) throw state.responseError; return state.responseValue; } },
+        responses: {
+          async create(input) { state.requests.push(clone(input)); if (state.responseError) throw state.responseError; return state.responseValue; },
+          inputTokens: { async count(input) { state.countRequests.push(clone(input)); if (state.countError) throw state.countError; return state.countValue; } },
+        },
         models: { async retrieve(model) { state.models.push(model); if (state.modelError) throw state.modelError; return state.modelValue; } },
       };
     },
@@ -68,6 +71,30 @@ function factory(state = fakeState(), overrides: { config?: Record<string, unkno
     observedAt: () => overrides.observedAt ?? "2026-08-26T10:15:30.000Z",
   });
   return { decision, state };
+}
+
+function preflightBudget(overrides: Record<string, unknown> = {}) {
+  return {
+    authorizedMaxInputTokens: 1_000,
+    authorizedMaxOutputTokens: 100,
+    maxCostUsdMicros: 1_000_000,
+    deploymentMaxInputTokens: 1_000,
+    deploymentMaxOutputTokens: 100,
+    inputCostUsdMicrosPerMillionTokens: 1_000_001,
+    outputCostUsdMicrosPerMillionTokens: 2_000_001,
+    ...overrides,
+  };
+}
+
+async function runProvider(
+  provider: import("../lib/contracts/model-provider-adapter").ModelProvider,
+  request: unknown,
+  budgetInput: Record<string, unknown> = preflightBudget(),
+): Promise<import("../lib/contracts/model-provider-adapter").ModelProviderAdapterRunDecision> {
+  const preflight = await provider.preflight(request, budgetInput as never);
+  assert.equal(preflight.verdict, "allow", JSON.stringify(preflight.reasons));
+  assert.ok(preflight.normalizedPreflight);
+  return provider.run({ request, preflight: preflight.normalizedPreflight });
 }
 
 test("exports frozen limits and exact factory verdict guards", () => {
@@ -88,8 +115,8 @@ test("factory accepts exact config and captures exact SDK options without exposi
   const { decision } = factory(state);
   assert.equal(decision.verdict, "allow", JSON.stringify(decision.reasons));
   assert.ok(decision.provider && decision.normalizedConfig);
-  assert.deepEqual(Object.keys(decision.provider).sort(), ["health", "identity", "run"]);
-  for (const key of ["identity", "run", "health"] as const) {
+  assert.deepEqual(Object.keys(decision.provider).sort(), ["health", "identity", "preflight", "run"]);
+  for (const key of ["identity", "preflight", "run", "health"] as const) {
     const descriptor = Object.getOwnPropertyDescriptor(decision.provider, key);
     assert.ok(descriptor && Object.hasOwn(descriptor, "value") && descriptor.get === undefined && descriptor.set === undefined);
   }
@@ -156,7 +183,7 @@ test("run maps messages in order, extracts first system instruction, and omits i
   const before = clone(request);
   const { decision, state } = factory();
   assert.ok(decision.provider);
-  const run = await decision.provider.run(request);
+  const run = await runProvider(decision.provider, request);
   assert.equal(run.verdict, "allow", JSON.stringify(run.reasons));
   assert.equal(state.requests.length, 1);
   assert.deepEqual(state.requests[0], { model: "gpt-test-pinned", instructions: "Follow bounded instructions.", input: [{ role: "user", content: "Prepare the proposal." }, { role: "assistant", content: "I will prepare it." }, { role: "user", content: "Keep it concise." }], store: false, stream: false, background: false, max_output_tokens: 100 });
@@ -167,18 +194,18 @@ test("run maps messages in order, extracts first system instruction, and omits i
 
 test("invalid and tool-bearing requests are denied before the SDK call", async () => {
   const invalidFactory = factory(); assert.ok(invalidFactory.decision.provider);
-  const invalid = await invalidFactory.decision.provider.run({});
-  assert.equal(invalid.verdict, "deny"); assert.equal(invalid.requestDecision?.verdict, "deny"); assert.equal(invalid.normalizedResult, null); assert.equal(invalidFactory.state.requests.length, 0);
+  const invalid = await invalidFactory.decision.provider.preflight({}, preflightBudget());
+  assert.equal(invalid.verdict, "deny"); assert.equal(invalid.requestDecision?.verdict, "deny"); assert.equal(invalid.normalizedPreflight, null); assert.equal(invalidFactory.state.requests.length, 0);
   const request = factualRequest();
   const toolFactory = factory(); assert.ok(toolFactory.decision.provider);
-  const tool = await toolFactory.decision.provider.run({ ...request, toolIds: ["tool-read"] });
-  assert.equal(tool.verdict, "deny"); assert.deepEqual(codes(tool), ["tool_not_allowed"]); assert.equal(tool.normalizedResult, null); assert.equal(toolFactory.state.requests.length, 0);
+  const tool = await toolFactory.decision.provider.preflight({ ...request, toolIds: ["tool-read"] }, preflightBudget());
+  assert.equal(tool.verdict, "deny"); assert.deepEqual(codes(tool), ["tool_not_allowed"]); assert.equal(tool.normalizedPreflight, null); assert.equal(toolFactory.state.requests.length, 0);
 });
 
 test("successful response produces factual exact usage, latency, version and rounded-up bigint cost", async () => {
   const state = fakeState(); state.responseValue = response({ usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 } });
   const { decision } = factory(state, { times: [100.2, 105.3] }); assert.ok(decision.provider);
-  const result = await decision.provider.run(factualRequest());
+  const result = await runProvider(decision.provider, factualRequest());
   assert.equal(result.verdict, "allow", JSON.stringify(result.reasons));
   assert.equal(result.normalizedResult?.outcome, "succeeded"); assert.equal(result.normalizedResult?.finishReason, "stop");
   assert.equal(result.normalizedResult?.latencyMs, 6); assert.equal(result.normalizedResult?.costUsdMicros, 21);
@@ -189,14 +216,14 @@ test("successful response produces factual exact usage, latency, version and rou
 test("completed response with a non-null provider error denies without leaking it", async () => {
   const state = fakeState(); state.responseValue = response({ error: { code: "server_error", message: "raw-completed-error-secret" } });
   const { decision } = factory(state); assert.ok(decision.provider);
-  const result = await decision.provider.run(factualRequest());
+  const result = await runProvider(decision.provider, factualRequest());
   assert.equal(result.verdict, "deny"); assert.equal(result.normalizedResult, null); assert.equal(JSON.stringify(result).includes("raw-completed-error-secret"), false); assert.equal(state.requests.length, 1);
 });
 
 test("completed response with incomplete details denies as an inconsistent terminal state", async () => {
   const state = fakeState(); state.responseValue = response({ incomplete_details: { reason: "max_output_tokens" } });
   const { decision } = factory(state); assert.ok(decision.provider);
-  const result = await decision.provider.run(factualRequest());
+  const result = await runProvider(decision.provider, factualRequest());
   assert.equal(result.verdict, "deny"); assert.equal(result.normalizedResult, null);
 });
 
@@ -204,7 +231,7 @@ test("failed, cancelled, unknown, and non-terminal response statuses deny even w
   for (const status of ["failed", "cancelled", "in_progress", "queued", "unknown"] as const) {
     const state = fakeState(); state.responseValue = response({ status, output: [assistantMessage("completed", [{ type: "refusal", refusal: "raw-status-refusal-secret" }])] });
     const { decision } = factory(state); assert.ok(decision.provider);
-    const result = await decision.provider.run(factualRequest());
+    const result = await runProvider(decision.provider, factualRequest());
     assert.equal(result.verdict, "deny"); assert.equal(result.normalizedResult, null); assert.equal(JSON.stringify(result).includes("raw-status-refusal-secret"), false);
   }
 });
@@ -213,7 +240,7 @@ test("incomplete response without one canonical incomplete reason denies", async
   for (const incomplete_details of [null, {}, { reason: "unknown" }, { reason: "max_output_tokens", extra: true }]) {
     const state = fakeState(); state.responseValue = response({ status: "incomplete", incomplete_details, output: [assistantMessage("incomplete")] });
     const { decision } = factory(state); assert.ok(decision.provider);
-    const result = await decision.provider.run(factualRequest());
+    const result = await runProvider(decision.provider, factualRequest());
     assert.equal(result.verdict, "deny"); assert.equal(result.normalizedResult, null);
   }
 });
@@ -221,7 +248,7 @@ test("incomplete response without one canonical incomplete reason denies", async
 test("output message with a non-assistant role denies", async () => {
   const state = fakeState(); state.responseValue = response({ output: [{ ...assistantMessage(), role: "user" }] });
   const { decision } = factory(state); assert.ok(decision.provider);
-  const result = await decision.provider.run(factualRequest());
+  const result = await runProvider(decision.provider, factualRequest());
   assert.equal(result.verdict, "deny"); assert.equal(result.normalizedResult, null);
 });
 
@@ -232,7 +259,7 @@ test("output message status must match the terminal response status", async () =
   ]) {
     const state = fakeState(); state.responseValue = value;
     const { decision } = factory(state); assert.ok(decision.provider);
-    const result = await decision.provider.run(factualRequest());
+    const result = await runProvider(decision.provider, factualRequest());
     assert.equal(result.verdict, "deny"); assert.equal(result.normalizedResult, null);
   }
 });
@@ -241,14 +268,14 @@ test("completed reasoning item before a canonical assistant message is safely ig
   const raw = response({ output: [reasoning(), assistantMessage()] }); const before = clone(raw);
   const state = fakeState(); state.responseValue = raw;
   const { decision } = factory(state); assert.ok(decision.provider);
-  const result = await decision.provider.run(factualRequest());
+  const result = await runProvider(decision.provider, factualRequest());
   assert.equal(result.verdict, "allow", JSON.stringify(result.reasons)); assert.equal(result.normalizedResult?.outputText, "Bounded OpenAI output."); assert.equal(JSON.stringify(result).includes("Private reasoning summary."), false); assert.deepEqual(raw, before); assert.equal(state.requests.length, 1);
 });
 
 test("reasoning-only response denies without exposing reasoning content", async () => {
   const state = fakeState(); state.responseValue = response({ output: [reasoning()] });
   const { decision } = factory(state); assert.ok(decision.provider);
-  const result = await decision.provider.run(factualRequest());
+  const result = await runProvider(decision.provider, factualRequest());
   assert.equal(result.verdict, "deny"); assert.equal(result.normalizedResult, null); assert.equal(JSON.stringify(result).includes("Private reasoning summary."), false);
 });
 
@@ -256,7 +283,7 @@ test("function, tool, web, file, computer, and unknown output items remain unsup
   for (const type of ["function_call", "custom_tool_call", "web_search_call", "file_search_call", "computer_call", "unknown_output"] as const) {
     const state = fakeState(); state.responseValue = response({ output: [{ type, status: "completed" }] });
     const { decision } = factory(state); assert.ok(decision.provider);
-    const result = await decision.provider.run(factualRequest());
+    const result = await runProvider(decision.provider, factualRequest());
     assert.equal(result.verdict, "deny", type); assert.equal(result.normalizedResult, null); assert.equal(state.requests.length, 1);
   }
 });
@@ -264,21 +291,21 @@ test("function, tool, web, file, computer, and unknown output items remain unsup
 test("unknown assistant content types deny without partial output", async () => {
   const state = fakeState(); state.responseValue = response({ output: [assistantMessage("completed", [{ type: "input_text", text: "not output" }])] });
   const { decision } = factory(state); assert.ok(decision.provider);
-  const result = await decision.provider.run(factualRequest());
+  const result = await runProvider(decision.provider, factualRequest());
   assert.equal(result.verdict, "deny"); assert.equal(result.normalizedResult, null);
 });
 
 test("incomplete max-output response maps meaningful partial text to length", async () => {
   const state = fakeState(); state.responseValue = response({ status: "incomplete", incomplete_details: { reason: "max_output_tokens" }, output: [assistantMessage("incomplete")] });
   const { decision } = factory(state); assert.ok(decision.provider);
-  const result = await decision.provider.run(factualRequest());
+  const result = await runProvider(decision.provider, factualRequest());
   assert.equal(result.normalizedResult?.outcome, "succeeded"); assert.equal(result.normalizedResult?.finishReason, "length");
 });
 
 test("max-output incomplete state with refusal content denies as contradictory", async () => {
   const state = fakeState(); state.responseValue = response({ status: "incomplete", incomplete_details: { reason: "max_output_tokens" }, output: [assistantMessage("incomplete", [{ type: "refusal", refusal: "raw-max-output-refusal" }])] });
   const { decision } = factory(state); assert.ok(decision.provider);
-  const result = await decision.provider.run(factualRequest());
+  const result = await runProvider(decision.provider, factualRequest());
   assert.equal(result.verdict, "deny"); assert.equal(result.normalizedResult, null); assert.equal(JSON.stringify(result).includes("raw-max-output-refusal"), false);
 });
 
@@ -289,7 +316,7 @@ test("refusal and content-filter incomplete responses map to safe content-filter
   ]) {
     const state = fakeState(); state.responseValue = value;
     const { decision } = factory(state); assert.ok(decision.provider);
-    const result = await decision.provider.run(factualRequest());
+    const result = await runProvider(decision.provider, factualRequest());
     assert.equal(result.verdict, "allow"); assert.equal(result.normalizedResult?.outcome, "failed"); assert.equal(result.normalizedResult?.finishReason, "content_filter"); assert.equal(result.normalizedResult?.outputText, null); assert.equal(result.normalizedResult?.error?.category, "content_filtered"); assert.equal(JSON.stringify(result).includes("raw-provider-refusal"), false);
   }
 });
@@ -297,7 +324,7 @@ test("refusal and content-filter incomplete responses map to safe content-filter
 test("simultaneous text and refusal content denies without exposing the refusal", async () => {
   const state = fakeState(); state.responseValue = response({ output: [assistantMessage("completed", [{ type: "output_text", text: "contradictory text" }, { type: "refusal", refusal: "raw-contradictory-refusal" }])] });
   const { decision } = factory(state); assert.ok(decision.provider);
-  const result = await decision.provider.run(factualRequest());
+  const result = await runProvider(decision.provider, factualRequest());
   assert.equal(result.verdict, "deny"); assert.equal(result.normalizedResult, null); assert.equal(JSON.stringify(result).includes("raw-contradictory-refusal"), false);
 });
 
@@ -312,7 +339,7 @@ test("dispatch-ambiguous SDK errors deny without fabricating a failed zero-cost 
   for (const error of cases) {
     const state = fakeState(); state.responseError = error;
     const { decision } = factory(state); assert.ok(decision.provider);
-    const result = await decision.provider.run(factualRequest());
+    const result = await runProvider(decision.provider, factualRequest());
     assert.equal(result.verdict, "deny"); assert.deepEqual(codes(result), ["provider_exception"]); assert.equal(result.normalizedResult, null); assert.equal(result.resultDecision, null); assert.equal(JSON.stringify(result).includes(error.message), false); assert.equal(state.requests.length, 1);
   }
 });
@@ -326,7 +353,7 @@ test("explicit provider rejection remains a factual failed result", async () => 
   for (const [error, category, retryable] of cases) {
     const state = fakeState(); state.responseError = error;
     const { decision } = factory(state); assert.ok(decision.provider);
-    const result = await decision.provider.run(factualRequest());
+    const result = await runProvider(decision.provider, factualRequest());
     assert.equal(result.verdict, "allow", JSON.stringify(result.reasons)); assert.equal(result.normalizedResult?.outcome, "failed"); assert.equal(result.normalizedResult?.error?.category, category); assert.equal(result.normalizedResult?.error?.retryable, retryable); assert.deepEqual(result.normalizedResult?.usage, { inputTokens: 0, outputTokens: 0, totalTokens: 0 }); assert.equal(result.normalizedResult?.costUsdMicros, 0); assert.equal(JSON.stringify(result).includes(error.message), false); assert.equal(state.requests.length, 1);
   }
 });
@@ -347,7 +374,7 @@ test("malformed, hostile, oversized, empty, tool, identity and invalid-usage res
   for (const value of values) {
     const state = fakeState(); state.responseValue = value;
     const { decision } = factory(state); assert.ok(decision.provider);
-    const result = await decision.provider.run(factualRequest());
+    const result = await runProvider(decision.provider, factualRequest());
     assert.equal(result.verdict, "deny"); assert.equal(result.normalizedResult, null); assert.equal(result.resultDecision, null); assert.equal(deeplyFrozen(result), true);
   }
 });
@@ -356,18 +383,18 @@ test("one run performs at most one Responses create call for both allow and mapp
   for (const value of [response(), response({ status: "failed", error: { code: "server_error", message: "raw-failed-secret" } })]) {
     const state = fakeState(); state.responseValue = value;
     const { decision } = factory(state); assert.ok(decision.provider);
-    const result = await decision.provider.run(factualRequest());
+    const result = await runProvider(decision.provider, factualRequest());
     assert.equal(state.requests.length, 1); assert.equal(JSON.stringify(result).includes("raw-failed-secret"), false);
   }
 });
 
 test("cost boundary is exact and overflow beyond canonical result cost denies", async () => {
-  const state = fakeState(); state.responseValue = response({ usage: { input_tokens: 1, output_tokens: 0, total_tokens: 1 } });
+  const state = fakeState(); state.countValue = { object: "response.input_tokens", input_tokens: 1 }; state.responseValue = response({ usage: { input_tokens: 1, output_tokens: 0, total_tokens: 1 } });
   const one = factory(state, { config: { inputCostUsdMicrosPerMillionTokens: 1, outputCostUsdMicrosPerMillionTokens: 0 } }); assert.ok(one.decision.provider);
-  assert.equal((await one.decision.provider.run(factualRequest())).normalizedResult?.costUsdMicros, 1);
-  const hugeState = fakeState(); hugeState.responseValue = response({ usage: { input_tokens: modelInvocationLimits.maxTokenCount, output_tokens: 0, total_tokens: modelInvocationLimits.maxTokenCount } });
+  assert.equal((await runProvider(one.decision.provider, factualRequest(), preflightBudget({ inputCostUsdMicrosPerMillionTokens: 1, outputCostUsdMicrosPerMillionTokens: 0 }))).normalizedResult?.costUsdMicros, 1);
+  const hugeState = fakeState(); hugeState.countValue = { object: "response.input_tokens", input_tokens: modelInvocationLimits.maxTokenCount }; hugeState.responseValue = response({ usage: { input_tokens: modelInvocationLimits.maxTokenCount, output_tokens: 0, total_tokens: modelInvocationLimits.maxTokenCount } });
   const huge = factory(hugeState, { config: { maxInputTokens: modelInvocationLimits.maxTokenCount, inputCostUsdMicrosPerMillionTokens: openAIModelProviderLimits.maxPriceUsdMicrosPerMillionTokens, outputCostUsdMicrosPerMillionTokens: 0 } }); assert.ok(huge.decision.provider);
-  const denied = await huge.decision.provider.run(factualRequest()); assert.equal(denied.verdict, "deny"); assert.equal(denied.normalizedResult, null);
+  const denied = await huge.decision.provider.preflight(factualRequest(), preflightBudget({ deploymentMaxInputTokens: modelInvocationLimits.maxTokenCount, inputCostUsdMicrosPerMillionTokens: openAIModelProviderLimits.maxPriceUsdMicrosPerMillionTokens, outputCostUsdMicrosPerMillionTokens: 0 })); assert.equal(denied.verdict, "deny"); assert.equal(denied.normalizedPreflight, null); assert.equal(hugeState.requests.length, 0);
 });
 
 test("health uses exactly one model retrieval and maps success, transient errors, auth and identity mismatch", async () => {
@@ -381,7 +408,7 @@ test("health uses exactly one model retrieval and maps success, transient errors
 test("repeated runs are deterministic fresh deeply frozen and caller inputs remain immutable", async () => {
   const request = factualRequest(); const before = clone(request);
   const repeated = factory(fakeState(), { times: [10, 15, 10, 15] }); assert.ok(repeated.decision.provider);
-  const first = await repeated.decision.provider.run(request); const second = await repeated.decision.provider.run(request);
+  const first = await runProvider(repeated.decision.provider, request); const second = await runProvider(repeated.decision.provider, request);
   assert.deepEqual(first, second); assert.notEqual(first, second); assert.notEqual(first.normalizedResult, second.normalizedResult); assert.equal(deeplyFrozen(first), true); assert.equal(deeplyFrozen(second), true); assert.deepEqual(request, before);
   assert.equal(repeated.state.requests.length, 2);
 });
@@ -403,4 +430,154 @@ test("production source audits official SDK isolation and forbidden browser, env
   for (const token of ["dangerously" + "AllowBrowser", "NEXT_PUBLIC_" + "OPENAI", "OPENAI_" + "API_KEY", "console" + ".", "process" + ".env", "base" + "URL", "previous_" + "response_id", "web_" + "search", "file_" + "search", "code_" + "interpreter", "computer_" + "use"]) assert.equal(providerSource.includes(token), false, token);
   const registrySource = readFileSync(new URL("../lib/contracts/model-provider-registry.ts", import.meta.url), "utf8");
   assert.equal(registrySource.includes('from "openai"'), false);
+});
+
+test("native token preflight is a separate bounded operation and pins count/create input parity", async () => {
+  const state = fakeState();
+  const created = factory(state);
+  assert.ok(created.decision.provider);
+  const provider = created.decision.provider as typeof created.decision.provider & {
+    preflight(input: unknown, budget: unknown): Promise<unknown>;
+  };
+  assert.equal(typeof provider.preflight, "function");
+  const preflight = await provider.preflight(factualRequest(), preflightBudget({
+    authorizedMaxOutputTokens: 40,
+  }));
+  assert.equal((preflight as { verdict: string }).verdict, "allow");
+  assert.equal(state.countRequests.length, 1);
+  assert.equal(state.requests.length, 0);
+});
+
+test("native preflight count and canonical create use the pinned model and identical input fields", async () => {
+  const state = fakeState();
+  const created = factory(state);
+  assert.ok(created.decision.provider);
+  const request = factualRequest();
+  const preflight = await created.decision.provider.preflight(request, preflightBudget());
+  assert.equal(preflight.verdict, "allow", JSON.stringify(preflight.reasons));
+  assert.ok(preflight.normalizedPreflight);
+  const generated = await created.decision.provider.run({
+    request,
+    preflight: preflight.normalizedPreflight,
+  });
+  assert.equal(generated.verdict, "allow", JSON.stringify(generated.reasons));
+  assert.equal(state.countRequests.length, 1);
+  assert.equal(state.requests.length, 1);
+  const counted = state.countRequests[0] as Record<string, unknown>;
+  const dispatched = state.requests[0] as Record<string, unknown>;
+  assert.equal(counted.model, "gpt-test-pinned");
+  assert.equal(dispatched.model, "gpt-test-pinned");
+  assert.deepEqual(dispatched.input, counted.input);
+  assert.equal(dispatched.instructions, counted.instructions);
+  assert.deepEqual(
+    { store: dispatched.store, stream: dispatched.stream, background: dispatched.background },
+    { store: false, stream: false, background: false },
+  );
+});
+
+test("malformed or failed native token count fails closed before create", async () => {
+  for (const setup of [
+    (state: FakeState) => { state.countValue = { object: "response.input_tokens", input_tokens: "10" }; },
+    (state: FakeState) => { state.countValue = { object: "wrong", input_tokens: 10 }; },
+    (state: FakeState) => { state.countError = new Error("private native count failure"); },
+  ]) {
+    const state = fakeState();
+    setup(state);
+    const created = factory(state);
+    assert.ok(created.decision.provider);
+    const decision = await created.decision.provider.preflight(factualRequest(), preflightBudget());
+    assert.equal(decision.verdict, "deny");
+    assert.equal(decision.normalizedPreflight, null);
+    assert.equal(state.countRequests.length, 1);
+    assert.equal(state.requests.length, 0);
+    assert.equal(JSON.stringify(decision).includes("private native count failure"), false);
+  }
+});
+
+test("authoritative input count above the authorized maximum denies before create", async () => {
+  const state = fakeState();
+  state.countValue = { object: "response.input_tokens", input_tokens: 4_001 };
+  const created = factory(state, {
+    config: { maxInputTokens: 8_000, maxOutputTokens: 4_000 },
+  });
+  assert.ok(created.decision.provider);
+  const decision = await created.decision.provider.preflight(factualRequest(), preflightBudget({
+    authorizedMaxInputTokens: 4_000,
+    authorizedMaxOutputTokens: 4_000,
+    deploymentMaxInputTokens: 8_000,
+    deploymentMaxOutputTokens: 4_000,
+  }));
+  assert.equal(decision.verdict, "deny");
+  assert.equal(decision.normalizedPreflight, null);
+  assert.equal(state.requests.length, 0);
+});
+
+test("canonical create clamps provider 16k output to the authorized 4k ceiling", async () => {
+  const state = fakeState();
+  const created = factory(state, {
+    config: { maxInputTokens: 128_000, maxOutputTokens: 16_000 },
+  });
+  assert.ok(created.decision.provider);
+  const request = factualRequest();
+  const preflight = await created.decision.provider.preflight(request, preflightBudget({
+    authorizedMaxInputTokens: 128_000,
+    authorizedMaxOutputTokens: 4_000,
+    deploymentMaxInputTokens: 128_000,
+    deploymentMaxOutputTokens: 16_000,
+  }));
+  assert.equal(preflight.verdict, "allow", JSON.stringify(preflight.reasons));
+  assert.equal(preflight.normalizedPreflight?.effectiveMaxOutputTokens, 4_000);
+  assert.ok(preflight.normalizedPreflight);
+  const generated = await created.decision.provider.run({ request, preflight: preflight.normalizedPreflight });
+  assert.equal(generated.verdict, "allow", JSON.stringify(generated.reasons));
+  assert.equal((state.requests[0] as Record<string, unknown>).max_output_tokens, 4_000);
+});
+
+test("integer-safe per-invocation cost limit floors the output ceiling conservatively", async () => {
+  const state = fakeState();
+  state.countValue = { object: "response.input_tokens", input_tokens: 10 };
+  state.responseValue = response({ usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 } });
+  const created = factory(state, {
+    config: {
+      maxInputTokens: 1_000,
+      maxOutputTokens: 100,
+      inputCostUsdMicrosPerMillionTokens: 1_000_000,
+      outputCostUsdMicrosPerMillionTokens: 2_000_000,
+    },
+  });
+  assert.ok(created.decision.provider);
+  const request = factualRequest();
+  const constrained = preflightBudget({
+    maxCostUsdMicros: 50,
+    inputCostUsdMicrosPerMillionTokens: 1_000_000,
+    outputCostUsdMicrosPerMillionTokens: 2_000_000,
+  });
+  const preflight = await created.decision.provider.preflight(request, constrained);
+  assert.equal(preflight.verdict, "allow", JSON.stringify(preflight.reasons));
+  assert.equal(preflight.normalizedPreflight?.effectiveMaxOutputTokens, 20);
+  assert.equal(preflight.normalizedPreflight?.maximumTotalTokens, 30);
+  assert.equal(preflight.normalizedPreflight?.maximumCostUsdMicros, 50);
+  assert.ok(preflight.normalizedPreflight);
+  await created.decision.provider.run({ request, preflight: preflight.normalizedPreflight });
+  assert.equal((state.requests[0] as Record<string, unknown>).max_output_tokens, 20);
+});
+
+test("input cost alone above the invocation limit denies without generation", async () => {
+  const state = fakeState();
+  state.countValue = { object: "response.input_tokens", input_tokens: 51 };
+  const created = factory(state, {
+    config: {
+      inputCostUsdMicrosPerMillionTokens: 1_000_000,
+      outputCostUsdMicrosPerMillionTokens: 2_000_000,
+    },
+  });
+  assert.ok(created.decision.provider);
+  const decision = await created.decision.provider.preflight(factualRequest(), preflightBudget({
+    maxCostUsdMicros: 50,
+    inputCostUsdMicrosPerMillionTokens: 1_000_000,
+    outputCostUsdMicrosPerMillionTokens: 2_000_000,
+  }));
+  assert.equal(decision.verdict, "deny");
+  assert.equal(decision.normalizedPreflight, null);
+  assert.equal(state.requests.length, 0);
 });

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import OpenAI, {
   APIConnectionError,
   APIConnectionTimeoutError,
@@ -20,8 +21,12 @@ import type {
   ModelProvider,
   ModelProviderAdapterReason,
   ModelProviderAdapterRunDecision,
+  ModelProviderGenerationInput,
   ModelProviderHealthValidationDecision,
   ModelProviderIdentity,
+  ModelProviderPreflight,
+  ModelProviderPreflightBudget,
+  ModelProviderPreflightDecision,
 } from "../contracts/model-provider-adapter";
 // @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
 import { modelInvocationLimits } from "../contracts/model-invocation.ts";
@@ -45,6 +50,8 @@ import { snapshotModelProviderAdapterInput } from "../contracts/model-provider-a
 import { validateAndNormalizeModelProviderHealth } from "../contracts/model-provider-adapter.ts";
 // @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
 import { validateAndNormalizeModelProviderIdentity } from "../contracts/model-provider-adapter.ts";
+// @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
+import { createModelInvocationRequestFingerprint } from "../contracts/model-invocation-data-handling.ts";
 
 export const openAIModelProviderFactoryVerdicts = modelProviderAdapterVerdicts;
 export type OpenAIModelProviderFactoryVerdict = (typeof openAIModelProviderFactoryVerdicts)[number];
@@ -94,9 +101,18 @@ export type OpenAIResponseCreateInput = Readonly<{
   max_output_tokens: number;
 }>;
 
+export type OpenAIInputTokenCountInput = Readonly<{
+  model: string;
+  instructions?: string;
+  input: readonly Readonly<{ role: "system" | "user" | "assistant"; content: string }>[];
+}>;
+
 export interface OpenAIModelProviderClient {
   readonly responses: Readonly<{
     create(input: OpenAIResponseCreateInput): Promise<unknown>;
+    inputTokens: Readonly<{
+      count(input: OpenAIInputTokenCountInput): Promise<unknown>;
+    }>;
   }>;
   readonly models: Readonly<{
     retrieve(model: string): Promise<unknown>;
@@ -145,6 +161,7 @@ type CapturedDependencies = Readonly<{
 
 type CapturedClient = Readonly<{
   createResponse: (input: OpenAIResponseCreateInput) => Promise<unknown>;
+  countInputTokens: (input: OpenAIInputTokenCountInput) => Promise<unknown>;
   retrieveModel: (model: string) => Promise<unknown>;
 }>;
 
@@ -273,6 +290,27 @@ function runDeny(
     requestDecision,
     resultDecision,
     normalizedResult: null,
+  });
+}
+
+function preflightDeny(
+  identity: ModelProviderIdentity,
+  code: string,
+  path: string,
+  message: string,
+  requestDecision: ModelInvocationRequestValidationDecision | null,
+): ModelProviderPreflightDecision {
+  return freezeModelProviderAdapterData({
+    verdict: "deny",
+    reasons: [adapterReason(
+      code,
+      path,
+      message,
+      identity,
+      requestDecision?.normalizedRequest?.invocationId ?? null,
+    )],
+    requestDecision,
+    normalizedPreflight: null,
   });
 }
 
@@ -460,10 +498,13 @@ function captureClient(client: OpenAIModelProviderClient): CapturedClient | null
     const responses = client.responses;
     const models = client.models;
     const createResponse = responses.create;
+    const countInputTokens = responses.inputTokens.count;
     const retrieveModel = models.retrieve;
-    if (typeof createResponse !== "function" || typeof retrieveModel !== "function") return null;
+    if (typeof createResponse !== "function" || typeof countInputTokens !== "function"
+      || typeof retrieveModel !== "function") return null;
     return {
       createResponse: createResponse.bind(responses),
+      countInputTokens: countInputTokens.bind(responses.inputTokens),
       retrieveModel: retrieveModel.bind(models),
     };
   } catch {
@@ -489,7 +530,22 @@ function calculateCost(
   return Number(rounded);
 }
 
-function responseInput(request: ModelInvocationRequest, config: OpenAIModelProviderConfig) {
+function canonicalData(input: unknown): string {
+  if (input === null) return "null";
+  if (typeof input === "string") return JSON.stringify(input);
+  if (typeof input === "number" || typeof input === "boolean") return String(input);
+  if (Array.isArray(input)) return `[${input.map(canonicalData).join(",")}]`;
+  const record = input as Record<string, unknown>;
+  return `{${Object.keys(record).sort().map(
+    (key) => `${JSON.stringify(key)}:${canonicalData(record[key])}`,
+  ).join(",")}}`;
+}
+
+function fingerprint(input: unknown): string {
+  return `sha256:${createHash("sha256").update(canonicalData(input)).digest("hex")}`;
+}
+
+function inputEnvelope(request: ModelInvocationRequest, config: OpenAIModelProviderConfig) {
   const firstSystemIndex = request.messages.findIndex((message) => message.role === "system");
   const input = request.messages
     .filter((_, index) => index !== firstSystemIndex)
@@ -497,18 +553,105 @@ function responseInput(request: ModelInvocationRequest, config: OpenAIModelProvi
       role: message.role as "system" | "user" | "assistant",
       content: message.content,
     }));
-  const output: OpenAIResponseCreateInput = {
+  const output: OpenAIInputTokenCountInput = {
     model: config.identity.providerRequestModelId,
     input,
-    store: false,
-    stream: false,
-    background: false,
-    max_output_tokens: config.maxOutputTokens,
     ...(firstSystemIndex >= 0
       ? { instructions: request.messages[firstSystemIndex]?.content }
       : {}),
   };
   return freezeModelProviderAdapterData(output);
+}
+
+function createInput(
+  envelope: OpenAIInputTokenCountInput,
+  effectiveMaxOutputTokens: number,
+): OpenAIResponseCreateInput {
+  return freezeModelProviderAdapterData({
+    ...cloneModelProviderAdapterData(envelope),
+    store: false,
+    stream: false,
+    background: false,
+    max_output_tokens: effectiveMaxOutputTokens,
+  });
+}
+
+function normalizePreflightBudget(
+  input: unknown,
+  config: OpenAIModelProviderConfig,
+): ModelProviderPreflightBudget | null {
+  const snapshot = snapshotModelProviderAdapterInput(input);
+  if (!snapshot.ok || !isPlainRecord(snapshot.value) || !hasExactFields(snapshot.value, [
+    "authorizedMaxInputTokens",
+    "authorizedMaxOutputTokens",
+    "maxCostUsdMicros",
+    "deploymentMaxInputTokens",
+    "deploymentMaxOutputTokens",
+    "inputCostUsdMicrosPerMillionTokens",
+    "outputCostUsdMicrosPerMillionTokens",
+  ])) return null;
+  const value = snapshot.value;
+  const normalized = {
+    authorizedMaxInputTokens: safeInteger(value.authorizedMaxInputTokens, 1, modelInvocationLimits.maxTokenCount),
+    authorizedMaxOutputTokens: safeInteger(value.authorizedMaxOutputTokens, 1, modelInvocationLimits.maxTokenCount),
+    maxCostUsdMicros: safeInteger(value.maxCostUsdMicros, 1, modelInvocationLimits.maxCostUsdMicros),
+    deploymentMaxInputTokens: safeInteger(value.deploymentMaxInputTokens, 1, modelInvocationLimits.maxTokenCount),
+    deploymentMaxOutputTokens: safeInteger(value.deploymentMaxOutputTokens, 1, modelInvocationLimits.maxTokenCount),
+    inputCostUsdMicrosPerMillionTokens: safeInteger(value.inputCostUsdMicrosPerMillionTokens, 0, openAIModelProviderLimits.maxPriceUsdMicrosPerMillionTokens),
+    outputCostUsdMicrosPerMillionTokens: safeInteger(value.outputCostUsdMicrosPerMillionTokens, 0, openAIModelProviderLimits.maxPriceUsdMicrosPerMillionTokens),
+  };
+  if (Object.values(normalized).some((entry) => entry === null)
+    || normalized.deploymentMaxInputTokens !== config.maxInputTokens
+    || normalized.deploymentMaxOutputTokens !== config.maxOutputTokens
+    || normalized.inputCostUsdMicrosPerMillionTokens !== config.inputCostUsdMicrosPerMillionTokens
+    || normalized.outputCostUsdMicrosPerMillionTokens !== config.outputCostUsdMicrosPerMillionTokens) {
+    return null;
+  }
+  return normalized as ModelProviderPreflightBudget;
+}
+
+function reservationBounds(
+  inputTokenCount: number,
+  budget: ModelProviderPreflightBudget,
+): Readonly<{
+  effectiveMaxOutputTokens: number;
+  maximumTotalTokens: number;
+  maximumCostUsdMicros: number;
+}> | null {
+  if (inputTokenCount > Math.min(
+    budget.authorizedMaxInputTokens,
+    budget.deploymentMaxInputTokens,
+  )) return null;
+  const million = BigInt(1_000_000);
+  const inputNumerator = BigInt(inputTokenCount)
+    * BigInt(budget.inputCostUsdMicrosPerMillionTokens);
+  const maximumCostNumerator = BigInt(budget.maxCostUsdMicros) * million;
+  if (inputNumerator > maximumCostNumerator) return null;
+  const baseOutputCap = Math.min(
+    budget.authorizedMaxOutputTokens,
+    budget.deploymentMaxOutputTokens,
+  );
+  const outputPrice = BigInt(budget.outputCostUsdMicrosPerMillionTokens);
+  const affordableOutput = outputPrice === BigInt(0)
+    ? BigInt(baseOutputCap)
+    : (maximumCostNumerator - inputNumerator) / outputPrice;
+  const effectiveBig = affordableOutput < BigInt(baseOutputCap)
+    ? affordableOutput
+    : BigInt(baseOutputCap);
+  if (effectiveBig < BigInt(1) || effectiveBig > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+  const effectiveMaxOutputTokens = Number(effectiveBig);
+  const maximumTotalBig = BigInt(inputTokenCount) + effectiveBig;
+  if (maximumTotalBig > BigInt(modelInvocationLimits.maxTokenCount)
+    || maximumTotalBig > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+  const costNumerator = inputNumerator + effectiveBig * outputPrice;
+  const maximumCostBig = (costNumerator + BigInt(999_999)) / million;
+  if (maximumCostBig > BigInt(budget.maxCostUsdMicros)
+    || maximumCostBig > BigInt(modelInvocationLimits.maxCostUsdMicros)) return null;
+  return {
+    effectiveMaxOutputTokens,
+    maximumTotalTokens: Number(maximumTotalBig),
+    maximumCostUsdMicros: Number(maximumCostBig),
+  };
 }
 
 function classifyError(error: unknown): ErrorClassification {
@@ -536,6 +679,7 @@ function classifyError(error: unknown): ErrorClassification {
 function usageFromResponse(
   input: Record<string, unknown>,
   config: OpenAIModelProviderConfig,
+  preflight: ModelProviderPreflight,
 ): Readonly<{ inputTokens: number; outputTokens: number; totalTokens: number; cost: number }> | null {
   const usage = input.usage;
   if (!isPlainRecord(usage)) return null;
@@ -544,7 +688,9 @@ function usageFromResponse(
   const totalTokens = safeInteger(usage.total_tokens, 0, modelInvocationLimits.maxTokenCount);
   if (inputTokens === null || outputTokens === null || totalTokens === null
     || totalTokens !== inputTokens + outputTokens
-    || inputTokens > config.maxInputTokens || outputTokens > config.maxOutputTokens) return null;
+    || inputTokens !== preflight.inputTokenCount
+    || inputTokens > config.maxInputTokens
+    || outputTokens > preflight.effectiveMaxOutputTokens) return null;
   const cost = calculateCost(inputTokens, outputTokens, config);
   return cost === null ? null : { inputTokens, outputTokens, totalTokens, cost };
 }
@@ -596,6 +742,7 @@ function mapResponse(
   input: unknown,
   request: ModelInvocationRequest,
   config: OpenAIModelProviderConfig,
+  preflight: ModelProviderPreflight,
   latencyMs: number,
 ): MappedResponse {
   const snapshot = snapshotModelProviderAdapterInput(input);
@@ -625,7 +772,7 @@ function mapResponse(
   if (incompleteReason === undefined) {
     return { ok: false, code: "invalid_response", message: "OpenAI response status and incomplete details are inconsistent." };
   }
-  const usage = usageFromResponse(response, config);
+  const usage = usageFromResponse(response, config, preflight);
   if (!usage) return { ok: false, code: "usage_mismatch", message: "OpenAI response usage is invalid or exceeds configured limits." };
   const output = extractOutput(response, response.status);
   if (!output) return { ok: false, code: "invalid_response", message: "OpenAI response output shape is unsupported." };
@@ -771,8 +918,127 @@ function createProvider(
   );
   const provider: ModelProvider = {
     identity: publicIdentity,
-    async run(input: unknown): Promise<ModelProviderAdapterRunDecision> {
+    async preflight(
+      input: unknown,
+      budgetInput: ModelProviderPreflightBudget,
+    ): Promise<ModelProviderPreflightDecision> {
       const requestDecision = validateAndNormalizeModelInvocationRequest(input);
+      if (requestDecision.verdict !== "allow" || !requestDecision.normalizedRequest) {
+        return preflightDeny(
+          publicIdentity,
+          "invalid_request",
+          "$",
+          "Request failed factual AI-022 validation.",
+          requestDecision,
+        );
+      }
+      const request = requestDecision.normalizedRequest;
+      if (request.toolIds.length > 0 || request.messages.some(
+        (message) => message.role === "tool" || message.content.trim().length === 0,
+      )) {
+        return preflightDeny(
+          publicIdentity,
+          request.toolIds.length > 0 ? "tool_not_allowed" : "unsupported_request",
+          request.toolIds.length > 0 ? "$.toolIds" : "$.messages",
+          "OpenAI preflight supports meaningful text messages without tools.",
+          requestDecision,
+        );
+      }
+      const budget = normalizePreflightBudget(budgetInput, internalConfig);
+      if (!budget) {
+        return preflightDeny(
+          publicIdentity,
+          "invalid_input",
+          "budget",
+          "Preflight budget does not exactly match the factual deployment limits.",
+          requestDecision,
+        );
+      }
+      const envelope = inputEnvelope(request, internalConfig);
+      let rawCount: unknown;
+      try {
+        rawCount = await client.countInputTokens(envelope);
+      } catch {
+        return preflightDeny(
+          publicIdentity,
+          "provider_exception",
+          "inputTokens.count",
+          "OpenAI input-token preflight failed closed before generation.",
+          requestDecision,
+        );
+      }
+      const countSnapshot = snapshotModelProviderAdapterInput(rawCount);
+      if (!countSnapshot.ok || !isPlainRecord(countSnapshot.value)
+        || !hasExactFields(countSnapshot.value, ["object", "input_tokens"])
+        || countSnapshot.value.object !== "response.input_tokens") {
+        return preflightDeny(
+          publicIdentity,
+          "invalid_response",
+          "inputTokens.count",
+          "OpenAI input-token preflight returned an invalid response.",
+          requestDecision,
+        );
+      }
+      const inputTokenCount = safeInteger(
+        countSnapshot.value.input_tokens,
+        0,
+        modelInvocationLimits.maxTokenCount,
+      );
+      const bounds = inputTokenCount === null ? null : reservationBounds(inputTokenCount, budget);
+      if (inputTokenCount === null || !bounds) {
+        return preflightDeny(
+          publicIdentity,
+          "limit_exceeded",
+          "inputTokens.count.input_tokens",
+          "Authoritative input usage or its worst-case generation budget exceeds the authorized limit.",
+          requestDecision,
+        );
+      }
+      const sourceRequestFingerprint = createModelInvocationRequestFingerprint(request);
+      if (!sourceRequestFingerprint) {
+        return preflightDeny(
+          publicIdentity,
+          "invalid_request",
+          "$",
+          "Source request fingerprint could not be created.",
+          requestDecision,
+        );
+      }
+      const canonicalCreate = createInput(envelope, bounds.effectiveMaxOutputTokens);
+      return freezeModelProviderAdapterData({
+        verdict: "allow",
+        reasons: [],
+        requestDecision,
+        normalizedPreflight: {
+          providerId: publicIdentity.providerId,
+          deploymentId: publicIdentity.deploymentId,
+          providerModelId: publicIdentity.providerModelId,
+          providerRequestModelId: publicIdentity.providerRequestModelId,
+          providerModelVersion: publicIdentity.providerModelVersion,
+          sourceRequestFingerprint,
+          inputEnvelopeFingerprint: fingerprint(envelope),
+          canonicalRequestFingerprint: fingerprint(canonicalCreate),
+          inputTokenCount,
+          effectiveMaxOutputTokens: bounds.effectiveMaxOutputTokens,
+          maximumTotalTokens: bounds.maximumTotalTokens,
+          maximumCostUsdMicros: bounds.maximumCostUsdMicros,
+        },
+      });
+    },
+    async run(input: unknown): Promise<ModelProviderAdapterRunDecision> {
+      const generationSnapshot = snapshotModelProviderAdapterInput(input);
+      if (!generationSnapshot.ok || !isPlainRecord(generationSnapshot.value)
+        || !hasExactFields(generationSnapshot.value, ["request", "preflight"])) {
+        return runDeny(
+          publicIdentity,
+          "invalid_request",
+          "$",
+          "Generation requires an exact immutable preflight proof.",
+          null,
+        );
+      }
+      const generation = generationSnapshot.value as ModelProviderGenerationInput;
+      const requestDecision = validateAndNormalizeModelInvocationRequest(generation.request);
       if (requestDecision.verdict !== "allow" || !requestDecision.normalizedRequest) {
         return runDeny(
           publicIdentity,
@@ -803,14 +1069,66 @@ function createProvider(
         );
       }
 
+      const preflightSnapshot = snapshotModelProviderAdapterInput(generation.preflight);
+      const proofFields = [
+        "providerId", "deploymentId", "providerModelId", "providerRequestModelId",
+        "providerModelVersion", "sourceRequestFingerprint", "inputEnvelopeFingerprint",
+        "canonicalRequestFingerprint", "inputTokenCount", "effectiveMaxOutputTokens",
+        "maximumTotalTokens", "maximumCostUsdMicros",
+      ];
+      if (!preflightSnapshot.ok || !isPlainRecord(preflightSnapshot.value)
+        || !hasExactFields(preflightSnapshot.value, proofFields)) {
+        return runDeny(publicIdentity, "invalid_request", "$.preflight", "Preflight proof is invalid.", requestDecision);
+      }
+      const proof = preflightSnapshot.value;
+      const inputTokenCount = safeInteger(proof.inputTokenCount, 0, modelInvocationLimits.maxTokenCount);
+      const effectiveMaxOutputTokens = safeInteger(proof.effectiveMaxOutputTokens, 1, internalConfig.maxOutputTokens);
+      const maximumTotalTokens = safeInteger(proof.maximumTotalTokens, 1, modelInvocationLimits.maxTokenCount);
+      const maximumCostUsdMicros = safeInteger(proof.maximumCostUsdMicros, 0, modelInvocationLimits.maxCostUsdMicros);
+      const envelope = inputEnvelope(request, internalConfig);
+      const canonicalCreate = effectiveMaxOutputTokens === null
+        ? null
+        : createInput(envelope, effectiveMaxOutputTokens);
+      const sourceRequestFingerprint = createModelInvocationRequestFingerprint(request);
+      const expectedCost = inputTokenCount === null || effectiveMaxOutputTokens === null
+        ? null
+        : calculateCost(inputTokenCount, effectiveMaxOutputTokens, internalConfig);
+      if (proof.providerId !== publicIdentity.providerId
+        || proof.deploymentId !== publicIdentity.deploymentId
+        || proof.providerModelId !== publicIdentity.providerModelId
+        || proof.providerRequestModelId !== publicIdentity.providerRequestModelId
+        || proof.providerModelVersion !== publicIdentity.providerModelVersion
+        || sourceRequestFingerprint === null
+        || proof.sourceRequestFingerprint !== sourceRequestFingerprint
+        || proof.inputEnvelopeFingerprint !== fingerprint(envelope)
+        || canonicalCreate === null
+        || proof.canonicalRequestFingerprint !== fingerprint(canonicalCreate)
+        || inputTokenCount === null || effectiveMaxOutputTokens === null
+        || maximumTotalTokens !== inputTokenCount + effectiveMaxOutputTokens
+        || maximumCostUsdMicros === null || expectedCost !== maximumCostUsdMicros) {
+        return runDeny(
+          publicIdentity,
+          "identity_mismatch",
+          "$.preflight",
+          "Preflight proof does not bind the exact canonical generation request.",
+          requestDecision,
+        );
+      }
+
       const start = dependencies.monotonicNow();
       try {
-        const rawResponse = await client.createResponse(responseInput(request, internalConfig));
+        const rawResponse = await client.createResponse(canonicalCreate);
         const latencyMs = elapsedMilliseconds(start, dependencies.monotonicNow());
         if (latencyMs === null) {
           return runDeny(publicIdentity, "invalid_response", "response", "OpenAI latency is invalid.", requestDecision);
         }
-        const mapped = mapResponse(rawResponse, request, internalConfig, latencyMs);
+        const mapped = mapResponse(
+          rawResponse,
+          request,
+          internalConfig,
+          proof as ModelProviderPreflight,
+          latencyMs,
+        );
         if (!mapped.ok) {
           return runDeny(publicIdentity, mapped.code, "response", mapped.message, requestDecision);
         }

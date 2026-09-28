@@ -13,6 +13,7 @@ import type {
   WorkflowRuntimeStateStore,
 } from "../workflows/workflow-runtime-service";
 import type {
+  AgentStepModelBudgetReservation,
   AgentStepModelInvocationOutcome,
   AgentStepModelInvocationReservation,
 } from "../workflows/agent-step-runtime";
@@ -118,6 +119,35 @@ type ExecutionRow = Record<string, unknown> & {
 
 type ProviderStartInvocationRow = Record<string, unknown> & {
   status: "running" | "succeeded" | "failed" | "outcome_unknown";
+  budget_status?: "reserved" | "settled" | "released" | "outcome_unknown";
+};
+
+type ModelBudgetReservationRow = Record<string, unknown> & {
+  status: "reserved" | "settled" | "released" | "outcome_unknown";
+  invocation_id: string;
+  project_id: string;
+  department_id: string;
+  workflow_id: string;
+  workflow_binding_id: string;
+  workflow_binding_version: string | number;
+  request_fingerprint: string;
+  input_envelope_fingerprint: string;
+  canonical_request_fingerprint: string;
+  provider_id: string;
+  deployment_id: string;
+  provider_model_id: string;
+  provider_request_model_id: string;
+  provider_model_version: string;
+  input_token_count: string | number;
+  effective_max_output_tokens: string | number;
+  reserved_total_tokens: string | number;
+  reserved_cost_usd_micros: string | number;
+  daily_token_budget: string | number;
+  monthly_cost_budget_usd_micros: string | number;
+  daily_window_start: Date | string;
+  monthly_window_start: Date | string;
+  actual_total_tokens: string | number | null;
+  actual_cost_usd_micros: string | number | null;
 };
 
 type RuntimeApprovalRow = Record<string, unknown> & {
@@ -506,6 +536,25 @@ function validInvocationReservation(input: AgentStepModelInvocationReservation):
     && safeProviderIdentifier(input.providerModelVersion);
 }
 
+function validBudgetReservation(input: AgentStepModelBudgetReservation): boolean {
+  return validInvocationReservation(input)
+    && stableIdPattern.test(input.departmentId)
+    && stableIdPattern.test(input.workflowBindingId)
+    && safeInteger(input.workflowBindingVersion) && input.workflowBindingVersion >= 1
+    && invocationFingerprintPattern.test(input.inputEnvelopeFingerprint)
+    && invocationFingerprintPattern.test(input.canonicalRequestFingerprint)
+    && safeInteger(input.inputTokenCount)
+    && safeInteger(input.effectiveMaxOutputTokens) && input.effectiveMaxOutputTokens >= 1
+    && safeInteger(input.reservedTotalTokens)
+    && input.reservedTotalTokens === input.inputTokenCount + input.effectiveMaxOutputTokens
+    && input.reservedTotalTokens <= modelInvocationLimits.maxTokenCount
+    && safeInteger(input.reservedCostUsdMicros)
+    && input.reservedCostUsdMicros <= modelInvocationLimits.maxCostUsdMicros
+    && safeInteger(input.dailyTokenBudget)
+    && safeInteger(input.monthlyCostBudgetUsdMicros)
+    && input.monthlyCostBudgetUsdMicros <= modelInvocationLimits.maxCostUsdMicros;
+}
+
 function validInvocationOutcome(input: AgentStepModelInvocationOutcome): boolean {
   const hasUsage = input.outcome !== null || input.finishReason !== null
     || input.inputTokens !== null || input.outputTokens !== null || input.totalTokens !== null
@@ -558,6 +607,32 @@ function sameReservation(row: ModelInvocationRow, input: AgentStepModelInvocatio
     && row.provider_model_version === input.providerModelVersion;
 }
 
+function sameBudgetReservation(
+  row: ModelBudgetReservationRow,
+  input: AgentStepModelBudgetReservation,
+): boolean {
+  return row.invocation_id === input.invocationId
+    && row.project_id === input.projectId
+    && row.department_id === input.departmentId
+    && row.workflow_id === input.workflowId
+    && row.workflow_binding_id === input.workflowBindingId
+    && databaseInteger(row.workflow_binding_version) === input.workflowBindingVersion
+    && row.request_fingerprint === input.requestFingerprint
+    && row.input_envelope_fingerprint === input.inputEnvelopeFingerprint
+    && row.canonical_request_fingerprint === input.canonicalRequestFingerprint
+    && row.provider_id === input.providerId
+    && row.deployment_id === input.deploymentId
+    && row.provider_model_id === input.providerModelId
+    && row.provider_request_model_id === input.providerRequestModelId
+    && row.provider_model_version === input.providerModelVersion
+    && databaseInteger(row.input_token_count) === input.inputTokenCount
+    && databaseInteger(row.effective_max_output_tokens) === input.effectiveMaxOutputTokens
+    && databaseInteger(row.reserved_total_tokens) === input.reservedTotalTokens
+    && databaseInteger(row.reserved_cost_usd_micros) === input.reservedCostUsdMicros
+    && databaseInteger(row.daily_token_budget) === input.dailyTokenBudget
+    && databaseInteger(row.monthly_cost_budget_usd_micros) === input.monthlyCostBudgetUsdMicros;
+}
+
 function sameOutcome(row: ModelInvocationRow, input: AgentStepModelInvocationOutcome): boolean {
   return row.status === input.status
     && row.outcome === input.outcome
@@ -568,6 +643,65 @@ function sameOutcome(row: ModelInvocationRow, input: AgentStepModelInvocationOut
     && (row.latency_ms === null ? null : databaseInteger(row.latency_ms)) === input.latencyMs
     && (row.cost_usd_micros === null ? null : databaseInteger(row.cost_usd_micros)) === input.costUsdMicros
     && row.error_code === input.errorCode;
+}
+
+function budgetMatchesTerminalInvocation(
+  budget: ModelBudgetReservationRow,
+  invocation: ModelInvocationRow,
+  input: AgentStepModelInvocationOutcome,
+): boolean {
+  return budget.invocation_id === input.invocationId
+    && budget.request_fingerprint === input.requestFingerprint
+    && budget.project_id === invocation.project_id
+    && budget.workflow_id === invocation.workflow_id
+    && budget.provider_id === invocation.provider_id
+    && budget.deployment_id === invocation.deployment_id
+    && budget.provider_model_id === invocation.provider_model_id
+    && budget.provider_request_model_id === invocation.provider_request_model_id
+    && budget.provider_model_version === invocation.provider_model_version;
+}
+
+function recoveredOutcomeStatus(
+  invocation: ModelInvocationRow,
+  budget: ModelBudgetReservationRow | null,
+  input: AgentStepModelInvocationOutcome,
+): "recorded" | "invariant_violation" | "recovery_required" {
+  const hasUsage = input.outcome !== null || input.finishReason !== null
+    || input.inputTokens !== null || input.outputTokens !== null || input.totalTokens !== null
+    || input.latencyMs !== null || input.costUsdMicros !== null;
+  if (input.status === "outcome_unknown") {
+    return budget !== null && budgetMatchesTerminalInvocation(budget, invocation, input)
+      && budget.status === "outcome_unknown"
+      && budget.actual_total_tokens === null && budget.actual_cost_usd_micros === null
+      ? "recorded"
+      : "recovery_required";
+  }
+  if (!hasUsage) {
+    return input.status === "failed" && budget === null ? "recorded" : "recovery_required";
+  }
+  if (!budget || !budgetMatchesTerminalInvocation(budget, invocation, input)) {
+    return "recovery_required";
+  }
+  const zeroUseFailure = input.status === "failed"
+    && input.totalTokens === 0 && input.costUsdMicros === 0;
+  if (zeroUseFailure) {
+    return budget.status === "released"
+      && budget.actual_total_tokens === null && budget.actual_cost_usd_micros === null
+      ? "recorded"
+      : "recovery_required";
+  }
+  const actualTokens = databaseInteger(budget.actual_total_tokens as string | number);
+  const actualCost = databaseInteger(budget.actual_cost_usd_micros as string | number);
+  const reservedTokens = databaseInteger(budget.reserved_total_tokens);
+  const reservedCost = databaseInteger(budget.reserved_cost_usd_micros);
+  if (budget.status !== "settled" || actualTokens === null || actualCost === null
+    || reservedTokens === null || reservedCost === null
+    || actualTokens !== input.totalTokens || actualCost !== input.costUsdMicros) {
+    return "recovery_required";
+  }
+  return actualTokens > reservedTokens || actualCost > reservedCost
+    ? "invariant_violation"
+    : "recorded";
 }
 
 export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateStore {
@@ -684,6 +818,43 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
     } catch (error) {
       if (error instanceof WorkflowRuntimePersistenceError) throw error;
       throw persistenceError("Model invocation lookup failed closed.");
+    } finally {
+      client?.release();
+    }
+  }
+
+  async #readBudgetReservation(
+    runId: string,
+    invocationId: string,
+  ): Promise<ModelBudgetReservationRow | null> {
+    let client: WorkflowRuntimeSqlClient | null = null;
+    try {
+      client = await this.#database.connect();
+      const result = await client.query<ModelBudgetReservationRow>(
+        `/* workflow-runtime:read-model-budget-reservation */
+         select budget.status, budget.invocation_id, budget.project_id,
+                budget.department_id, budget.workflow_id, budget.workflow_binding_id,
+                budget.workflow_binding_version::text, budget.request_fingerprint,
+                budget.input_envelope_fingerprint, budget.canonical_request_fingerprint,
+                budget.provider_id, budget.deployment_id, budget.provider_model_id,
+                budget.provider_request_model_id, budget.provider_model_version,
+                budget.input_token_count::text, budget.effective_max_output_tokens::text,
+                budget.reserved_total_tokens::text, budget.reserved_cost_usd_micros::text,
+                budget.daily_token_budget::text, budget.monthly_cost_budget_usd_micros::text,
+                budget.daily_window_start, budget.monthly_window_start,
+                budget.actual_total_tokens::text, budget.actual_cost_usd_micros::text
+         from workflow_model_budget_reservations as budget
+         join workflow_runs as run on run.id = budget.workflow_run_id
+         where budget.workspace_id = $1 and run.workspace_id = $1
+           and run.runtime_id = $2 and budget.invocation_id = $3`,
+        [this.#workspaceDatabaseId, runId, invocationId],
+      );
+      if (result.rowCount === 0) return null;
+      if (result.rowCount !== 1) throw persistenceError("Budget reservation lookup is ambiguous.");
+      return result.rows[0];
+    } catch (error) {
+      if (error instanceof WorkflowRuntimePersistenceError) throw error;
+      throw persistenceError("Budget reservation lookup failed closed.");
     } finally {
       client?.release();
     }
@@ -1348,16 +1519,75 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
     });
   }
 
+  async authorizeModelInvocationPreflight(input: Readonly<{
+    runId: string;
+    claimId: string;
+    reservation: AgentStepModelInvocationReservation;
+  }>): ReturnType<NonNullable<WorkflowRuntimeStateStore["authorizeModelInvocationPreflight"]>> {
+    const reservation = input.reservation;
+    if (!stableIdPattern.test(input.runId) || !uuidPattern.test(input.claimId)
+      || !validInvocationReservation(reservation)
+      || reservation.workspaceId !== this.#workspaceId || reservation.runId !== input.runId) {
+      return { status: "conflict" };
+    }
+    return transaction(this.#database, async (client) => {
+      const authorized = await client.query<ProviderStartInvocationRow>(
+        `/* workflow-runtime:provider-preflight-fence */
+         select invocation.status
+         from workflow_runtime_executions as execution
+         join workflow_runtime_claims as claim
+           on claim.id = execution.claim_id and claim.run_id = execution.run_id
+          and claim.step_id = execution.step_id
+          and claim.attempt_number = execution.attempt_number
+          and claim.expected_revision = execution.expected_revision
+          and claim.execution_id = execution.execution_id
+         join workflow_runs as run on run.id = execution.run_id
+         join workflow_model_invocations as invocation
+           on invocation.workflow_execution_id = execution.id
+          and invocation.workspace_id = execution.workspace_id
+         where execution.workspace_id = $1 and claim.workspace_id = $1
+           and run.workspace_id = $1 and run.runtime_id = $2 and claim.id = $3
+           and claim.status = 'active' and claim.lease_expires_at > transaction_timestamp()
+           and execution.status = 'prepared' and run.status = 'running'
+           and run.runtime_pause is null and run.revision = execution.expected_revision
+           and invocation.invocation_id = $4 and invocation.request_fingerprint = $5
+           and invocation.run_revision = run.revision + 1
+           and invocation.step_id = $6 and invocation.attempt_number = $7
+           and invocation.project_id = $8 and invocation.workflow_id = $9
+           and invocation.agent_id = $10 and invocation.agent_binding_id = $11
+           and invocation.model_profile_id = $12 and invocation.provider_id = $13
+           and invocation.deployment_id = $14 and invocation.provider_model_id = $15
+           and invocation.provider_request_model_id = $16
+           and invocation.provider_model_version = $17
+           and invocation.provider_identity_version = 2
+         for update of run, claim, execution, invocation`,
+        [
+          this.#workspaceDatabaseId, input.runId, input.claimId,
+          reservation.invocationId, reservation.requestFingerprint,
+          reservation.stepId, reservation.attemptNumber, reservation.projectId,
+          reservation.workflowId, reservation.agentId, reservation.agentBindingId,
+          reservation.modelProfileId, reservation.providerId, reservation.deploymentId,
+          reservation.providerModelId, reservation.providerRequestModelId,
+          reservation.providerModelVersion,
+        ],
+      );
+      if (authorized.rowCount !== 1) return { status: "conflict" as const };
+      return authorized.rows[0].status === "running"
+        ? { status: "authorized" as const }
+        : { status: "recovery_required" as const };
+    });
+  }
+
   async startExecution(input: Readonly<{
     runId: string;
     claimId: string;
-    providerStart?: AgentStepModelInvocationReservation;
+    providerStart?: AgentStepModelBudgetReservation;
   }>): Promise<WorkflowRuntimeExecutionStartDecision> {
     if (!stableIdPattern.test(input.runId) || !uuidPattern.test(input.claimId)) {
       return { status: "conflict" };
     }
     if (input.providerStart
-      && (!validInvocationReservation(input.providerStart)
+      && (!validBudgetReservation(input.providerStart)
         || input.providerStart.workspaceId !== this.#workspaceId
         || input.providerStart.runId !== input.runId)) {
       return { status: "conflict" };
@@ -1406,7 +1636,7 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
         }
         const invocation = await client.query<ProviderStartInvocationRow>(
           `/* workflow-runtime:provider-start-invocation */
-           select invocation.status
+           select invocation.status, budget.status as budget_status
            from workflow_model_invocations as invocation
            join workflow_runtime_executions as execution
              on execution.id = invocation.workflow_execution_id
@@ -1414,6 +1644,10 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
            join workflow_runtime_claims as claim
              on claim.id = execution.claim_id and claim.run_id = execution.run_id
            join workflow_runs as run on run.id = execution.run_id
+           join workflow_model_budget_reservations as budget
+             on budget.model_invocation_id = invocation.id
+            and budget.workspace_id = invocation.workspace_id
+            and budget.workflow_run_id = invocation.workflow_run_id
            where invocation.workspace_id = $1 and claim.workspace_id = $1
              and run.workspace_id = $1 and run.runtime_id = $2 and claim.id = $3
              and execution.execution_id = $4 and invocation.invocation_id = $5
@@ -1426,7 +1660,25 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
              and invocation.provider_request_model_id = $18
              and invocation.provider_model_version = $19
              and invocation.provider_identity_version = 2
-           for update of invocation`,
+             and budget.status = 'reserved'
+             and budget.invocation_id = invocation.invocation_id
+             and budget.project_id = $10 and budget.department_id = $20
+             and budget.workflow_id = $11 and budget.workflow_binding_id = $21
+             and budget.workflow_binding_version = $22
+             and budget.request_fingerprint = $6
+             and budget.input_envelope_fingerprint = $23
+             and budget.canonical_request_fingerprint = $24
+             and budget.provider_id = $15 and budget.deployment_id = $16
+             and budget.provider_model_id = $17
+             and budget.provider_request_model_id = $18
+             and budget.provider_model_version = $19
+             and budget.input_token_count = $25
+             and budget.effective_max_output_tokens = $26
+             and budget.reserved_total_tokens = $27
+             and budget.reserved_cost_usd_micros = $28
+             and budget.daily_token_budget = $29
+             and budget.monthly_cost_budget_usd_micros = $30
+           for update of invocation, budget`,
           [
             this.#workspaceDatabaseId,
             input.runId,
@@ -1447,10 +1699,24 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
             reservation.providerModelId,
             reservation.providerRequestModelId,
             reservation.providerModelVersion,
+            reservation.departmentId,
+            reservation.workflowBindingId,
+            reservation.workflowBindingVersion,
+            reservation.inputEnvelopeFingerprint,
+            reservation.canonicalRequestFingerprint,
+            reservation.inputTokenCount,
+            reservation.effectiveMaxOutputTokens,
+            reservation.reservedTotalTokens,
+            reservation.reservedCostUsdMicros,
+            reservation.dailyTokenBudget,
+            reservation.monthlyCostBudgetUsdMicros,
           ],
         );
         if (invocation.rowCount !== 1) return { status: "conflict" as const };
-        if (invocation.rows[0].status !== "running") return { status: "recovery_required" as const };
+        if (invocation.rows[0].status !== "running"
+          || invocation.rows[0].budget_status !== "reserved") {
+          return { status: "recovery_required" as const };
+        }
       }
       const started = await client.query(
         `/* workflow-runtime:start-execution */
@@ -1647,17 +1913,288 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
     }
   }
 
+  async reserveModelInvocationBudget(
+    input: AgentStepModelBudgetReservation,
+  ): Promise<Readonly<{
+    status: "reserved" | "replay" | "budget_exceeded" | "conflict" | "recovery_required";
+  }>> {
+    if (!validBudgetReservation(input) || input.workspaceId !== this.#workspaceId) {
+      return { status: "conflict" };
+    }
+    try {
+      return await transaction(this.#database, async (client) => {
+        const invocation = await client.query<ModelInvocationRow & {
+          model_invocation_id: string;
+          db_run_id: string;
+          workflow_execution_id: string;
+        }>(
+          `/* workflow-runtime:budget-lock-invocation */
+           select invocation.id::text as model_invocation_id,
+                  invocation.workflow_execution_id::text as workflow_execution_id,
+                  run.id::text as db_run_id, invocation.reservation_token::text,
+                  invocation.invocation_id, invocation.run_revision::text as run_revision,
+                  invocation.project_id, invocation.workflow_id, invocation.agent_id,
+                  invocation.agent_binding_id, invocation.step_id, invocation.attempt_number,
+                  invocation.model_profile_id, invocation.request_fingerprint,
+                  invocation.status, invocation.provider_id, invocation.deployment_id,
+                  invocation.provider_model_id, invocation.provider_request_model_id,
+                  invocation.provider_model_version, invocation.provider_identity_version,
+                  invocation.outcome, invocation.finish_reason,
+                  invocation.input_tokens::text, invocation.output_tokens::text,
+                  invocation.total_tokens::text, invocation.latency_ms::text,
+                  invocation.cost_usd_micros::text, invocation.error_code
+           from workflow_model_invocations as invocation
+           join workflow_runs as run on run.id = invocation.workflow_run_id
+           join workflow_runtime_executions as execution
+             on execution.id = invocation.workflow_execution_id
+            and execution.workspace_id = invocation.workspace_id
+           where invocation.workspace_id = $1 and run.workspace_id = $1
+             and run.runtime_id = $2 and invocation.invocation_id = $3
+             and execution.execution_id = $4
+           for update of invocation, execution, run`,
+          [this.#workspaceDatabaseId, input.runId, input.invocationId, input.workflowExecutionId],
+        );
+        if (invocation.rowCount !== 1 || invocation.rows[0].status !== "running"
+          || !sameReservation(invocation.rows[0], input)) return { status: "conflict" as const };
+
+        const existing = await client.query<ModelBudgetReservationRow>(
+          `/* workflow-runtime:read-budget-reservation */
+           select status, invocation_id, project_id, department_id, workflow_id,
+                  workflow_binding_id, workflow_binding_version::text,
+                  request_fingerprint, input_envelope_fingerprint,
+                  canonical_request_fingerprint, provider_id, deployment_id,
+                  provider_model_id, provider_request_model_id, provider_model_version,
+                  input_token_count::text, effective_max_output_tokens::text,
+                  reserved_total_tokens::text, reserved_cost_usd_micros::text,
+                  daily_token_budget::text, monthly_cost_budget_usd_micros::text,
+                  daily_window_start, monthly_window_start,
+                  actual_total_tokens::text, actual_cost_usd_micros::text
+           from workflow_model_budget_reservations
+           where workspace_id = $1 and model_invocation_id = $2
+           for update`,
+          [this.#workspaceDatabaseId, invocation.rows[0].model_invocation_id],
+        );
+        if (existing.rowCount === 1) {
+          if (!sameBudgetReservation(existing.rows[0], input)) return { status: "conflict" as const };
+          return existing.rows[0].status === "reserved"
+            ? { status: "replay" as const }
+            : { status: "recovery_required" as const };
+        }
+
+        const windows = await client.query<{ daily_window_start: string; monthly_window_start: string }>(
+          `/* workflow-runtime:budget-windows */
+           select (transaction_timestamp() at time zone 'UTC')::date::text as daily_window_start,
+                  date_trunc('month', transaction_timestamp() at time zone 'UTC')::date::text
+                    as monthly_window_start`,
+        );
+        if (windows.rowCount !== 1) throw persistenceError("Budget windows unavailable.");
+        const dailyWindow = windows.rows[0].daily_window_start;
+        const monthlyWindow = windows.rows[0].monthly_window_start;
+        await client.query(
+          `/* workflow-runtime:ensure-budget-windows */
+           insert into workflow_model_budget_windows (
+             workspace_id, project_id, workflow_binding_id, window_kind, window_start
+           ) values ($1, $2, $3, 'daily_tokens', $4::date),
+                    ($1, $2, $3, 'monthly_cost', $5::date)
+           on conflict do nothing`,
+          [this.#workspaceDatabaseId, input.projectId, input.workflowBindingId, dailyWindow, monthlyWindow],
+        );
+        const totals = await client.query<{
+          window_kind: "daily_tokens" | "monthly_cost";
+          reserved_amount: string | number;
+          consumed_amount: string | number;
+        }>(
+          `/* workflow-runtime:lock-budget-windows */
+           select window_kind, reserved_amount::text, consumed_amount::text
+           from workflow_model_budget_windows
+           where workspace_id = $1 and project_id = $2 and workflow_binding_id = $3
+             and ((window_kind = 'daily_tokens' and window_start = $4::date)
+               or (window_kind = 'monthly_cost' and window_start = $5::date))
+           order by window_kind
+           for update`,
+          [this.#workspaceDatabaseId, input.projectId, input.workflowBindingId, dailyWindow, monthlyWindow],
+        );
+        if (totals.rowCount !== 2) throw persistenceError("Budget window lock failed closed.");
+        const daily = totals.rows.find((row) => row.window_kind === "daily_tokens");
+        const monthly = totals.rows.find((row) => row.window_kind === "monthly_cost");
+        if (!daily || !monthly) throw persistenceError("Budget window kinds are invalid.");
+        const dailyReserved = databaseInteger(daily.reserved_amount);
+        const dailyConsumed = databaseInteger(daily.consumed_amount);
+        const monthlyReserved = databaseInteger(monthly.reserved_amount);
+        const monthlyConsumed = databaseInteger(monthly.consumed_amount);
+        if (dailyReserved === null || dailyConsumed === null
+          || monthlyReserved === null || monthlyConsumed === null) {
+          throw persistenceError("Budget totals are invalid.");
+        }
+        if (BigInt(dailyReserved) + BigInt(dailyConsumed) + BigInt(input.reservedTotalTokens)
+            > BigInt(input.dailyTokenBudget)
+          || BigInt(monthlyReserved) + BigInt(monthlyConsumed)
+            + BigInt(input.reservedCostUsdMicros) > BigInt(input.monthlyCostBudgetUsdMicros)) {
+          return { status: "budget_exceeded" as const };
+        }
+        const inserted = await client.query(
+          `/* workflow-runtime:insert-budget-reservation */
+           insert into workflow_model_budget_reservations (
+             workspace_id, workflow_run_id, workflow_execution_id, model_invocation_id,
+             invocation_id, project_id, department_id, workflow_id, workflow_binding_id,
+             workflow_binding_version, step_id, attempt_number, request_fingerprint,
+             input_envelope_fingerprint, canonical_request_fingerprint,
+             provider_id, deployment_id, provider_model_id, provider_request_model_id,
+             provider_model_version, input_token_count, effective_max_output_tokens,
+             reserved_total_tokens, reserved_cost_usd_micros, daily_token_budget,
+             monthly_cost_budget_usd_micros, daily_window_start, monthly_window_start,
+             status
+           ) values (
+             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+             $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26,
+             $27::date, $28::date, 'reserved'
+           ) on conflict do nothing`,
+          [
+            this.#workspaceDatabaseId, invocation.rows[0].db_run_id,
+            invocation.rows[0].workflow_execution_id, invocation.rows[0].model_invocation_id,
+            input.invocationId, input.projectId, input.departmentId, input.workflowId,
+            input.workflowBindingId, input.workflowBindingVersion, input.stepId,
+            input.attemptNumber, input.requestFingerprint, input.inputEnvelopeFingerprint,
+            input.canonicalRequestFingerprint, input.providerId, input.deploymentId,
+            input.providerModelId, input.providerRequestModelId, input.providerModelVersion,
+            input.inputTokenCount, input.effectiveMaxOutputTokens, input.reservedTotalTokens,
+            input.reservedCostUsdMicros, input.dailyTokenBudget,
+            input.monthlyCostBudgetUsdMicros, dailyWindow, monthlyWindow,
+          ],
+        );
+        if (inserted.rowCount !== 1) return { status: "recovery_required" as const };
+        const updated = await client.query(
+          `/* workflow-runtime:charge-budget-reservation */
+           update workflow_model_budget_windows
+           set reserved_amount = reserved_amount + case
+                 when window_kind = 'daily_tokens' then $6::bigint else $7::bigint end,
+               updated_at = transaction_timestamp()
+           where workspace_id = $1 and project_id = $2 and workflow_binding_id = $3
+             and ((window_kind = 'daily_tokens' and window_start = $4::date)
+               or (window_kind = 'monthly_cost' and window_start = $5::date))`,
+          [
+            this.#workspaceDatabaseId, input.projectId, input.workflowBindingId,
+            dailyWindow, monthlyWindow, input.reservedTotalTokens, input.reservedCostUsdMicros,
+          ],
+        );
+        if (updated.rowCount !== 2) throw persistenceError("Budget charge failed closed.");
+        return { status: "reserved" as const };
+      });
+    } catch (error) {
+      if (error instanceof WorkflowRuntimeCommitAmbiguousError) {
+        try {
+          const existing = await this.#readBudgetReservation(input.runId, input.invocationId);
+          if (!existing) return { status: "recovery_required" };
+          if (!sameBudgetReservation(existing, input)) return { status: "conflict" };
+          return existing.status === "reserved"
+            ? { status: "reserved" }
+            : { status: "recovery_required" };
+        } catch {
+          return { status: "recovery_required" };
+        }
+      }
+      throw error;
+    }
+  }
+
+  async releaseModelInvocationBudget(
+    input: AgentStepModelBudgetReservation,
+  ): Promise<Readonly<{ status: "released" | "idempotent" | "conflict" | "recovery_required" }>> {
+    if (!validBudgetReservation(input) || input.workspaceId !== this.#workspaceId) {
+      return { status: "conflict" };
+    }
+    try {
+      return await transaction(this.#database, async (client) => {
+        const current = await client.query<ModelBudgetReservationRow & { model_invocation_id: string }>(
+          `/* workflow-runtime:lock-budget-release */
+           select budget.model_invocation_id::text as model_invocation_id,
+                  budget.status, budget.invocation_id, budget.project_id,
+                  budget.department_id, budget.workflow_id, budget.workflow_binding_id,
+                  budget.workflow_binding_version::text, budget.request_fingerprint,
+                  budget.input_envelope_fingerprint, budget.canonical_request_fingerprint,
+                  budget.provider_id, budget.deployment_id, budget.provider_model_id,
+                  budget.provider_request_model_id, budget.provider_model_version,
+                  budget.input_token_count::text, budget.effective_max_output_tokens::text,
+                  budget.reserved_total_tokens::text, budget.reserved_cost_usd_micros::text,
+                  budget.daily_token_budget::text,
+                  budget.monthly_cost_budget_usd_micros::text,
+                  budget.daily_window_start, budget.monthly_window_start,
+                  budget.actual_total_tokens::text, budget.actual_cost_usd_micros::text
+           from workflow_model_budget_reservations as budget
+           join workflow_runs as run on run.id = budget.workflow_run_id
+           where budget.workspace_id = $1 and run.workspace_id = $1
+             and run.runtime_id = $2 and budget.invocation_id = $3
+           for update of budget`,
+          [this.#workspaceDatabaseId, input.runId, input.invocationId],
+        );
+        if (current.rowCount !== 1 || !sameBudgetReservation(current.rows[0], input)) {
+          return { status: "conflict" as const };
+        }
+        if (current.rows[0].status === "released") return { status: "idempotent" as const };
+        if (current.rows[0].status !== "reserved") return { status: "recovery_required" as const };
+        const released = await client.query(
+          `/* workflow-runtime:release-budget-windows */
+           update workflow_model_budget_windows
+           set reserved_amount = reserved_amount - case
+                 when window_kind = 'daily_tokens' then $6::bigint else $7::bigint end,
+               updated_at = transaction_timestamp()
+           where workspace_id = $1 and project_id = $2 and workflow_binding_id = $3
+             and ((window_kind = 'daily_tokens' and window_start = $4::date)
+               or (window_kind = 'monthly_cost' and window_start = $5::date))
+             and reserved_amount >= case
+               when window_kind = 'daily_tokens' then $6::bigint else $7::bigint end`,
+          [
+            this.#workspaceDatabaseId, input.projectId, input.workflowBindingId,
+            current.rows[0].daily_window_start, current.rows[0].monthly_window_start,
+            input.reservedTotalTokens, input.reservedCostUsdMicros,
+          ],
+        );
+        if (released.rowCount !== 2) throw persistenceError("Budget release failed closed.");
+        const terminal = await client.query(
+          `/* workflow-runtime:mark-budget-released */
+           update workflow_model_budget_reservations
+           set status = 'released', updated_at = transaction_timestamp()
+           where workspace_id = $1 and model_invocation_id = $2 and status = 'reserved'`,
+          [this.#workspaceDatabaseId, current.rows[0].model_invocation_id],
+        );
+        if (terminal.rowCount !== 1) throw persistenceError("Budget release conflicted.");
+        return { status: "released" as const };
+      });
+    } catch (error) {
+      if (error instanceof WorkflowRuntimeCommitAmbiguousError) {
+        try {
+          const existing = await this.#readBudgetReservation(input.runId, input.invocationId);
+          if (!existing) return { status: "recovery_required" };
+          if (!sameBudgetReservation(existing, input)) return { status: "conflict" };
+          return existing.status === "released"
+            ? { status: "released" }
+            : { status: "recovery_required" };
+        } catch {
+          return { status: "recovery_required" };
+        }
+      }
+      throw error;
+    }
+  }
+
   async recordModelInvocationOutcome(
     input: AgentStepModelInvocationOutcome,
-  ): Promise<Readonly<{ status: "recorded" | "idempotent" | "conflict" | "recovery_required" }>> {
+  ): Promise<Readonly<{
+    status: "recorded" | "idempotent" | "invariant_violation" | "conflict" | "recovery_required";
+  }>> {
     if (!validInvocationOutcome(input) || input.workspaceId !== this.#workspaceId) {
       return { status: "conflict" };
     }
     try {
       return await transaction(this.#database, async (client) => {
-        const current = await client.query<ModelInvocationRow & { db_run_id: string }>(
+        const current = await client.query<ModelInvocationRow & {
+          db_run_id: string;
+          execution_status: string;
+          model_invocation_id: string;
+        }>(
           `/* workflow-runtime:lock-model-invocation */
-           select invocation.workflow_execution_id::text as workflow_execution_id,
+           select invocation.id::text as model_invocation_id,
+                  invocation.workflow_execution_id::text as workflow_execution_id,
                   run.id::text as db_run_id, invocation.invocation_id,
                   invocation.run_revision::text as run_revision, invocation.project_id,
                   invocation.workflow_id, invocation.agent_id, invocation.agent_binding_id,
@@ -1666,6 +2203,7 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
                   invocation.deployment_id, invocation.provider_model_id,
                   invocation.provider_request_model_id, invocation.provider_model_version,
                   invocation.provider_identity_version, invocation.outcome,
+                  execution.status as execution_status,
                   invocation.finish_reason, invocation.input_tokens::text as input_tokens,
                   invocation.output_tokens::text as output_tokens,
                   invocation.total_tokens::text as total_tokens,
@@ -1673,6 +2211,9 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
                   invocation.cost_usd_micros::text as cost_usd_micros,
                   invocation.error_code
            from workflow_model_invocations as invocation
+           join workflow_runtime_executions as execution
+             on execution.id = invocation.workflow_execution_id
+            and execution.workspace_id = invocation.workspace_id
            join workflow_runs as run on run.id = invocation.workflow_run_id
            where invocation.workspace_id = $1 and run.workspace_id = $1
              and run.runtime_id = $2 and invocation.invocation_id = $3
@@ -1685,6 +2226,94 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
         }
         if (current.rows[0].status !== "running") {
           return { status: sameOutcome(current.rows[0], input) ? "idempotent" as const : "conflict" as const };
+        }
+        const budget = await client.query<ModelBudgetReservationRow>(
+          `/* workflow-runtime:lock-terminal-budget */
+           select budget.status, budget.invocation_id, budget.project_id,
+                  budget.department_id, budget.workflow_id, budget.workflow_binding_id,
+                  budget.workflow_binding_version::text, budget.request_fingerprint,
+                  budget.input_envelope_fingerprint, budget.canonical_request_fingerprint,
+                  budget.provider_id, budget.deployment_id, budget.provider_model_id,
+                  budget.provider_request_model_id, budget.provider_model_version,
+                  budget.input_token_count::text, budget.effective_max_output_tokens::text,
+                  budget.reserved_total_tokens::text, budget.reserved_cost_usd_micros::text,
+                  budget.daily_token_budget::text, budget.monthly_cost_budget_usd_micros::text,
+                  budget.daily_window_start, budget.monthly_window_start,
+                  budget.actual_total_tokens::text, budget.actual_cost_usd_micros::text
+           from workflow_model_budget_reservations as budget
+           where budget.workspace_id = $1 and budget.model_invocation_id = $2
+           for update of budget`,
+          [this.#workspaceDatabaseId, current.rows[0].model_invocation_id],
+        );
+        const hasActual = input.totalTokens !== null && input.costUsdMicros !== null;
+        const actualTokens = input.totalTokens ?? 0;
+        const actualCost = input.costUsdMicros ?? 0;
+        let invariantViolation = false;
+        if (budget.rowCount === 0) {
+          const isDefinitivePreGenerationFailure = input.status === "failed"
+            && input.inputTokens === null && input.outputTokens === null
+            && input.totalTokens === null && input.costUsdMicros === null
+            && current.rows[0].execution_status === "prepared";
+          if (!isDefinitivePreGenerationFailure) {
+            return { status: "recovery_required" as const };
+          }
+        } else if (budget.rowCount !== 1 || budget.rows[0].status !== "reserved") {
+          return { status: "recovery_required" as const };
+        } else if (input.status === "outcome_unknown") {
+          const held = await client.query(
+            `/* workflow-runtime:hold-unknown-budget */
+             update workflow_model_budget_reservations
+             set status = 'outcome_unknown', updated_at = transaction_timestamp()
+             where workspace_id = $1 and model_invocation_id = $2 and status = 'reserved'`,
+            [this.#workspaceDatabaseId, current.rows[0].model_invocation_id],
+          );
+          if (held.rowCount !== 1) throw persistenceError("Unknown budget hold conflicted.");
+        } else {
+          if (!hasActual) return { status: "recovery_required" as const };
+          const reservation = budget.rows[0];
+          const reservedTokens = databaseInteger(reservation.reserved_total_tokens);
+          const reservedCost = databaseInteger(reservation.reserved_cost_usd_micros);
+          if (reservedTokens === null || reservedCost === null) {
+            return { status: "recovery_required" as const };
+          }
+          invariantViolation = hasActual
+            && (actualTokens > reservedTokens || actualCost > reservedCost);
+          const shouldSettle = input.status === "succeeded"
+            || (hasActual && (actualTokens > 0 || actualCost > 0));
+          const reconciled = await client.query(
+            `/* workflow-runtime:reconcile-budget-windows */
+             update workflow_model_budget_windows
+             set reserved_amount = reserved_amount - case
+                   when window_kind = 'daily_tokens' then $6::bigint else $7::bigint end,
+                 consumed_amount = consumed_amount + case
+                   when window_kind = 'daily_tokens' then $8::bigint else $9::bigint end,
+                 updated_at = transaction_timestamp()
+             where workspace_id = $1 and project_id = $2 and workflow_binding_id = $3
+               and ((window_kind = 'daily_tokens' and window_start = $4::date)
+                 or (window_kind = 'monthly_cost' and window_start = $5::date))
+               and reserved_amount >= case
+                 when window_kind = 'daily_tokens' then $6::bigint else $7::bigint end`,
+            [
+              this.#workspaceDatabaseId, reservation.project_id,
+              reservation.workflow_binding_id, reservation.daily_window_start,
+              reservation.monthly_window_start, reservedTokens, reservedCost,
+              shouldSettle ? actualTokens : 0, shouldSettle ? actualCost : 0,
+            ],
+          );
+          if (reconciled.rowCount !== 2) throw persistenceError("Budget settlement failed closed.");
+          const budgetStatus = shouldSettle ? "settled" : "released";
+          const terminalBudget = await client.query(
+            `/* workflow-runtime:complete-budget-reservation */
+             update workflow_model_budget_reservations
+             set status = $3, actual_total_tokens = $4, actual_cost_usd_micros = $5,
+                 updated_at = transaction_timestamp()
+             where workspace_id = $1 and model_invocation_id = $2 and status = 'reserved'`,
+            [
+              this.#workspaceDatabaseId, current.rows[0].model_invocation_id,
+              budgetStatus, shouldSettle ? actualTokens : null, shouldSettle ? actualCost : null,
+            ],
+          );
+          if (terminalBudget.rowCount !== 1) throw persistenceError("Budget terminal state conflicted.");
         }
         const completedAt = this.#trustedNow();
         const updated = await client.query(
@@ -1735,7 +2364,7 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
             errorCode: input.errorCode,
           },
         });
-        return { status: "recorded" as const };
+        return { status: invariantViolation ? "invariant_violation" as const : "recorded" as const };
       });
     } catch (error) {
       if (!(error instanceof WorkflowRuntimeCommitAmbiguousError)) throw error;
@@ -1747,9 +2376,18 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
       }
       if (!existing) return { status: "recovery_required" };
       if (existing.request_fingerprint !== input.requestFingerprint) return { status: "conflict" };
-      return sameOutcome(existing, input)
-        ? { status: "recorded" }
-        : existing.status === "running" ? { status: "recovery_required" } : { status: "conflict" };
+      if (!sameOutcome(existing, input)) {
+        return existing.status === "running"
+          ? { status: "recovery_required" }
+          : { status: "conflict" };
+      }
+      let budget: ModelBudgetReservationRow | null;
+      try {
+        budget = await this.#readBudgetReservation(input.runId, input.invocationId);
+      } catch {
+        return { status: "recovery_required" };
+      }
+      return { status: recoveredOutcomeStatus(existing, budget, input) };
     }
   }
 

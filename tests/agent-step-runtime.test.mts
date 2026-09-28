@@ -19,6 +19,9 @@ const invocationContract = (await import(
 const adapterContract = (await import(
   new URL("../lib/contracts/model-provider-adapter.ts", import.meta.url).href
 )) as typeof import("../lib/contracts/model-provider-adapter");
+const dataHandlingContract = (await import(
+  new URL("../lib/contracts/model-invocation-data-handling.ts", import.meta.url).href
+)) as typeof import("../lib/contracts/model-invocation-data-handling");
 
 const {
   agentStepRuntimeLimits,
@@ -37,6 +40,7 @@ const {
   validateAndNormalizeModelInvocationResult,
 } = invocationContract;
 const { validateAndNormalizeModelProviderHealth } = adapterContract;
+const { createModelInvocationRequestFingerprint } = dataHandlingContract;
 
 type Counters = {
   facts: number;
@@ -532,6 +536,9 @@ function provider(
     throwRun?: boolean;
     resultOverrides?: Record<string, unknown>;
     observe?: (value: unknown) => void;
+    onPreflight?: () => void;
+    onHealth?: () => void;
+    onRun?: () => void;
   } = {},
 ) {
   const facts = expectedRoute(input);
@@ -547,8 +554,37 @@ function provider(
   };
   return {
     identity,
+    async preflight(value: unknown, budgetInput: any) {
+      options.onPreflight?.();
+      const requestDecision = validateAndNormalizeModelInvocationRequest(value);
+      assert.ok(requestDecision.normalizedRequest);
+      const sourceRequestFingerprint = createModelInvocationRequestFingerprint(
+        requestDecision.normalizedRequest,
+      );
+      assert.ok(sourceRequestFingerprint);
+      const effectiveMaxOutputTokens = Math.min(
+        budgetInput.authorizedMaxOutputTokens,
+        budgetInput.deploymentMaxOutputTokens,
+      );
+      return {
+        verdict: "allow" as const,
+        reasons: [],
+        requestDecision,
+        normalizedPreflight: {
+          ...identity,
+          sourceRequestFingerprint,
+          inputEnvelopeFingerprint: `sha256:${"e".repeat(64)}`,
+          canonicalRequestFingerprint: `sha256:${"f".repeat(64)}`,
+          inputTokenCount: 10,
+          effectiveMaxOutputTokens,
+          maximumTotalTokens: 10 + effectiveMaxOutputTokens,
+          maximumCostUsdMicros: 0,
+        },
+      };
+    },
     async health() {
       counters.health += 1;
+      options.onHealth?.();
       if (options.throwHealth) throw new Error("health-hostile-sentinel");
       return validateAndNormalizeModelProviderHealth({
         providerId: selected.providerId,
@@ -561,9 +597,12 @@ function provider(
     },
     async run(value: unknown) {
       counters.run += 1;
+      options.onRun?.();
       options.observe?.(value);
       if (options.throwRun) throw new Error("run-hostile-sentinel");
-      const requestDecision = validateAndNormalizeModelInvocationRequest(value);
+      const requestDecision = validateAndNormalizeModelInvocationRequest(
+        (value as any)?.request ?? value,
+      );
       assert.ok(requestDecision.normalizedRequest);
       const normalizedResult = result(
         requestDecision.normalizedRequest,
@@ -613,6 +652,7 @@ async function execute(
   counters: Counters,
   requirementOverrides: Record<string, unknown> = {},
   evidenceResolver?: unknown,
+  invocationLedger?: Parameters<typeof executeAgentStep>[7],
 ) {
   const trusted = dependencies(input, counters, requirementOverrides);
   return executeAgentStep(
@@ -622,7 +662,20 @@ async function execute(
     trusted.requirementsResolver,
     evidenceResolver,
     trusted.runtimeContext,
+    undefined,
+    invocationLedger,
   );
+}
+
+function completeInvocationLedger(): NonNullable<Parameters<typeof executeAgentStep>[7]> {
+  return {
+    async reserve() { return { status: "reserved" }; },
+    async authorizePreflight() { return { status: "authorized" }; },
+    async reserveBudget() { return { status: "reserved" }; },
+    async authorizeProviderStart() { return { status: "started" }; },
+    async releaseBudget() { return { status: "released" }; },
+    async recordOutcome() { return { status: "recorded" }; },
+  };
 }
 
 function freshCounters(): Counters {
@@ -972,12 +1025,24 @@ test("durable invocation ledger reserves before provider and records bounded fac
       assert.match((value as any).requestFingerprint, /^sha256:[0-9a-f]{64}$/u);
       return { status: "reserved" as const };
     },
+    async authorizePreflight(value: unknown) {
+      calls.push("preflight-fence");
+      assert.deepEqual(value, reservation);
+      return { status: "authorized" as const };
+    },
+    async reserveBudget(value: unknown) {
+      calls.push("budget");
+      assert.equal((value as any).requestFingerprint, reservation.requestFingerprint);
+      assert.equal((value as any).reservedTotalTokens, 4_010);
+      return { status: "reserved" as const };
+    },
     async authorizeProviderStart(value: unknown) {
       calls.push("fence");
-      assert.deepEqual(value, reservation);
-      assert.deepEqual({ health: counters.health, run: counters.run }, { health: 0, run: 0 });
+      assert.equal((value as any).requestFingerprint, reservation.requestFingerprint);
+      assert.deepEqual({ health: counters.health, run: counters.run }, { health: 1, run: 0 });
       return { status: "started" as const };
     },
+    async releaseBudget() { return { status: "released" as const }; },
     async recordOutcome(value: unknown) {
       calls.push("outcome");
       assert.equal(counters.run, 1);
@@ -997,7 +1062,7 @@ test("durable invocation ledger reserves before provider and records bounded fac
     ledger,
   );
   assert.equal(decision.verdict, "allow", JSON.stringify(decision.reasons));
-  assert.deepEqual(calls, ["reserve", "fence", "outcome"]);
+  assert.deepEqual(calls, ["reserve", "preflight-fence", "budget", "fence", "outcome"]);
   assert.deepEqual(reservation, {
     workspaceId: "workspace-primary",
     runId: "run-one",
@@ -1037,6 +1102,94 @@ test("durable invocation ledger reserves before provider and records bounded fac
   assert.equal(deeplyFrozen(decision), true);
 });
 
+test("remote durable execution orders count and create fences without per-invocation health egress", async () => {
+  const input = runtimeInput({
+    dataEgressMode: "redacted_only",
+    deploymentMode: "remote",
+  });
+  (runtimeFacts(input).modelProviderRegistry as any).providers[0].kind = "openai";
+  const counters = freshCounters();
+  const trusted = dependencies(input, counters);
+  const calls: string[] = [];
+  const runtimeProvider = provider(input, counters, 0, {
+    onPreflight: () => calls.push("input-token-count"),
+    onHealth: () => calls.push("health"),
+    onRun: () => calls.push("responses-create"),
+  });
+  const evidenceResolver = {
+    async resolve(value: any) {
+      counters.evidence += 1;
+      return {
+        kind: "redaction",
+        evidenceId: "redaction-ordering",
+        workspaceId: value.workspaceId,
+        projectId: value.projectId,
+        runId: value.runId,
+        invocationId: value.invocationId,
+        runRevision: value.runRevision,
+        stepId: value.stepId,
+        attemptNumber: value.attemptNumber,
+        modelProfileId: value.modelProfileId,
+        candidateIdentity: value.candidateIdentity,
+        sourceRequestFingerprint: value.sourceRequestFingerprint,
+        assessedAt: "2026-08-26T10:15:40.000Z",
+        detectorId: "detector-one",
+        detectorVersion: "version-one",
+        messages: value.messages.map((_: unknown, messageIndex: number) => ({
+          messageIndex,
+          assessment: "no_sensitive_data",
+          spans: [],
+        })),
+      };
+    },
+  };
+  const decision = await executeAgentStep(
+    input,
+    trusted.factsResolver,
+    [runtimeProvider],
+    trusted.requirementsResolver,
+    evidenceResolver,
+    trusted.runtimeContext,
+    undefined,
+    {
+      async reserve() { calls.push("invocation-reserve"); return { status: "reserved" as const }; },
+      async authorizePreflight() {
+        calls.push("preflight-fence");
+        assert.deepEqual(counters, {
+          facts: 1, requirements: 1, evidence: 1, clock: 1, health: 0, run: 0,
+        });
+        return { status: "authorized" as const };
+      },
+      async reserveBudget() {
+        calls.push("budget-reservation");
+        assert.equal(counters.health, 0);
+        assert.equal(counters.run, 0);
+        return { status: "reserved" as const };
+      },
+      async authorizeProviderStart() {
+        calls.push("final-generation-fence");
+        assert.equal(counters.health, 0);
+        assert.equal(counters.run, 0);
+        return { status: "started" as const };
+      },
+      async releaseBudget() { return { status: "released" as const }; },
+      async recordOutcome() { calls.push("outcome-reconciliation"); return { status: "recorded" as const }; },
+    },
+  );
+  assert.equal(decision.verdict, "allow", JSON.stringify(decision.reasons));
+  assert.deepEqual(calls, [
+    "invocation-reserve",
+    "preflight-fence",
+    "input-token-count",
+    "budget-reservation",
+    "final-generation-fence",
+    "responses-create",
+    "outcome-reconciliation",
+  ]);
+  assert.equal(counters.health, 0);
+  assert.equal(counters.run, 1);
+});
+
 test("durable replay, collision, and unresolved invocation stop before provider", async () => {
   for (const [ledgerStatus, reasonCode] of [
     ["replay", "invocation_replay_detected"],
@@ -1057,7 +1210,10 @@ test("durable replay, collision, and unresolved invocation stop before provider"
       undefined,
       {
         async reserve() { return { status: ledgerStatus }; },
+        async authorizePreflight() { return { status: "authorized" as const }; },
+        async reserveBudget() { return { status: "reserved" as const }; },
         async authorizeProviderStart() { return { status: "started" as const }; },
+        async releaseBudget() { return { status: "released" as const }; },
         async recordOutcome() { outcomeCalls += 1; return { status: "recorded" as const }; },
       },
     );
@@ -1086,7 +1242,10 @@ test("provider run ambiguity is durably outcome_unknown without fabricated usage
     undefined,
     {
       async reserve() { return { status: "reserved" as const }; },
+      async authorizePreflight() { return { status: "authorized" as const }; },
+      async reserveBudget() { return { status: "reserved" as const }; },
       async authorizeProviderStart() { return { status: "started" as const }; },
+      async releaseBudget() { return { status: "released" as const }; },
       async recordOutcome(value) { recorded = clone(value); return { status: "recorded" as const }; },
     },
   );
@@ -1110,6 +1269,71 @@ test("provider run ambiguity is durably outcome_unknown without fabricated usage
     costUsdMicros: null,
     errorCode: "provider_exception",
   });
+});
+
+test("post-fence malformed provider result holds the budget as outcome_unknown", async () => {
+  const input = runtimeInput();
+  const counters = freshCounters();
+  const trusted = dependencies(input, counters);
+  let recorded: any = null;
+  const decision = await executeAgentStep(
+    input,
+    trusted.factsResolver,
+    [provider(input, counters, 0, {
+      resultOverrides: { usage: { inputTokens: 10, outputTokens: 5, totalTokens: 14 } },
+    })],
+    trusted.requirementsResolver,
+    undefined,
+    trusted.runtimeContext,
+    undefined,
+    {
+      async reserve() { return { status: "reserved" as const }; },
+      async authorizePreflight() { return { status: "authorized" as const }; },
+      async reserveBudget() { return { status: "reserved" as const }; },
+      async authorizeProviderStart() { return { status: "started" as const }; },
+      async releaseBudget() { return { status: "released" as const }; },
+      async recordOutcome(value) { recorded = clone(value); return { status: "recorded" as const }; },
+    },
+  );
+  assert.equal(counters.run, 1);
+  assert.equal(decision.status, "recovery_required");
+  assert.equal(recorded.status, "outcome_unknown");
+  assert.equal(recorded.totalTokens, null);
+  assert.equal(recorded.costUsdMicros, null);
+});
+
+test("durable accounting invariant violation requires recovery without a second generation", async () => {
+  const input = runtimeInput();
+  const counters = freshCounters();
+  const trusted = dependencies(input, counters);
+  let outcomeCalls = 0;
+  const decision = await executeAgentStep(
+    input,
+    trusted.factsResolver,
+    [provider(input, counters)],
+    trusted.requirementsResolver,
+    undefined,
+    trusted.runtimeContext,
+    undefined,
+    {
+      async reserve() { return { status: "reserved" as const }; },
+      async authorizePreflight() { return { status: "authorized" as const }; },
+      async reserveBudget() { return { status: "reserved" as const }; },
+      async authorizeProviderStart() { return { status: "started" as const }; },
+      async releaseBudget() { return { status: "released" as const }; },
+      async recordOutcome() {
+        outcomeCalls += 1;
+        return { status: "invariant_violation" as const };
+      },
+    },
+  );
+  assert.equal(decision.verdict, "deny");
+  assert.equal(decision.status, "recovery_required");
+  assert.equal(decision.reasons.at(-1)?.code, "invocation_ledger_failed");
+  assert.equal(counters.run, 1);
+  assert.equal(outcomeCalls, 1);
+  assert.equal(decision.nextSnapshot, null);
+  assert.equal(decision.normalizedResult, null);
 });
 
 test("hostile or malformed invocation ledger fails closed before runtime facts and provider", async () => {
@@ -1398,6 +1622,7 @@ test("remote redaction composes through AI-028 once and exposes no evidence", as
     counters,
     {},
     evidenceResolver,
+    completeInvocationLedger(),
   );
   assert.equal(
     decision.verdict,
@@ -1405,7 +1630,7 @@ test("remote redaction composes through AI-028 once and exposes no evidence", as
     JSON.stringify(decision.modelExecutionDecision ?? decision.reasons),
   );
   assert.deepEqual(counters, {
-    facts: 1, requirements: 1, evidence: 1, clock: 1, health: 1, run: 1,
+    facts: 1, requirements: 1, evidence: 1, clock: 1, health: 0, run: 1,
   });
   assert.equal(JSON.stringify(providerInput).includes("SECRET_SENTINEL"), false);
   assert.equal(JSON.stringify(providerInput).includes("[REDACTED:CREDENTIAL]"), true);

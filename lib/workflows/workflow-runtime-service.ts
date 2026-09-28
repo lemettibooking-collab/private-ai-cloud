@@ -6,6 +6,7 @@ import type { ModelProvider } from "../contracts/model-provider-adapter";
 import type { WorkflowRunSnapshot, WorkflowRunStatus } from "../contracts/workflow-run";
 import type {
   AgentStepCapabilityRequirementsResolver,
+  AgentStepModelBudgetReservation,
   AgentStepModelInvocationLedger,
   AgentStepModelInvocationReservation,
   AgentStepRiskApprovalQuery,
@@ -297,7 +298,7 @@ export interface WorkflowRuntimeStateStore {
   startExecution(input: Readonly<{
     runId: string;
     claimId: string;
-    providerStart?: AgentStepModelInvocationReservation;
+    providerStart?: AgentStepModelBudgetReservation;
   }>): Promise<WorkflowRuntimeExecutionStartDecision>;
   recordKnownExecutionOutcome(input: Readonly<{
     runId: string;
@@ -307,6 +308,13 @@ export interface WorkflowRuntimeStateStore {
   checkRiskApproval(input: WorkflowRuntimeRiskApprovalCheckInput): Promise<Readonly<{ approved: boolean }>>;
   releaseClaim(input: Readonly<{ runId: string; claimId: string }>): Promise<void>;
   reserveModelInvocation?: AgentStepModelInvocationLedger["reserve"];
+  authorizeModelInvocationPreflight?: (input: Readonly<{
+    runId: string;
+    claimId: string;
+    reservation: AgentStepModelInvocationReservation;
+  }>) => ReturnType<AgentStepModelInvocationLedger["authorizePreflight"]>;
+  reserveModelInvocationBudget?: AgentStepModelInvocationLedger["reserveBudget"];
+  releaseModelInvocationBudget?: AgentStepModelInvocationLedger["releaseBudget"];
   recordModelInvocationOutcome?: AgentStepModelInvocationLedger["recordOutcome"];
 }
 
@@ -756,15 +764,23 @@ export function createWorkflowRuntimeService(
 ): WorkflowRuntimeService {
   const { store, authorizer, providers, requirementsResolver, evidenceResolver, runtimeContext } = dependencies;
   const durableInvocationLedgerAvailable = typeof store.reserveModelInvocation === "function"
+    && typeof store.authorizeModelInvocationPreflight === "function"
+    && typeof store.reserveModelInvocationBudget === "function"
+    && typeof store.releaseModelInvocationBudget === "function"
     && typeof store.recordModelInvocationOutcome === "function";
 
   function invocationLedgerForClaim(runId: string, claimId: string): AgentStepModelInvocationLedger | undefined {
     if (!durableInvocationLedgerAvailable) return undefined;
     return {
       reserve: (input) => store.reserveModelInvocation!(input),
+      authorizePreflight: (input) => input.runId === runId
+        ? store.authorizeModelInvocationPreflight!({ runId, claimId, reservation: input })
+        : Promise.resolve({ status: "conflict" }),
+      reserveBudget: (input) => store.reserveModelInvocationBudget!(input),
       authorizeProviderStart: (input) => input.runId === runId
         ? store.startExecution({ runId, claimId, providerStart: input })
         : Promise.resolve({ status: "conflict" }),
+      releaseBudget: (input) => store.releaseModelInvocationBudget!(input),
       recordOutcome: (input) => store.recordModelInvocationOutcome!(input),
     };
   }

@@ -459,17 +459,37 @@ function runtimeContext(evaluatedAt: unknown = "2026-08-26T10:15:40.000Z") {
   return { now: () => evaluatedAt };
 }
 
+function completeAuthority() {
+  return {
+    async prepare(context: import("../lib/contracts/model-invocation-execution").ModelInvocationExecutionPreflightContext) {
+      const preflight = await context.invoke({
+        authorizedMaxInputTokens: 16_000,
+        authorizedMaxOutputTokens: 4_000,
+        maxCostUsdMicros: 500_000,
+        deploymentMaxInputTokens: context.candidate.maxInputTokens,
+        deploymentMaxOutputTokens: context.candidate.maxOutputTokens,
+        inputCostUsdMicrosPerMillionTokens: context.candidate.inputCostUsdMicrosPerMillionTokens,
+        outputCostUsdMicrosPerMillionTokens: context.candidate.outputCostUsdMicrosPerMillionTokens,
+      });
+      return { status: "ready" as const, preflight: preflight.normalizedPreflight };
+    },
+    async authorizeGeneration() { return { status: "authorized" as const }; },
+  };
+}
+
 async function executeModelInvocation(
   input: unknown,
   providers: unknown,
   evidenceResolver?: unknown,
   trustedRuntimeContext: unknown = runtimeContext(),
+  authority?: import("../lib/contracts/model-invocation-execution").ModelInvocationExecutionAuthority,
 ) {
   return executeModelInvocationContract(
     executionInput(input),
     providers,
     evidenceResolver,
     trustedRuntimeContext,
+    authority,
   );
 }
 
@@ -624,6 +644,37 @@ function directProvider(
   const facts = routeFacts(input, candidateIndex);
   return {
     identity: facts.candidateIdentity,
+    async preflight(value: unknown, budgetInput: any) {
+      const requestDecision = validateAndNormalizeModelInvocationRequest(value);
+      assert.ok(requestDecision.normalizedRequest);
+      const sourceRequestFingerprint = createModelInvocationRequestFingerprint(
+        requestDecision.normalizedRequest,
+      );
+      assert.ok(sourceRequestFingerprint);
+      const effectiveMaxOutputTokens = Math.min(
+        budgetInput.authorizedMaxOutputTokens,
+        budgetInput.deploymentMaxOutputTokens,
+      );
+      return {
+        verdict: "allow" as const,
+        reasons: [],
+        requestDecision,
+        normalizedPreflight: {
+          providerId: facts.candidate.providerId,
+          deploymentId: facts.candidate.deploymentId,
+          providerModelId: facts.candidate.providerModelId,
+          providerRequestModelId: facts.candidate.providerRequestModelId,
+          providerModelVersion: facts.candidate.providerModelVersion,
+          sourceRequestFingerprint,
+          inputEnvelopeFingerprint: `sha256:${"e".repeat(64)}`,
+          canonicalRequestFingerprint: `sha256:${"f".repeat(64)}`,
+          inputTokenCount: 10,
+          effectiveMaxOutputTokens,
+          maximumTotalTokens: 10 + effectiveMaxOutputTokens,
+          maximumCostUsdMicros: 0,
+        },
+      };
+    },
     async health() {
       counters.health += 1;
       return validateAndNormalizeModelProviderHealth({
@@ -637,8 +688,11 @@ function directProvider(
     },
     async run(requestInput: unknown) {
       counters.run += 1;
-      observe?.(requestInput);
-      const requestDecision = validateAndNormalizeModelInvocationRequest(requestInput);
+      const providerRequest = requestInput && typeof requestInput === "object" && "request" in requestInput
+        ? (requestInput as { request: unknown }).request
+        : requestInput;
+      observe?.(providerRequest);
+      const requestDecision = validateAndNormalizeModelInvocationRequest(providerRequest);
       assert.ok(requestDecision.normalizedRequest);
       const normalizedResult = result(
         requestDecision.normalizedRequest,
@@ -797,7 +851,13 @@ for (const dataEgressMode of ["redacted_only", "approved_minimum"]) {
     const input = routeInput({ dataEgressMode, deploymentMode: "remote" });
     const provider = mockProvider(input);
     const counters = { health: 0, run: 0, tool: 0 };
-    const decision = await executeModelInvocation(input, [instrument(provider, counters)]);
+    const decision = await executeModelInvocation(
+      input,
+      [instrument(provider, counters)],
+      undefined,
+      undefined,
+      completeAuthority(),
+    );
     assertDeny(decision);
     assert.deepEqual(reasonCodes(decision), ["data_handling_evidence_source_unavailable"]);
     assert.deepEqual(counters, { health: 0, run: 0, tool: 0 });
@@ -833,11 +893,13 @@ test("remote redaction uses one least-privilege resolver call and only the AI-02
     input,
     [directProvider(input, counters, 0, (value) => { providerInput = value; })],
     resolver,
+    undefined,
+    completeAuthority(),
   );
 
   assert.equal(decision.verdict, "allow", JSON.stringify(decision.reasons));
   assert.equal(resolverCalls, 1);
-  assert.deepEqual(counters, { health: 1, run: 1, tool: 0 });
+  assert.deepEqual(counters, { health: 0, run: 1, tool: 0 });
   assert.equal(deeplyFrozen(providerInput), true);
   const resolverJson = JSON.stringify(resolverInput);
   assert.equal(resolverJson.includes("messages"), true);
@@ -864,12 +926,14 @@ test("remote redaction uses one least-privilege resolver call and only the AI-02
     input,
     [directProvider(input, repeatedCounters)],
     { async resolve() { return redactionEvidence(input); } },
+    undefined,
+    completeAuthority(),
   );
   assert.deepEqual(repeated, decision);
   assert.notEqual(repeated, decision);
   assert.notEqual(repeated.dataHandlingPermit, decision.dataHandlingPermit);
   assert.equal(deeplyFrozen(repeated), true);
-  assert.deepEqual(repeatedCounters, { health: 1, run: 1, tool: 0 });
+  assert.deepEqual(repeatedCounters, { health: 0, run: 1, tool: 0 });
 });
 
 test("remote approval resolver receives no messages and provider receives exact approved messages", async () => {
@@ -894,10 +958,12 @@ test("remote approval resolver receives no messages and provider receives exact 
         return approvalEvidence(input);
       },
     },
+    undefined,
+    completeAuthority(),
   );
 
   assert.equal(decision.verdict, "allow", JSON.stringify(decision.reasons));
-  assert.deepEqual(counters, { health: 1, run: 1, tool: 0 });
+  assert.deepEqual(counters, { health: 0, run: 1, tool: 0 });
   const resolverJson = JSON.stringify(resolverInput);
   for (const forbidden of ["messages", "artifact-approval-sentinel", "routeInput", "credentials"]) {
     assert.equal(resolverJson.includes(forbidden), false, forbidden);
@@ -946,6 +1012,8 @@ test("resolver failures and invalid candidate-specific evidence deny before heal
       scenario.input,
       [directProvider(scenario.input, counters)],
       { async resolve() { resolverCalls += 1; return scenario.resolve(); } },
+      undefined,
+      completeAuthority(),
     );
     assertDeny(decision);
     assert.equal(resolverCalls, 1);
@@ -1058,6 +1126,7 @@ test("trusted runtime time is captured once and an expired approval cannot be re
     [directProvider(input, counters)],
     resolver,
     trustedRuntime,
+    completeAuthority(),
   );
   assertDeny(decision);
   assert.deepEqual(reasonCodes(decision), ["data_handling_denied"]);
@@ -1082,6 +1151,7 @@ test("trusted runtime time is deterministic and is shared with resolver and perm
         },
       },
       { now() { clockCalls += 1; return "2026-08-26T10:15:40.000Z"; } },
+      completeAuthority(),
     );
     assert.equal(clockCalls, 1);
     assert.equal(decision.dataHandlingPermit?.evaluatedAt, "2026-08-26T10:15:40.000Z");
@@ -1650,7 +1720,60 @@ test("every execution deny is fail closed", async () => {
   for (const pending of cases) assertDeny(await pending);
 });
 
-test("real AI-026 adapter composes through redaction and an injected fake client without network", async () => {
+test("remote mock requires complete durable authority while local mock remains nondurable", async () => {
+  const remoteInput = routeInput({
+    dataEgressMode: "redacted_only",
+    deploymentMode: "remote",
+    draftOverrides: { contextArtifactIds: [] },
+  });
+  const base = mockProvider(remoteInput) as any;
+  const calls = { preflight: 0, health: 0, run: 0 };
+  const remoteProvider = {
+    identity: base.identity,
+    async preflight(...args: unknown[]) {
+      calls.preflight += 1;
+      return base.preflight(...args);
+    },
+    async health() { calls.health += 1; return base.health(); },
+    async run(value: unknown) { calls.run += 1; return base.run(value); },
+  };
+  const resolver = { async resolve() { return redactionEvidence(remoteInput); } };
+
+  const missing = await executeModelInvocation(remoteInput, [remoteProvider], resolver);
+  assertDeny(missing);
+  assert.deepEqual(calls, { preflight: 0, health: 0, run: 0 });
+
+  const partial = await executeModelInvocation(
+    remoteInput,
+    [remoteProvider],
+    resolver,
+    undefined,
+    { async prepare() { throw new Error("partial authority must not run"); } } as any,
+  );
+  assertDeny(partial);
+  assert.deepEqual(calls, { preflight: 0, health: 0, run: 0 });
+
+  const complete = await executeModelInvocation(
+    remoteInput,
+    [remoteProvider],
+    resolver,
+    undefined,
+    completeAuthority(),
+  );
+  assert.equal(complete.verdict, "allow", JSON.stringify(complete.reasons));
+  assert.deepEqual(calls, { preflight: 1, health: 0, run: 1 });
+
+  const localInput = routeInput();
+  const localCounters = { health: 0, run: 0, tool: 0 };
+  const local = await executeModelInvocation(
+    localInput,
+    [instrument(mockProvider(localInput), localCounters)],
+  );
+  assert.equal(local.verdict, "allow", JSON.stringify(local.reasons));
+  assert.deepEqual(localCounters, { health: 1, run: 1, tool: 0 });
+});
+
+test("remote AI-026 adapter requires complete authority and dispatches immediately after its final fence", async () => {
   const input = routeInput({
     dataEgressMode: "redacted_only",
     deploymentMode: "remote",
@@ -1671,8 +1794,10 @@ test("real AI-026 adapter composes through redaction and an injected fake client
     profile.candidates[0].deploymentId = "deployment-openai";
   }
   const facts = routeFacts(input);
+  const countRequests: unknown[] = [];
   const responseRequests: unknown[] = [];
   const retrievedModels: string[] = [];
+  const calls: string[] = [];
   const times = [10, 11, 20, 21];
   const factory = createOpenAIModelProvider({
     identity: facts.candidateIdentity,
@@ -1685,7 +1810,15 @@ test("real AI-026 adapter composes through redaction and an injected fake client
     createClient() {
       return {
         responses: {
+          inputTokens: {
+            async count(value) {
+              calls.push("count");
+              countRequests.push(clone(value));
+              return { object: "response.input_tokens", input_tokens: 10 };
+            },
+          },
           async create(value) {
+            calls.push("create");
             responseRequests.push(clone(value));
             return {
               model: "gpt-test-version",
@@ -1704,6 +1837,7 @@ test("real AI-026 adapter composes through redaction and an injected fake client
         },
         models: {
           async retrieve(model) {
+            calls.push("health");
             retrievedModels.push(model);
             return { id: model };
           },
@@ -1722,15 +1856,125 @@ test("real AI-026 adapter composes through redaction and an injected fake client
     { async resolve() { return redactionEvidence(input); } },
   );
 
-  assert.equal(decision.verdict, "allow", JSON.stringify(decision.reasons));
-  assert.equal(decision.normalizedResult?.outputText, "Safe fake OpenAI output.");
+  assertDeny(decision);
+  assert.equal(decision.reasons.some((reason) => reason.code === "generation_not_authorized"), true);
+  assert.equal(countRequests.length, 0);
+  assert.equal(retrievedModels.length, 0);
+  assert.equal(responseRequests.length, 0);
+
+  const partialAuthority = await executeModelInvocation(
+    input,
+    [factory.provider],
+    { async resolve() { return redactionEvidence(input); } },
+    undefined,
+    { async prepare() { throw new Error("partial authority must not run"); } } as any,
+  );
+  assertDeny(partialAuthority);
+  assert.deepEqual(reasonCodes(partialAuthority), ["invalid_input"]);
+  assert.equal(countRequests.length, 0);
+  assert.equal(retrievedModels.length, 0);
+  assert.equal(responseRequests.length, 0);
+
+  const staleBeforePreflight = await executeModelInvocation(
+    input,
+    [factory.provider],
+    { async resolve() { return redactionEvidence(input); } },
+    undefined,
+    {
+      async prepare() {
+        calls.push("preflight-fence");
+        return { status: "recovery_required" as const, preflight: null };
+      },
+      async authorizeGeneration() {
+        throw new Error("final fence must not run after failed preflight authority");
+      },
+    },
+  );
+  assertDeny(staleBeforePreflight);
+  assert.deepEqual(calls, ["preflight-fence"]);
+  assert.equal(countRequests.length, 0);
+  assert.equal(retrievedModels.length, 0);
+  assert.equal(responseRequests.length, 0);
+  calls.length = 0;
+
+  const staleBeforeGeneration = await executeModelInvocation(
+    input,
+    [factory.provider],
+    { async resolve() { return redactionEvidence(input); } },
+    undefined,
+    {
+      async prepare(context) {
+        calls.push("preflight-fence");
+        const preflight = await context.invoke({
+          authorizedMaxInputTokens: 16_000,
+          authorizedMaxOutputTokens: 4_000,
+          maxCostUsdMicros: 500_000,
+          deploymentMaxInputTokens: 128_000,
+          deploymentMaxOutputTokens: 16_000,
+          inputCostUsdMicrosPerMillionTokens: 1_000_000,
+          outputCostUsdMicrosPerMillionTokens: 2_000_000,
+        });
+        return { status: "ready" as const, preflight: preflight.normalizedPreflight };
+      },
+      async authorizeGeneration() {
+        calls.push("budget-reservation", "final-generation-fence");
+        return { status: "recovery_required" as const };
+      },
+    },
+  );
+  assertDeny(staleBeforeGeneration);
+  assert.deepEqual(calls, [
+    "preflight-fence",
+    "count",
+    "budget-reservation",
+    "final-generation-fence",
+  ]);
+  assert.equal(countRequests.length, 1);
+  assert.equal(retrievedModels.length, 0);
+  assert.equal(responseRequests.length, 0);
+  calls.length = 0;
+  countRequests.length = 0;
+
+  const authorized = await executeModelInvocation(
+    input,
+    [factory.provider],
+    { async resolve() { return redactionEvidence(input); } },
+    undefined,
+    {
+      async prepare(context) {
+        calls.push("preflight-fence");
+        const preflight = await context.invoke({
+          authorizedMaxInputTokens: 16_000,
+          authorizedMaxOutputTokens: 4_000,
+          maxCostUsdMicros: 500_000,
+          deploymentMaxInputTokens: 128_000,
+          deploymentMaxOutputTokens: 16_000,
+          inputCostUsdMicrosPerMillionTokens: 1_000_000,
+          outputCostUsdMicrosPerMillionTokens: 2_000_000,
+        });
+        assert.equal(preflight.verdict, "allow", JSON.stringify(preflight.reasons));
+        return { status: "ready" as const, preflight: preflight.normalizedPreflight };
+      },
+      async authorizeGeneration() {
+        calls.push("budget-reservation", "final-generation-fence");
+        assert.equal(countRequests.length, 1);
+        assert.equal(retrievedModels.length, 0);
+        assert.equal(responseRequests.length, 0);
+        return { status: "authorized" as const };
+      },
+    },
+  );
+  assert.equal(authorized.verdict, "allow", JSON.stringify(authorized.reasons));
+  assert.equal(authorized.normalizedResult?.outputText, "Safe fake OpenAI output.");
+  assert.deepEqual(calls, [
+    "preflight-fence",
+    "count",
+    "budget-reservation",
+    "final-generation-fence",
+    "create",
+  ]);
+  assert.equal(retrievedModels.length, 0);
   assert.equal(responseRequests.length, 1);
-  assert.deepEqual(retrievedModels, ["gpt-test-pinned"]);
-  const clientJson = JSON.stringify(responseRequests[0]);
-  assert.equal(clientJson.includes("SECRET_SENTINEL"), false);
-  assert.equal(clientJson.includes("[REDACTED:CREDENTIAL]"), true);
-  assert.equal(clientJson.includes("artifact-openai-sentinel"), false);
-  assert.equal(clientJson.includes("fake-test-key"), false);
 });
 
 test("production source has one provider, resolver, and trusted-clock call site with primary-only authority", () => {
