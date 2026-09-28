@@ -151,7 +151,9 @@ type ModelInvocationRow = Record<string, unknown> & {
   provider_id: string;
   deployment_id: string;
   provider_model_id: string;
+  provider_request_model_id: string | null;
   provider_model_version: string;
+  provider_identity_version: number;
   outcome: "succeeded" | "failed" | null;
   finish_reason: string | null;
   input_tokens: string | number | null;
@@ -307,12 +309,31 @@ function normalizeStoredResponse(input: unknown): WorkflowRuntimeResponse | null
     || typeof value.retryPending.stepId !== "string"
     || !safeInteger(value.retryPending.attemptCount)
     || typeof value.retryPending.errorCode !== "string")) return null;
-  if (value.lastStepResult !== null && (!plainRecord(value.lastStepResult)
-    || !exactFields(value.lastStepResult, [
+  let normalizedLastStepResult = value.lastStepResult;
+  if (normalizedLastStepResult !== null) {
+    if (!plainRecord(normalizedLastStepResult)
+      || containsForbiddenStoredKey(normalizedLastStepResult)) return null;
+    const legacyFields = [
       "stepId", "outcome", "finishReason", "providerId", "providerModelId",
       "providerModelVersion", "usage", "latencyMs", "costUsdMicros",
-    ]) || containsForbiddenStoredKey(value.lastStepResult))) return null;
-  return freezeModelProviderAdapterData(cloneModelProviderAdapterData(value as WorkflowRuntimeResponse));
+    ] as const;
+    const currentFields = [
+      ...legacyFields.slice(0, 5), "providerRequestModelId", ...legacyFields.slice(5),
+    ];
+    if (exactFields(normalizedLastStepResult, legacyFields)) {
+      normalizedLastStepResult = {
+        ...normalizedLastStepResult,
+        providerRequestModelId: null,
+      };
+    } else if (!exactFields(normalizedLastStepResult, currentFields)
+      || !safePinnedProviderIdentifier(normalizedLastStepResult.providerRequestModelId)) {
+      return null;
+    }
+  }
+  return freezeModelProviderAdapterData(cloneModelProviderAdapterData({
+    ...value,
+    lastStepResult: normalizedLastStepResult,
+  } as WorkflowRuntimeResponse));
 }
 
 function leaseDuration(input: number | undefined): number {
@@ -459,6 +480,11 @@ function safeProviderIdentifier(input: unknown): input is string {
     && !/[\u0000-\u001f\u007f\r\n]/u.test(input);
 }
 
+function safePinnedProviderIdentifier(input: unknown): input is string {
+  return safeProviderIdentifier(input) && input === input.trim()
+    && /^[A-Za-z0-9][A-Za-z0-9/:@._-]*$/u.test(input);
+}
+
 function validInvocationReservation(input: AgentStepModelInvocationReservation): boolean {
   return stableIdPattern.test(input.workspaceId)
     && stableIdPattern.test(input.runId)
@@ -476,6 +502,7 @@ function validInvocationReservation(input: AgentStepModelInvocationReservation):
     && safeProviderIdentifier(input.providerId)
     && safeProviderIdentifier(input.deploymentId)
     && safeProviderIdentifier(input.providerModelId)
+    && safeProviderIdentifier(input.providerRequestModelId)
     && safeProviderIdentifier(input.providerModelVersion);
 }
 
@@ -526,6 +553,8 @@ function sameReservation(row: ModelInvocationRow, input: AgentStepModelInvocatio
     && row.provider_id === input.providerId
     && row.deployment_id === input.deploymentId
     && row.provider_model_id === input.providerModelId
+    && row.provider_request_model_id === input.providerRequestModelId
+    && row.provider_identity_version === 2
     && row.provider_model_version === input.providerModelVersion;
 }
 
@@ -634,7 +663,8 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
                 invocation.agent_binding_id, invocation.step_id, invocation.attempt_number,
                 invocation.model_profile_id, invocation.request_fingerprint, invocation.status,
                 invocation.provider_id, invocation.deployment_id,
-                invocation.provider_model_id, invocation.provider_model_version,
+                invocation.provider_model_id, invocation.provider_request_model_id,
+                invocation.provider_model_version, invocation.provider_identity_version,
                 invocation.outcome, invocation.finish_reason,
                 invocation.input_tokens::text as input_tokens,
                 invocation.output_tokens::text as output_tokens,
@@ -1393,7 +1423,9 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
              and invocation.agent_id = $12 and invocation.agent_binding_id = $13
              and invocation.model_profile_id = $14 and invocation.provider_id = $15
              and invocation.deployment_id = $16 and invocation.provider_model_id = $17
-             and invocation.provider_model_version = $18
+             and invocation.provider_request_model_id = $18
+             and invocation.provider_model_version = $19
+             and invocation.provider_identity_version = 2
            for update of invocation`,
           [
             this.#workspaceDatabaseId,
@@ -1413,6 +1445,7 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
             reservation.providerId,
             reservation.deploymentId,
             reservation.providerModelId,
+            reservation.providerRequestModelId,
             reservation.providerModelVersion,
           ],
         );
@@ -1511,10 +1544,11 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
              invocation_id, run_revision, project_id, workflow_id, agent_id,
              agent_binding_id, step_id, attempt_number, model_profile_id,
              request_fingerprint, reservation_token, status, provider_id, deployment_id,
-             provider_model_id, provider_model_version, created_at, started_at
+             provider_model_id, provider_request_model_id, provider_model_version,
+             provider_identity_version, created_at, started_at
            ) values (
              $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-             $13, $14, 'running', $15, $16, $17, $18, $19, $19
+             $13, $14, 'running', $15, $16, $17, $18, $19, 2, $20, $20
            ) on conflict do nothing`,
           [
             this.#workspaceDatabaseId,
@@ -1534,6 +1568,7 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
             input.providerId,
             input.deploymentId,
             input.providerModelId,
+            input.providerRequestModelId,
             input.providerModelVersion,
             this.#trustedNow(),
           ],
@@ -1565,7 +1600,8 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
                   run_revision::text as run_revision, project_id,
                   workflow_id, agent_id, agent_binding_id, step_id, attempt_number,
                   model_profile_id, request_fingerprint, status, provider_id,
-                  deployment_id, provider_model_id, provider_model_version,
+                  deployment_id, provider_model_id, provider_request_model_id,
+                  provider_model_version, provider_identity_version,
                   outcome, finish_reason, input_tokens::text as input_tokens,
                   output_tokens::text as output_tokens, total_tokens::text as total_tokens,
                   latency_ms::text as latency_ms, cost_usd_micros::text as cost_usd_micros,
@@ -1628,7 +1664,8 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
                   invocation.step_id, invocation.attempt_number, invocation.model_profile_id,
                   invocation.request_fingerprint, invocation.status, invocation.provider_id,
                   invocation.deployment_id, invocation.provider_model_id,
-                  invocation.provider_model_version, invocation.outcome,
+                  invocation.provider_request_model_id, invocation.provider_model_version,
+                  invocation.provider_identity_version, invocation.outcome,
                   invocation.finish_reason, invocation.input_tokens::text as input_tokens,
                   invocation.output_tokens::text as output_tokens,
                   invocation.total_tokens::text as total_tokens,

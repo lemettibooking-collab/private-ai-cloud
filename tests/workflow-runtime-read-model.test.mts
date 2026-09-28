@@ -56,7 +56,8 @@ function usageRow(overrides: Record<string, unknown> = {}) {
     total_tokens: "15",
     total_cost_usd_micros: "11",
     last_provider_id: "provider-one",
-    last_provider_model_id: "provider/model:v1",
+    last_provider_model_id: "provider/model:alias",
+    last_provider_request_model_id: "provider/model:v1",
     last_provider_model_version: "version-1",
     ...overrides,
   };
@@ -97,8 +98,10 @@ test("Run overview is workspace scoped and exposes rejected approval without cal
       status: "succeeded",
       provider_id: "provider-one",
       deployment_id: "deployment-one",
-      provider_model_id: "provider/model:v1",
+      provider_model_id: "provider/model:alias",
+      provider_request_model_id: "provider/model:v1",
       provider_model_version: "version-1",
+      provider_identity_version: 2,
       request_fingerprint: `sha256:${"a".repeat(64)}`,
       created_at: "2026-09-02T08:03:00.000Z",
       completed_at: "2026-09-02T08:03:01.000Z",
@@ -114,6 +117,49 @@ test("Run overview is workspace scoped and exposes rejected approval without cal
   assert.equal(JSON.stringify(decision).includes("messages"), false);
   assert.equal(Object.isFrozen(decision), true);
   assert.deepEqual(database.queries[0]?.values, [workspaceDatabaseId, "run-one"]);
+  database.done();
+});
+
+test("legacy terminal invocation remains auditable without fabricating pinned identity", async () => {
+  const state = fixtureContract.createWorkflowRuntimeStateFixture();
+  const database = new ReadDatabase([
+    { tag: "workflow-runtime-read:run-overview", rows: [{
+      project_id: state.snapshot.projectId,
+      workflow_id: state.snapshot.workflowId,
+      status: state.snapshot.status,
+      revision: String(state.snapshot.revision),
+      runtime_snapshot: structuredClone(state.snapshot),
+      created_at: "2026-09-02T08:00:00.000Z",
+      started_at: null,
+      completed_at: null,
+    }] },
+    { tag: "workflow-runtime-read:run-approval", rows: [] },
+    { tag: "workflow-runtime-read:latest-model-invocation", rows: [{
+      invocation_id: "invocation-legacy",
+      step_id: "step-one",
+      attempt_number: 1,
+      status: "succeeded",
+      provider_id: "provider-one",
+      deployment_id: "deployment-one",
+      provider_model_id: "provider/model:alias",
+      provider_request_model_id: null,
+      provider_model_version: "version-1",
+      provider_identity_version: 1,
+      request_fingerprint: `sha256:${"c".repeat(64)}`,
+      created_at: "2026-09-02T08:03:00.000Z",
+      completed_at: "2026-09-02T08:03:01.000Z",
+      execution_status: "completed",
+    }] },
+    { tag: "workflow-runtime-read:model-usage", rows: [usageRow({
+      last_provider_request_model_id: null,
+    })] },
+  ]);
+  const decision = await model(database).getRunOverview("run-one");
+  assert.equal(decision.verdict, "allow");
+  assert.equal(decision.data?.latestModelInvocation?.providerIdentityVersion, 1);
+  assert.equal(decision.data?.latestModelInvocation?.providerRequestModelId, null);
+  assert.equal(decision.data?.modelUsage.lastProviderRequestModelId, null);
+  assert.equal(JSON.stringify(decision).includes("provider/model:v1"), false);
   database.done();
 });
 
@@ -214,7 +260,7 @@ test("succeeded model ledger cannot override an outcome_unknown outer execution"
     { tag: "workflow-runtime-read:latest-model-invocation", rows: [{
       invocation_id: "invocation-one", step_id: "step-one", attempt_number: 1,
       status: "succeeded", provider_id: "provider-one", deployment_id: "deployment-one",
-      provider_model_id: "provider/model:v1", provider_model_version: "version-1",
+      provider_model_id: "provider/model:alias", provider_request_model_id: "provider/model:v1", provider_model_version: "version-1", provider_identity_version: 2,
       request_fingerprint: `sha256:${"a".repeat(64)}`,
       created_at: "2026-09-02T08:03:00.000Z", completed_at: "2026-09-02T08:03:01.000Z",
       execution_status: "outcome_unknown",
@@ -244,7 +290,7 @@ test("an older succeeded invocation with an ambiguous outer execution denies ove
     { tag: "workflow-runtime-read:latest-model-invocation", rows: [{
       invocation_id: "invocation-two", step_id: "step-two", attempt_number: 1,
       status: "succeeded", provider_id: "provider-one", deployment_id: "deployment-one",
-      provider_model_id: "provider/model:v1", provider_model_version: "version-1",
+      provider_model_id: "provider/model:alias", provider_request_model_id: "provider/model:v1", provider_model_version: "version-1", provider_identity_version: 2,
       request_fingerprint: `sha256:${"b".repeat(64)}`,
       created_at: "2026-09-02T08:04:00.000Z", completed_at: "2026-09-02T08:04:01.000Z",
       execution_status: "completed",

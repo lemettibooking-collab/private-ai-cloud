@@ -116,6 +116,8 @@ export type WorkflowRuntimeLastStepResult = Readonly<{
   finishReason: ModelInvocationResult["finishReason"];
   providerId: string;
   providerModelId: string;
+  /** Null only when replaying a pre-pinned durable command response. */
+  providerRequestModelId: string | null;
   providerModelVersion: string;
   usage: ModelInvocationResult["usage"];
   latencyMs: number;
@@ -599,6 +601,7 @@ function lastResult(stepId: string, result: ModelInvocationResult): WorkflowRunt
     finishReason: result.finishReason,
     providerId: result.providerId,
     providerModelId: result.providerModelId,
+    providerRequestModelId: result.providerRequestModelId,
     providerModelVersion: result.providerModelVersion,
     usage: cloneModelProviderAdapterData(result.usage),
     latencyMs: result.latencyMs,

@@ -27,6 +27,7 @@ export type WorkflowRuntimeModelUsage = Readonly<{
   totalCostUsdMicros: number;
   lastProviderId: string | null;
   lastProviderModelId: string | null;
+  lastProviderRequestModelId: string | null;
   lastProviderModelVersion: string | null;
 }>;
 
@@ -38,7 +39,9 @@ export type WorkflowRuntimeInvocationSummary = Readonly<{
   providerId: string;
   deploymentId: string;
   providerModelId: string;
+  providerRequestModelId: string | null;
   providerModelVersion: string;
+  providerIdentityVersion: 1 | 2;
   requestFingerprint: string;
   createdAt: string;
   completedAt: string | null;
@@ -179,6 +182,7 @@ function approval(row: Row, runId: string): WorkflowRuntimeApprovalSummary | nul
 
 function invocation(row: Row): WorkflowRuntimeInvocationSummary | null {
   const attemptNumber = integer(row.attempt_number);
+  const providerIdentityVersion = integer(row.provider_identity_version);
   const createdAt = timestamp(row.created_at);
   const completedAt = optionalTimestamp(row.completed_at);
   if (typeof row.invocation_id !== "string" || !stableIdPattern.test(row.invocation_id)
@@ -187,6 +191,11 @@ function invocation(row: Row): WorkflowRuntimeInvocationSummary | null {
     || !["running", "succeeded", "failed", "outcome_unknown"].includes(row.status as string)
     || ![row.provider_id, row.deployment_id, row.provider_model_id, row.provider_model_version]
       .every((value) => typeof value === "string" && value.length <= 256 && safeTextPattern.test(value))
+    || (providerIdentityVersion !== 1 && providerIdentityVersion !== 2)
+    || (providerIdentityVersion === 1 && row.provider_request_model_id !== null)
+    || (providerIdentityVersion === 2 && (typeof row.provider_request_model_id !== "string"
+      || row.provider_request_model_id.length > 256
+      || !safeTextPattern.test(row.provider_request_model_id)))
     || typeof row.request_fingerprint !== "string" || !fingerprintPattern.test(row.request_fingerprint)
     || !createdAt || completedAt === undefined) return null;
   return {
@@ -197,7 +206,9 @@ function invocation(row: Row): WorkflowRuntimeInvocationSummary | null {
     providerId: row.provider_id as string,
     deploymentId: row.deployment_id as string,
     providerModelId: row.provider_model_id as string,
+    providerRequestModelId: row.provider_request_model_id as string | null,
     providerModelVersion: row.provider_model_version as string,
+    providerIdentityVersion,
     requestFingerprint: row.request_fingerprint,
     createdAt,
     completedAt,
@@ -209,7 +220,7 @@ function usage(row: Row): WorkflowRuntimeModelUsage | null {
     "input_tokens", "output_tokens", "total_tokens", "total_cost_usd_micros"] as const;
   const parsed = Object.fromEntries(numbers.map((key) => [key, integer(row[key])])) as Record<typeof numbers[number], number | null>;
   if (Object.values(parsed).some((value) => value === null)) return null;
-  for (const value of [row.last_provider_id, row.last_provider_model_id, row.last_provider_model_version]) {
+  for (const value of [row.last_provider_id, row.last_provider_model_id, row.last_provider_request_model_id, row.last_provider_model_version]) {
     if (value !== null && (typeof value !== "string" || value.length > 256 || !safeTextPattern.test(value))) return null;
   }
   return {
@@ -223,6 +234,7 @@ function usage(row: Row): WorkflowRuntimeModelUsage | null {
     totalCostUsdMicros: parsed.total_cost_usd_micros as number,
     lastProviderId: row.last_provider_id as string | null,
     lastProviderModelId: row.last_provider_model_id as string | null,
+    lastProviderRequestModelId: row.last_provider_request_model_id as string | null,
     lastProviderModelVersion: row.last_provider_model_version as string | null,
   };
 }
@@ -262,6 +274,7 @@ export class PostgresWorkflowRuntimeReadModel {
               coalesce(sum(invocation.cost_usd_micros), 0)::text as total_cost_usd_micros,
               (array_agg(invocation.provider_id order by invocation.created_at desc))[1] as last_provider_id,
               (array_agg(invocation.provider_model_id order by invocation.created_at desc))[1] as last_provider_model_id,
+              (array_agg(invocation.provider_request_model_id order by invocation.created_at desc))[1] as last_provider_request_model_id,
               (array_agg(invocation.provider_model_version order by invocation.created_at desc))[1] as last_provider_model_version
        from workflow_runs as run
        left join workflow_model_invocations as invocation
@@ -326,7 +339,8 @@ export class PostgresWorkflowRuntimeReadModel {
           `/* workflow-runtime-read:latest-model-invocation */
            select invocation.invocation_id, invocation.step_id, invocation.attempt_number,
                   invocation.status, invocation.provider_id, invocation.deployment_id,
-                  invocation.provider_model_id, invocation.provider_model_version,
+                  invocation.provider_model_id, invocation.provider_request_model_id,
+                  invocation.provider_model_version, invocation.provider_identity_version,
                   invocation.request_fingerprint, invocation.created_at,
                   invocation.completed_at, execution.status as execution_status
            from workflow_model_invocations as invocation

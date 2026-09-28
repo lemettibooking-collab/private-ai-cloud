@@ -191,6 +191,7 @@ export type ModelInvocationResult = Readonly<{
   finishReason: ModelInvocationFinishReason;
   providerId: string;
   providerModelId: string;
+  providerRequestModelId: string;
   providerModelVersion: string;
   outputText: string | null;
   structuredOutput: JsonValue;
@@ -239,7 +240,7 @@ const requestFields = Object.freeze([
 ] as const);
 const resultEvaluationFields = Object.freeze(["snapshot", "request", "result"] as const);
 const resultFields = Object.freeze([
-  "invocationId", "outcome", "finishReason", "providerId", "providerModelId", "providerModelVersion", "outputText",
+  "invocationId", "outcome", "finishReason", "providerId", "providerModelId", "providerRequestModelId", "providerModelVersion", "outputText",
   "structuredOutput", "toolCallProposals", "usage", "latencyMs", "costUsdMicros", "error",
 ] as const);
 const usageFields = Object.freeze(["inputTokens", "outputTokens", "totalTokens"] as const);
@@ -744,11 +745,12 @@ function normalizeResultData(input: unknown, path = "result"): ModelInvocationRe
   const outcome = own(input, "outcome"); const finishReason = own(input, "finishReason");
   const providerId = boundedAuditIdentifier(own(input, "providerId"));
   const providerModelId = boundedAuditIdentifier(own(input, "providerModelId"));
+  const providerRequestModelId = boundedAuditIdentifier(own(input, "providerRequestModelId"));
   const providerModelVersion = boundedAuditIdentifier(own(input, "providerModelVersion"));
   if (!invocationId) addReason(reasons, "invalid_result", `${path}.invocationId`, "invocationId must be a stable ID.");
   if (!includesValue(modelInvocationResultStatuses, outcome)) addReason(reasons, "invalid_result", `${path}.outcome`, "Result outcome is invalid.");
   if (!includesValue(modelInvocationFinishReasons, finishReason)) addReason(reasons, "invalid_result", `${path}.finishReason`, "finishReason is invalid.");
-  for (const [key, value] of [["providerId", providerId], ["providerModelId", providerModelId], ["providerModelVersion", providerModelVersion]] as const) if (value === null) addReason(reasons, "invalid_result", `${path}.${key}`, `${key} is invalid.`);
+  for (const [key, value] of [["providerId", providerId], ["providerModelId", providerModelId], ["providerRequestModelId", providerRequestModelId], ["providerModelVersion", providerModelVersion]] as const) if (value === null) addReason(reasons, "invalid_result", `${path}.${key}`, `${key} is invalid.`);
   const outputRaw = own(input, "outputText"); const outputText = outputRaw === null ? null : boundedText(outputRaw, modelInvocationLimits.maxOutputTextLength, true);
   if (outputRaw !== null && outputText === null) addReason(reasons, "limit_exceeded", `${path}.outputText`, "outputText is invalid or oversized.");
   const structuredRaw = own(input, "structuredOutput");
@@ -798,8 +800,8 @@ function normalizeResultData(input: unknown, path = "result"): ModelInvocationRe
     }
   }
   proposals.sort((left, right) => compareStrings(left.toolCallId, right.toolCallId));
-  if (reasons.length > 0 || !invocationId || !includesValue(modelInvocationResultStatuses, outcome) || !includesValue(modelInvocationFinishReasons, finishReason) || !providerId || !providerModelId || !providerModelVersion || structuredOutput === undefined || !usage || latencyMs === null || costUsdMicros === null) return resultDeny(reasons);
-  return deepFreeze({ verdict: "allow", reasons: [], normalizedResult: { invocationId, outcome, finishReason, providerId, providerModelId, providerModelVersion, outputText, structuredOutput, toolCallProposals: proposals, usage, latencyMs, costUsdMicros, error } });
+  if (reasons.length > 0 || !invocationId || !includesValue(modelInvocationResultStatuses, outcome) || !includesValue(modelInvocationFinishReasons, finishReason) || !providerId || !providerModelId || !providerRequestModelId || !providerModelVersion || structuredOutput === undefined || !usage || latencyMs === null || costUsdMicros === null) return resultDeny(reasons);
+  return deepFreeze({ verdict: "allow", reasons: [], normalizedResult: { invocationId, outcome, finishReason, providerId, providerModelId, providerRequestModelId, providerModelVersion, outputText, structuredOutput, toolCallProposals: proposals, usage, latencyMs, costUsdMicros, error } });
 }
 
 export function validateAndNormalizeModelInvocationResult(input: unknown): ModelInvocationResultValidationDecision {

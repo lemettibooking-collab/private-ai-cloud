@@ -531,6 +531,7 @@ function identityForCandidate(candidate: ModelInvocationRouteCandidate): ModelPr
     providerKind: candidate.providerKind,
     deploymentId: candidate.deploymentId,
     providerModelId: candidate.providerModelId,
+    providerRequestModelId: candidate.providerRequestModelId,
     providerModelVersion: candidate.providerModelVersion,
   };
 }
@@ -771,6 +772,7 @@ function candidateMatchesIdentity(
     && candidate.providerKind === identity.providerKind
     && candidate.deploymentId === identity.deploymentId
     && candidate.providerModelId === identity.providerModelId
+    && candidate.providerRequestModelId === identity.providerRequestModelId
     && candidate.providerModelVersion === identity.providerModelVersion;
 }
 
@@ -979,6 +981,7 @@ function normalizeProviderDecision(
   if (result.invocationId !== request.invocationId
     || result.providerId !== candidate.providerId
     || result.providerModelId !== candidate.providerModelId
+    || result.providerRequestModelId !== candidate.providerRequestModelId
     || result.providerModelVersion !== candidate.providerModelVersion) {
     return { kind: "invalid" };
   }

@@ -56,6 +56,7 @@ export type MockModelProviderReasonCode =
   | "invocation_id_mismatch"
   | "provider_id_mismatch"
   | "provider_model_id_mismatch"
+  | "provider_request_model_id_mismatch"
   | "provider_model_version_mismatch"
   | "tool_not_allowed"
   | "duplicate_invocation_id";
@@ -198,6 +199,15 @@ function validateScriptIdentities(
       "provider_model_id_mismatch",
       `${path}.result.providerModelId`,
       "Scripted result providerModelId must match Mock identity.",
+      context,
+    );
+  }
+  if (script.result.providerRequestModelId !== identity.providerRequestModelId) {
+    addFactoryReason(
+      reasons,
+      "provider_request_model_id_mismatch",
+      `${path}.result.providerRequestModelId`,
+      "Scripted result providerRequestModelId must match Mock identity.",
       context,
     );
   }

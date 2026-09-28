@@ -20,7 +20,7 @@ const apiContract = (await import(
   new URL("../lib/workflows/workflow-runtime-api.ts", import.meta.url).href
 )) as typeof import("../lib/workflows/workflow-runtime-api");
 
-const { createWorkflowRuntimeService } = serviceContract;
+const { createWorkflowRuntimeService, normalizeWorkflowRuntimeState } = serviceContract;
 const { createWorkflowRunSnapshot, evaluateWorkflowRunTransition } = runContract;
 const {
   validateAndNormalizeModelInvocationRequest,
@@ -309,7 +309,8 @@ function modelProviderRegistry() {
       id: "deployment-mock",
       providerId: "provider-mock",
       status: "active",
-      providerModelId: "mock/model:v1",
+      providerModelId: "mock/model:alias",
+      providerRequestModelId: "mock/model:v1",
       providerModelVersion: "version-1",
       capabilities: ["messages"],
       supportedOutputTypes: ["patch"],
@@ -701,7 +702,8 @@ function provider(options: {
         providerId: "provider-mock",
         providerKind: "mock",
         deploymentId: "deployment-mock",
-        providerModelId: "mock/model:v1",
+        providerModelId: "mock/model:alias",
+        providerRequestModelId: "mock/model:v1",
         providerModelVersion: "version-1",
       },
       async health() {
@@ -745,7 +747,8 @@ function provider(options: {
           outcome: "succeeded",
           finishReason: "stop",
           providerId: "provider-mock",
-          providerModelId: "mock/model:v1",
+          providerModelId: "mock/model:alias",
+          providerRequestModelId: "mock/model:v1",
           providerModelVersion: "version-1",
           outputText: `Output for ${request.stepId}`,
           structuredOutput: null,
@@ -964,6 +967,21 @@ test("permanent AI-029 provider failure commits canonical Workflow failure", asy
   const result = await service.advance(advanceCommand(1, ["step-a"]));
   assert.equal(result.status, "failed");
   assert.equal(result.workflowStatus, "failed");
+  assert.deepEqual(runtimeProvider.counts(), { health: 0, run: 0 });
+});
+
+test("legacy persisted registry loads for audit but cannot authorize a provider call", async () => {
+  const legacyState = clone(initialState("single")) as any;
+  delete legacyState.modelProviderRegistry.deployments[0].providerRequestModelId;
+  const loaded = normalizeWorkflowRuntimeState(legacyState);
+  assert.ok(loaded);
+  assert.equal("providerRequestModelId" in (loaded.modelProviderRegistry as any).deployments[0], false);
+  const store = new FakeStore(loaded);
+  const runtimeProvider = provider();
+  const service = createWorkflowRuntimeService(dependencies(store, runtimeProvider));
+  assert.equal((await start(service)).status, "running");
+  const result = await service.advance(advanceCommand(1, ["step-a"]));
+  assert.equal(result.verdict, "deny");
   assert.deepEqual(runtimeProvider.counts(), { health: 0, run: 0 });
 });
 
@@ -1520,6 +1538,59 @@ test("command replay is idempotent while same commandId with changed payload con
   assert.equal(replay.revision, first.revision);
   const conflict = await service.start({ ...command, expectedRevision: 1 });
   assert.equal(conflict.reasons[0]?.code, "idempotency_conflict");
+});
+
+test("normalized legacy command replay is historical only and creates no provider right", async () => {
+  const store = new LedgerFakeStore(initialState("single"));
+  const initialProvider = provider();
+  const initialService = createWorkflowRuntimeService(dependencies(store, initialProvider));
+  await start(initialService);
+  const command = advanceCommand(1, ["step-a"], "legacy-completed-command");
+  const completed = await initialService.advance(command);
+  assert.equal(completed.status, "completed", JSON.stringify(completed.reasons));
+  assert.deepEqual(initialProvider.counts(), { health: 1, run: 1 });
+
+  const stored = store.commands.get(command.commandId);
+  assert.ok(stored?.response?.lastStepResult);
+  const legacyProjection = clone(stored.response) as any;
+  legacyProjection.lastStepResult.providerRequestModelId = null;
+  store.commands.set(command.commandId, {
+    fingerprint: stored.fingerprint,
+    response: legacyProjection,
+  });
+  const before = {
+    claims: store.claims.size,
+    executions: store.executionJournal.size,
+    invocations: store.durableInvocations.size,
+    startExecutionAttempts: store.startExecutionAttempts,
+  };
+  const replayProvider = provider();
+  const replayService = createWorkflowRuntimeService(dependencies(store, replayProvider));
+
+  const replay = await replayService.advance(clone(command));
+  assert.equal(replay.verdict, "idempotent");
+  assert.equal(replay.status, "completed");
+  assert.equal(replay.lastStepResult?.providerRequestModelId, null);
+  assert.deepEqual(replayProvider.counts(), { health: 0, run: 0 });
+  assert.deepEqual({
+    claims: store.claims.size,
+    executions: store.executionJournal.size,
+    invocations: store.durableInvocations.size,
+    startExecutionAttempts: store.startExecutionAttempts,
+  }, before);
+
+  const changed = clone(command) as any;
+  changed.agentInputs[0].invocationDraft.messages[1].content = "Changed payload.";
+  const conflict = await replayService.advance(changed);
+  assert.equal(conflict.status, "conflict");
+  assert.equal(conflict.reasons[0]?.code, "idempotency_conflict");
+  assert.deepEqual(replayProvider.counts(), { health: 0, run: 0 });
+  assert.deepEqual({
+    claims: store.claims.size,
+    executions: store.executionJournal.size,
+    invocations: store.durableInvocations.size,
+    startExecutionAttempts: store.startExecutionAttempts,
+  }, before);
 });
 
 test("durable invocation ledger survives service recreation and fences exact or changed replay", async () => {

@@ -126,6 +126,7 @@ export type AgentStepModelInvocationReservation = Readonly<{
   providerId: string;
   deploymentId: string;
   providerModelId: string;
+  providerRequestModelId: string;
   providerModelVersion: string;
 }>;
 
@@ -695,6 +696,7 @@ function identityForPrimary(candidate: Readonly<{
   providerKind: ModelProviderIdentity["providerKind"];
   deploymentId: string;
   providerModelId: string;
+  providerRequestModelId: string;
   providerModelVersion: string;
 }>): ModelProviderIdentity {
   return {
@@ -702,6 +704,7 @@ function identityForPrimary(candidate: Readonly<{
     providerKind: candidate.providerKind,
     deploymentId: candidate.deploymentId,
     providerModelId: candidate.providerModelId,
+    providerRequestModelId: candidate.providerRequestModelId,
     providerModelVersion: candidate.providerModelVersion,
   };
 }
@@ -1283,6 +1286,7 @@ export async function executeAgentStep(
     providerId: primary.providerId,
     deploymentId: primary.deploymentId,
     providerModelId: primary.providerModelId,
+    providerRequestModelId: primary.providerRequestModelId,
     providerModelVersion: primary.providerModelVersion,
   });
   if (capturedInvocationLedger) {

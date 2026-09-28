@@ -351,7 +351,8 @@ function registryDeployment(providerId: string, deploymentId: string) {
     id: deploymentId,
     providerId,
     status: "active",
-    providerModelId: `${providerId}/model:v1`,
+    providerModelId: `${providerId}/model:alias`,
+    providerRequestModelId: `${providerId}/model:v1`,
     providerModelVersion: "version-1",
     capabilities: ["messages", "tool_calls", "structured_output"],
     supportedOutputTypes: ["patch", "test_report"],
@@ -507,7 +508,8 @@ function result(request: any, providerId: string, overrides: Record<string, unkn
     outcome: "succeeded",
     finishReason: "stop",
     providerId,
-    providerModelId: `${providerId}/model:v1`,
+    providerModelId: `${providerId}/model:alias`,
+    providerRequestModelId: `${providerId}/model:v1`,
     providerModelVersion: "version-1",
     outputText: "Deterministic Agent Step output.",
     structuredOutput: null,
@@ -540,6 +542,7 @@ function provider(
     providerKind: selected.providerKind,
     deploymentId: selected.deploymentId,
     providerModelId: selected.providerModelId,
+    providerRequestModelId: selected.providerRequestModelId,
     providerModelVersion: selected.providerModelVersion,
   };
   return {
@@ -1012,6 +1015,7 @@ test("durable invocation ledger reserves before provider and records bounded fac
     providerId: expected.route.routePlan!.primary.providerId,
     deploymentId: expected.route.routePlan!.primary.deploymentId,
     providerModelId: expected.route.routePlan!.primary.providerModelId,
+    providerRequestModelId: expected.route.routePlan!.primary.providerRequestModelId,
     providerModelVersion: "version-1",
   });
   assert.deepEqual(outcome, {

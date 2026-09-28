@@ -55,7 +55,8 @@ function invocationReservation(overrides: Record<string, unknown> = {}) {
     requestFingerprint: invocationRequestFingerprint,
     providerId: "provider-one",
     deploymentId: "deployment-one",
-    providerModelId: "provider/model:v1",
+    providerModelId: "provider/model:alias",
+    providerRequestModelId: "provider/model:v1",
     providerModelVersion: "version-1",
     ...overrides,
   } as import("../lib/workflows/agent-step-runtime").AgentStepModelInvocationReservation;
@@ -92,8 +93,10 @@ function invocationRow(overrides: Record<string, unknown> = {}) {
     status: "running",
     provider_id: "provider-one",
     deployment_id: "deployment-one",
-    provider_model_id: "provider/model:v1",
+    provider_model_id: "provider/model:alias",
+    provider_request_model_id: "provider/model:v1",
     provider_model_version: "version-1",
+    provider_identity_version: 2,
     outcome: null,
     finish_reason: null,
     input_tokens: null,
@@ -329,6 +332,36 @@ function auditResponse() {
     retryPending: null,
     lastStepResult: null,
   };
+}
+
+function auditResponseWithLastStepResult() {
+  return {
+    ...auditResponse(),
+    status: "completed" as const,
+    revision: 2,
+    workflowStatus: "completed" as const,
+    readyStepIds: [],
+    lastStepResult: {
+      stepId: "step-one",
+      outcome: "succeeded" as const,
+      finishReason: "stop" as const,
+      providerId: "provider-one",
+      providerModelId: "provider/model:alias",
+      providerRequestModelId: "provider/model:pinned",
+      providerModelVersion: "provider/model:returned",
+      usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+      latencyMs: 7,
+      costUsdMicros: 11,
+    },
+  };
+}
+
+function mutableAuditResponseWithLastStepResult() {
+  const response = structuredClone(auditResponseWithLastStepResult()) as unknown as Record<string, unknown>;
+  const lastStepResult = response.lastStepResult;
+  assert.ok(typeof lastStepResult === "object" && lastStepResult !== null
+    && !Array.isArray(lastStepResult));
+  return { response, lastStepResult: lastStepResult as Record<string, unknown> };
 }
 
 function commandInput() {
@@ -700,6 +733,98 @@ test("completed command replay returns the exact stored audit-safe response afte
   const result = await createStore(database).beginCommand(commandInput());
   assert.equal(result.status, "replay");
   assert.deepEqual(result.status === "replay" ? result.response : null, response);
+});
+
+test("legacy completed command replay represents missing pinned identity as factual null", async () => {
+  const { response, lastStepResult } = mutableAuditResponseWithLastStepResult();
+  delete lastStepResult.providerRequestModelId;
+  const database = new ScriptedDatabase([
+    { tag: "workflow-runtime:command-run", rows: [{ db_run_id: dbRunId }] },
+    { tag: "workflow-runtime:begin-command", rowCount: 0 },
+    { tag: "workflow-runtime:read-command", rows: [{
+      fingerprint,
+      expected_revision: "1",
+      status: "completed",
+      response_payload: response,
+      lease_expires_at: "2026-09-01T10:01:00.000Z",
+      effect_started_at: "2026-09-01T10:00:01.000Z",
+    }] },
+  ]);
+  const result = await createStore(database).beginCommand(commandInput());
+  assert.equal(result.status, "replay");
+  assert.equal(result.status === "replay"
+    ? result.response.lastStepResult?.providerRequestModelId
+    : "not-replay", null);
+  assert.equal(JSON.stringify(result).includes("provider/model:pinned"), false);
+  assert.equal(JSON.stringify(result).includes("provider/model:alias"), true);
+  assert.equal(JSON.stringify(result).includes("provider/model:returned"), true);
+  assert.deepEqual(database.queries.map((query) => query.tag), [
+    "workflow-runtime:command-run",
+    "workflow-runtime:begin-command",
+    "workflow-runtime:read-command",
+  ]);
+});
+
+test("current completed command response round-trips its explicit pinned identity unchanged", async () => {
+  const response = auditResponseWithLastStepResult();
+  const database = new ScriptedDatabase([
+    { tag: "workflow-runtime:command-run", rows: [{ db_run_id: dbRunId }] },
+    { tag: "workflow-runtime:begin-command", rowCount: 0 },
+    { tag: "workflow-runtime:read-command", rows: [{
+      fingerprint,
+      expected_revision: "1",
+      status: "completed",
+      response_payload: response,
+      lease_expires_at: "2026-09-01T10:01:00.000Z",
+      effect_started_at: "2026-09-01T10:00:01.000Z",
+    }] },
+  ]);
+  const result = await createStore(database).beginCommand(commandInput());
+  assert.equal(result.status, "replay");
+  assert.deepEqual(result.status === "replay" ? result.response : null, response);
+});
+
+test("only true pinned-field absence qualifies as a legacy completed response", async () => {
+  for (const providerRequestModelId of ["", "   ", "unsafe\nmodel", 42, null, false]) {
+    const { response, lastStepResult } = mutableAuditResponseWithLastStepResult();
+    lastStepResult.providerRequestModelId = providerRequestModelId;
+    const database = new ScriptedDatabase([
+      { tag: "workflow-runtime:command-run", rows: [{ db_run_id: dbRunId }] },
+      { tag: "workflow-runtime:begin-command", rowCount: 0 },
+      { tag: "workflow-runtime:read-command", rows: [{
+        fingerprint,
+        expected_revision: "1",
+        status: "completed",
+        response_payload: response,
+        lease_expires_at: "2026-09-01T10:01:00.000Z",
+        effect_started_at: "2026-09-01T10:00:01.000Z",
+      }] },
+    ]);
+    await assert.rejects(
+      createStore(database).beginCommand(commandInput()),
+      /Stored Workflow runtime response is invalid/u,
+    );
+  }
+});
+
+test("changed command identity still conflicts before legacy response compatibility", async () => {
+  const { response, lastStepResult } = mutableAuditResponseWithLastStepResult();
+  delete lastStepResult.providerRequestModelId;
+  const database = new ScriptedDatabase([
+    { tag: "workflow-runtime:command-run", rows: [{ db_run_id: dbRunId }] },
+    { tag: "workflow-runtime:begin-command", rowCount: 0 },
+    { tag: "workflow-runtime:read-command", rows: [{
+      fingerprint: "b".repeat(64),
+      expected_revision: "1",
+      status: "completed",
+      response_payload: response,
+      lease_expires_at: "2026-09-01T10:01:00.000Z",
+      effect_started_at: "2026-09-01T10:00:01.000Z",
+    }] },
+  ]);
+  assert.deepEqual(await createStore(database).beginCommand(commandInput()), {
+    status: "conflict",
+  });
 });
 
 test("abandoned command recovery requires explicit server policy and exact fingerprint", async () => {
@@ -1266,6 +1391,7 @@ test("provider-start fence atomically requires the exact running invocation rese
           "model-one",
           "provider-one",
           "deployment-one",
+          "provider/model:alias",
           "provider/model:v1",
           "version-1",
         ]);
@@ -1299,6 +1425,36 @@ test("provider-start fence denies missing or terminal invocation authority witho
     assert.equal(database.queries.some((query) => query.tag === "workflow-runtime:start-execution"), false);
     database.done();
   }
+});
+
+test("provider-start fence binds the pinned request model and cannot authorize legacy identity", async () => {
+  for (const providerStart of [
+    invocationReservation({ providerRequestModelId: "provider/model:v2" }),
+    invocationReservation(),
+  ]) {
+    const database = new ScriptedDatabase([
+      { tag: "workflow-runtime:read-execution", rows: [executionBoundaryRow()] },
+      {
+        tag: "workflow-runtime:provider-start-invocation",
+        rows: [],
+        inspect(values) {
+          assert.equal(values[17], providerStart.providerRequestModelId);
+        },
+      },
+    ]);
+    assert.deepEqual(await createStore(database).startExecution({
+      runId: "run-one",
+      claimId,
+      providerStart,
+    }), { status: "conflict" });
+    assert.equal(database.queries.some((query) => query.tag === "workflow-runtime:start-execution"), false);
+    database.done();
+  }
+  const source = readFileSync(
+    new URL("../lib/db/workflow-runtime-store.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /provider_request_model_id = \$18[\s\S]+?provider_identity_version = 2/u);
 });
 
 for (const fixture of [
@@ -1946,6 +2102,29 @@ test("migration 0004 makes runtime actor and invocation lifecycle NULL shapes ex
   );
 });
 
+test("migration 0005 preserves legacy identity and enforces explicit pinned version 2 writes", () => {
+  const migration = readFileSync(
+    new URL("../db/migrations/0005_pinned_provider_request_model.sql", import.meta.url),
+    "utf8",
+  );
+  for (const required of [
+    "add column provider_request_model_id text",
+    "add column provider_identity_version smallint",
+    "set provider_identity_version = 1",
+    "alter column provider_identity_version set default 2",
+    "provider_identity_version in (1, 2)",
+    "provider_identity_version = 1 and provider_request_model_id is null",
+    "provider_identity_version = 2",
+    "provider_request_model_id is not null",
+    "provider_request_model_id = btrim(provider_request_model_id)",
+  ]) assert.equal(migration.includes(required), true, required);
+  for (const unsafeBackfill of [
+    "provider_request_model_id = provider_model_id",
+    "provider_request_model_id = provider_model_version",
+    "__legacy__",
+  ]) assert.equal(migration.includes(unsafeBackfill), false, unsafeBackfill);
+});
+
 test("model invocation reservation is factual, precedes any provider boundary, and stores no request bodies", async () => {
   let storedReservationToken: unknown;
   const reservation = invocationReservation();
@@ -1960,6 +2139,9 @@ test("model invocation reservation is factual, precedes any provider boundary, a
         assert.equal(serialized.includes("sensitive prompt sentinel"), false);
         assert.equal(serialized.includes("messages"), false);
         assert.equal(values.includes(invocationRequestFingerprint), true);
+        assert.equal(values[16], "provider/model:alias");
+        assert.equal(values[17], "provider/model:v1");
+        assert.equal(values[18], "version-1");
       },
     },
   ]);
@@ -1995,10 +2177,11 @@ test("model invocation reservation is pre-provider authority and only accepts a 
   database.done();
 });
 
-test("durable invocation replay survives store recreation while changed fingerprint conflicts", async () => {
+test("durable invocation replay requires the same pinned identity and changed identity conflicts", async () => {
   for (const [reservation, expected] of [
     [invocationReservation(), "replay"],
     [invocationReservation({ requestFingerprint: `sha256:${"e".repeat(64)}` }), "conflict"],
+    [invocationReservation({ providerRequestModelId: "provider/model:v2" }), "conflict"],
   ] as const) {
     const database = new ScriptedDatabase([
       { tag: "workflow-runtime:model-invocation-execution", rows: [executionIdentityRow()] },

@@ -197,7 +197,7 @@ function admitted() {
 }
 
 function result(overrides: Record<string, unknown> = {}) {
-  return { invocationId: "invocation-one", outcome: "succeeded", finishReason: "stop", providerId: "provider-local", providerModelId: "model-audit-1", providerModelVersion: "version-1", outputText: "Prepared proposal.", structuredOutput: null, toolCallProposals: [], usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 }, latencyMs: 25, costUsdMicros: 125, error: null, ...overrides };
+  return { invocationId: "invocation-one", outcome: "succeeded", finishReason: "stop", providerId: "provider-local", providerModelId: "model-alias-1", providerRequestModelId: "model-request-1", providerModelVersion: "version-1", outputText: "Prepared proposal.", structuredOutput: null, toolCallProposals: [], usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 }, latencyMs: 25, costUsdMicros: 125, error: null, ...overrides };
 }
 
 function codes(decision: { reasons: readonly { code: string }[] }) { return decision.reasons.map((reason) => reason.code); }
@@ -465,7 +465,7 @@ test("empty and whitespace-only outputText do not satisfy successful output inva
 });
 
 test("provider audit identifiers are bounded single-line printable values with exact paths", () => {
-  const safe = result({ providerId: "provider/example:@edge", providerModelId: "family/model:v2@stable", providerModelVersion: "release/2026:08@one" });
+  const safe = result({ providerId: "provider/example:@edge", providerModelId: "family/model:alias", providerRequestModelId: "family/model:v2@stable", providerModelVersion: "release/2026:08@one" });
   assert.equal(validateAndNormalizeModelInvocationResult(safe).verdict, "allow");
   for (const field of ["providerId", "providerModelId", "providerModelVersion"] as const) {
     for (const value of ["", "   ", "line\nfeed", "carriage\rreturn", "unicode\u2028line", "unicode\u2029paragraph", "control\u0001value", "x".repeat(modelInvocationLimits.maxProviderAuditIdLength + 1)]) {

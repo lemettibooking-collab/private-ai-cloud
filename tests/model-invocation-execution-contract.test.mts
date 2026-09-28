@@ -363,7 +363,8 @@ function registryDeployment(providerId: string, deploymentId: string) {
     id: deploymentId,
     providerId,
     status: "active",
-    providerModelId: `${providerId}/model:v1`,
+    providerModelId: `${providerId}/model:alias`,
+    providerRequestModelId: `${providerId}/model:v1`,
     providerModelVersion: "version-1",
     capabilities: ["messages", "tool_calls", "structured_output"],
     supportedOutputTypes: ["patch", "test_report"],
@@ -447,6 +448,7 @@ function executionInput(
           providerKind: candidate.providerKind,
           deploymentId: candidate.deploymentId,
           providerModelId: candidate.providerModelId,
+          providerRequestModelId: candidate.providerRequestModelId,
           providerModelVersion: candidate.providerModelVersion,
         }
       : identity()),
@@ -483,7 +485,8 @@ function identity(providerId = "provider-mock", deploymentId = "deployment-mock"
     providerId,
     providerKind: "mock",
     deploymentId,
-    providerModelId: `${providerId}/model:v1`,
+    providerModelId: `${providerId}/model:alias`,
+    providerRequestModelId: `${providerId}/model:v1`,
     providerModelVersion: "version-1",
   };
 }
@@ -509,7 +512,8 @@ function result(
     outcome: "succeeded",
     finishReason: "stop",
     providerId,
-    providerModelId: `${providerId}/model:v1`,
+    providerModelId: `${providerId}/model:alias`,
+    providerRequestModelId: `${providerId}/model:v1`,
     providerModelVersion: "version-1",
     outputText: "Deterministic execution output.",
     structuredOutput: null,
@@ -537,6 +541,7 @@ function routeFacts(input: unknown, candidateIndex = 0) {
       providerKind: candidate.providerKind,
       deploymentId: candidate.deploymentId,
       providerModelId: candidate.providerModelId,
+      providerRequestModelId: candidate.providerRequestModelId,
       providerModelVersion: candidate.providerModelVersion,
     },
   };
@@ -1180,6 +1185,7 @@ test("exact pair with provider kind, model, or version mismatch blocks fallback"
   for (const overrides of [
     { providerKind: "local" },
     { providerModelId: "wrong/model" },
+    { providerRequestModelId: "wrong/request-model" },
     { providerModelVersion: "wrong-version" },
   ]) {
     const mismatch = {
@@ -1508,6 +1514,7 @@ test("result invocation and provider/model/version identities are rechecked", as
     { invocationId: "invocation-other" },
     { providerId: "provider-other" },
     { providerModelId: "other/model" },
+    { providerRequestModelId: "other/request-model" },
     { providerModelVersion: "other-version" },
   ]) {
     const candidateResult = result(request, "provider-mock", overrides);
@@ -1658,6 +1665,7 @@ test("real AI-026 adapter composes through redaction and an injected fake client
   input.modelProviderRegistry.deployments[0].id = "deployment-openai";
   input.modelProviderRegistry.deployments[0].providerId = "provider-openai";
   input.modelProviderRegistry.deployments[0].providerModelId = "gpt-test-alias";
+  input.modelProviderRegistry.deployments[0].providerRequestModelId = "gpt-test-pinned";
   input.modelProviderRegistry.deployments[0].providerModelVersion = "gpt-test-version";
   for (const profile of input.modelProviderRegistry.modelProfiles) {
     profile.candidates[0].deploymentId = "deployment-openai";
@@ -1717,7 +1725,7 @@ test("real AI-026 adapter composes through redaction and an injected fake client
   assert.equal(decision.verdict, "allow", JSON.stringify(decision.reasons));
   assert.equal(decision.normalizedResult?.outputText, "Safe fake OpenAI output.");
   assert.equal(responseRequests.length, 1);
-  assert.deepEqual(retrievedModels, ["gpt-test-alias"]);
+  assert.deepEqual(retrievedModels, ["gpt-test-pinned"]);
   const clientJson = JSON.stringify(responseRequests[0]);
   assert.equal(clientJson.includes("SECRET_SENTINEL"), false);
   assert.equal(clientJson.includes("[REDACTED:CREDENTIAL]"), true);

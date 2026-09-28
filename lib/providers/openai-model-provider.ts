@@ -498,7 +498,7 @@ function responseInput(request: ModelInvocationRequest, config: OpenAIModelProvi
       content: message.content,
     }));
   const output: OpenAIResponseCreateInput = {
-    model: config.identity.providerModelId,
+    model: config.identity.providerRequestModelId,
     input,
     store: false,
     stream: false,
@@ -646,6 +646,7 @@ function mapResponse(
       finishReason: "content_filter",
       providerId: config.identity.providerId,
       providerModelId: config.identity.providerModelId,
+      providerRequestModelId: config.identity.providerRequestModelId,
       providerModelVersion: config.identity.providerModelVersion,
       outputText: null,
       structuredOutput: null,
@@ -671,6 +672,7 @@ function mapResponse(
       finishReason: "stop",
       providerId: config.identity.providerId,
       providerModelId: config.identity.providerModelId,
+      providerRequestModelId: config.identity.providerRequestModelId,
       providerModelVersion: config.identity.providerModelVersion,
       outputText: output.text,
       structuredOutput: null,
@@ -687,6 +689,7 @@ function mapResponse(
       finishReason: "length",
       providerId: config.identity.providerId,
       providerModelId: config.identity.providerModelId,
+      providerRequestModelId: config.identity.providerRequestModelId,
       providerModelVersion: config.identity.providerModelVersion,
       outputText: output.text,
       structuredOutput: null,
@@ -715,6 +718,7 @@ function transportFailureResult(
     finishReason: "error",
     providerId: config.identity.providerId,
     providerModelId: config.identity.providerModelId,
+    providerRequestModelId: config.identity.providerRequestModelId,
     providerModelVersion: config.identity.providerModelVersion,
     outputText: null,
     structuredOutput: null,
@@ -836,12 +840,12 @@ function createProvider(
     async health(): Promise<ModelProviderHealthValidationDecision> {
       const start = dependencies.monotonicNow();
       try {
-        const rawModel = await client.retrieveModel(internalConfig.identity.providerModelId);
+        const rawModel = await client.retrieveModel(internalConfig.identity.providerRequestModelId);
         const latencyMs = elapsedMilliseconds(start, dependencies.monotonicNow());
         const observedAt = dependencies.observedAt();
         const snapshot = snapshotModelProviderAdapterInput(rawModel);
         if (latencyMs === null || !snapshot.ok || !isPlainRecord(snapshot.value)
-          || snapshot.value.id !== internalConfig.identity.providerModelId) {
+          || snapshot.value.id !== internalConfig.identity.providerRequestModelId) {
           return freezeModelProviderAdapterData({
             verdict: "deny",
             reasons: [adapterReason(

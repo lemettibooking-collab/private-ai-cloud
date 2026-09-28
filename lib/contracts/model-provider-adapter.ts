@@ -37,7 +37,11 @@ export type ModelProviderIdentity = Readonly<{
   providerId: string;
   providerKind: ModelProviderKind;
   deploymentId: string;
+  /** Routing or provider alias identity; never substitute it for the pinned request model. */
   providerModelId: string;
+  /** Explicit requestable, version-stable identity used for provider requests. */
+  providerRequestModelId: string;
+  /** Factual returned-model and audit identity. */
   providerModelVersion: string;
 }>;
 
@@ -118,6 +122,7 @@ const identityFields = Object.freeze([
   "providerKind",
   "deploymentId",
   "providerModelId",
+  "providerRequestModelId",
   "providerModelVersion",
 ] as const);
 const healthFields = Object.freeze([
@@ -326,6 +331,10 @@ function normalizeIdentityData(input: unknown): ModelProviderIdentityValidationD
     input.providerModelId,
     modelProviderAdapterLimits.maxAuditIdentifierLength,
   );
+  const providerRequestModelId = auditIdentifier(
+    input.providerRequestModelId,
+    modelProviderAdapterLimits.maxAuditIdentifierLength,
+  );
   const providerModelVersion = auditIdentifier(
     input.providerModelVersion,
     modelProviderAdapterLimits.maxAuditIdentifierLength,
@@ -341,12 +350,16 @@ function normalizeIdentityData(input: unknown): ModelProviderIdentityValidationD
   if (!providerModelId) {
     addReason(reasons, "invalid_identity", "$.providerModelId", "providerModelId is not a safe audit identifier.");
   }
+  if (!providerRequestModelId) {
+    addReason(reasons, "invalid_identity", "$.providerRequestModelId", "providerRequestModelId is not a safe pinned request identifier.");
+  }
   if (!providerModelVersion) {
     addReason(reasons, "invalid_identity", "$.providerModelVersion", "providerModelVersion is not a safe audit identifier.");
   }
 
   if (reasons.length > 0 || !providerId || !deploymentId
-    || !includes(modelProviderKinds, providerKind) || !providerModelId || !providerModelVersion) {
+    || !includes(modelProviderKinds, providerKind) || !providerModelId
+    || !providerRequestModelId || !providerModelVersion) {
     return identityDeny(reasons);
   }
 
@@ -358,6 +371,7 @@ function normalizeIdentityData(input: unknown): ModelProviderIdentityValidationD
       providerKind,
       deploymentId,
       providerModelId,
+      providerRequestModelId,
       providerModelVersion,
     },
   });
