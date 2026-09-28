@@ -1,22 +1,27 @@
 import type {
-  WorkflowRuntimeResponse,
-  WorkflowRuntimeService,
-} from "./workflow-runtime-service";
+  AuthorizedWorkflowRuntimeAccess,
+  WorkflowRuntimeAccessDecision,
+  WorkflowRuntimePublicCommandResponse,
+} from "./workflow-runtime-access";
 // @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
-import { cloneModelProviderAdapterData, freezeModelProviderAdapterData } from "../contracts/model-provider-adapter.ts";
-// @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
-import { invalidWorkflowRuntimeCommandResponse, normalizeWorkflowRuntimeCommand, workflowRuntimeInternalFailureResponse } from "./workflow-runtime-service.ts";
+import { freezeModelProviderAdapterData } from "../contracts/model-provider-adapter.ts";
+
+function unavailable(): WorkflowRuntimeAccessDecision<WorkflowRuntimePublicCommandResponse> {
+  return freezeModelProviderAdapterData({
+    verdict: "deny" as const,
+    status: "unavailable" as const,
+    data: null,
+  });
+}
 
 export async function handleWorkflowRuntimeCommand(
   input: unknown,
-  service: WorkflowRuntimeService,
-): Promise<WorkflowRuntimeResponse> {
-  const command = normalizeWorkflowRuntimeCommand(input);
-  if (!command) return invalidWorkflowRuntimeCommandResponse();
+  accessContext: unknown,
+  access: AuthorizedWorkflowRuntimeAccess,
+): Promise<WorkflowRuntimeAccessDecision<WorkflowRuntimePublicCommandResponse>> {
   try {
-    const result = await service.execute(command);
-    return freezeModelProviderAdapterData(cloneModelProviderAdapterData(result));
+    return await access.executeCommand(accessContext, input);
   } catch {
-    return workflowRuntimeInternalFailureResponse();
+    return unavailable();
   }
 }

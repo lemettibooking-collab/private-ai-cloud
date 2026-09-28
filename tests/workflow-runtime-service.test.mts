@@ -19,6 +19,9 @@ const adapterContract = (await import(
 const apiContract = (await import(
   new URL("../lib/workflows/workflow-runtime-api.ts", import.meta.url).href
 )) as typeof import("../lib/workflows/workflow-runtime-api");
+const accessContract = (await import(
+  new URL("../lib/workflows/workflow-runtime-access.ts", import.meta.url).href
+)) as typeof import("../lib/workflows/workflow-runtime-access");
 const dataHandlingContract = (await import(
   new URL("../lib/contracts/model-invocation-data-handling.ts", import.meta.url).href
 )) as typeof import("../lib/contracts/model-invocation-data-handling");
@@ -31,6 +34,7 @@ const {
 } = invocationContract;
 const { validateAndNormalizeModelProviderHealth } = adapterContract;
 const { handleWorkflowRuntimeCommand } = apiContract;
+const { createAuthorizedWorkflowRuntimeAccess } = accessContract;
 const { createModelInvocationRequestFingerprint } = dataHandlingContract;
 
 type RuntimeState = import("../lib/workflows/workflow-runtime-service").WorkflowRuntimeState;
@@ -1664,8 +1668,22 @@ test("canonical handler and direct service execution return equivalent valid dec
     actorId: "owner-one",
   };
   const direct = await directService.start(command);
-  const handled = await handleWorkflowRuntimeCommand(clone(command), handlerService);
-  assert.deepEqual(handled, direct);
+  const access = createAuthorizedWorkflowRuntimeAccess({
+    runtimeService: handlerService,
+    readModel: {
+      async getRunOverview() { return { verdict: "deny", reason: "not_found", data: null }; },
+      async getRunAuditTimeline() { return { verdict: "allow", reason: null, data: [] }; },
+      async getRunModelUsage() { return { verdict: "deny", reason: "not_found", data: null }; },
+      async listApprovalQueue() { return { verdict: "allow", reason: null, data: [] }; },
+    } as any,
+    authorizer: { async authorize() { return { verdict: "allow" as const }; } },
+  });
+  const handled = await handleWorkflowRuntimeCommand(
+    clone(command),
+    { actorId: "owner-one", workspaceId: "workspace-primary" },
+    access,
+  );
+  assert.deepEqual(handled.data, direct);
   assert.equal(frozen(direct), true);
   assert.equal(frozen(handled), true);
 });
