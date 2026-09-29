@@ -6,7 +6,8 @@ export interface WorkflowRuntimeTenantSqlClient {
     text: string,
     values?: readonly unknown[],
   ): Promise<Readonly<{ rows: readonly Row[]; rowCount: number }>>;
-  release(): void;
+  // destroy=true discards the physical session instead of returning it for reuse.
+  release(destroy?: boolean): void;
 }
 
 export interface WorkflowRuntimeTenantDatabase {
@@ -55,6 +56,7 @@ export function createPostgresWorkflowRuntimeTenantResolver(
       return null;
     }
     let client: WorkflowRuntimeTenantSqlClient | null = null;
+    let failed = false;
     try {
       client = await resolvedDatabase.connect();
       const result = await client.query<{
@@ -82,9 +84,10 @@ export function createPostgresWorkflowRuntimeTenantResolver(
       resolvedTenantIdentities.add(tenant);
       return tenant;
     } catch {
+      failed = true;
       return null;
     } finally {
-      client?.release();
+      client?.release(failed);
     }
   }
 

@@ -3101,3 +3101,83 @@ test("migration 0006 defines aggregate UTC budget windows and per-invocation res
   assert.match(migration, /consumed_amount/u);
   assert.match(migration, /outcome_unknown/u);
 });
+
+type SessionFault = Readonly<{ begin?: boolean; commit?: boolean; rollback?: boolean; data?: Error }>;
+
+class SessionDatabase {
+  readonly releases: Array<boolean | undefined> = [];
+  readonly statements: string[] = [];
+  readonly fault: SessionFault;
+  readonly dataRowCount: number;
+  connections = 0;
+
+  constructor(fault: SessionFault, dataRowCount = 1) {
+    this.fault = fault;
+    this.dataRowCount = dataRowCount;
+  }
+
+  async connect(): Promise<SqlClient> {
+    this.connections += 1;
+    return {
+      query: async <Row extends Record<string, unknown>>(text: string) => {
+        const control = text.trim().toLowerCase();
+        const isControl = ["begin", "commit", "rollback"].includes(control);
+        this.statements.push(isControl ? control : text.match(/\/\* ([^*]+) \*\//u)?.[1] ?? "untagged");
+        if ((control === "begin" && this.fault.begin) || (control === "commit" && this.fault.commit)
+          || (control === "rollback" && this.fault.rollback)) {
+          throw new Error(`${control} failed postgres://owner:driver-secret@db.internal`);
+        }
+        if (!isControl && this.fault.data) throw this.fault.data;
+        return { rows: [] as Row[], rowCount: this.dataRowCount };
+      },
+      release: (destroy?: boolean) => { this.releases.push(destroy); },
+    };
+  }
+}
+
+test("transaction reuses the session only after success or a successful ROLLBACK", async () => {
+  const success = new SessionDatabase({});
+  await createStore(success as never).abandonCommand(commandOwnershipInput());
+  assert.deepEqual(success.statements, ["begin", "workflow-runtime:abandon-command", "commit"]);
+  assert.deepEqual(success.releases, [false]);
+
+  const serverError = new SessionDatabase({ data: new Error("duplicate key value violates unique constraint") });
+  await assert.rejects(createStore(serverError as never).abandonCommand(commandOwnershipInput()),
+    /^WorkflowRuntimePersistenceError: Workflow runtime database operation failed\.$/u);
+  assert.deepEqual(serverError.statements, ["begin", "workflow-runtime:abandon-command", "rollback"]);
+  assert.deepEqual(serverError.releases, [false]);
+});
+
+test("transaction destroys the session when ROLLBACK, COMMIT, or BEGIN fails", async () => {
+  const rollbackFails = new SessionDatabase({ data: new Error("statement failed"), rollback: true });
+  const rollbackError = await createStore(rollbackFails as never).abandonCommand(commandOwnershipInput())
+    .then(() => null, (error: Error) => error);
+  assert.equal(rollbackError?.message, "Workflow runtime database operation failed.");
+  assert.equal(String(rollbackError).includes("driver-secret"), false);
+  assert.deepEqual(rollbackFails.releases, [true]);
+
+  const commitFails = new SessionDatabase({ commit: true });
+  const commitError = await createStore(commitFails as never).abandonCommand(commandOwnershipInput())
+    .then(() => null, (error: Error) => error);
+  assert.equal(commitError?.name, "WorkflowRuntimeCommitAmbiguousError");
+  assert.deepEqual(commitFails.statements, ["begin", "workflow-runtime:abandon-command", "commit", "rollback"]);
+  assert.deepEqual(commitFails.releases, [true]);
+
+  const beginFails = new SessionDatabase({ begin: true });
+  await assert.rejects(createStore(beginFails as never).abandonCommand(commandOwnershipInput()),
+    /^WorkflowRuntimePersistenceError: Workflow runtime database operation failed\.$/u);
+  assert.deepEqual(beginFails.statements, ["begin", "rollback"]);
+  assert.deepEqual(beginFails.releases, [true]);
+});
+
+test("single-statement reads destroy the session on failure and reuse it on success", async () => {
+  const missing = new SessionDatabase({}, 0);
+  assert.equal(await createStore(missing as never).load({ runId: "run-one" }), null);
+  assert.deepEqual(missing.releases, [false]);
+
+  const failing = new SessionDatabase({ data: new Error("socket hang up") });
+  await assert.rejects(createStore(failing as never).load({ runId: "run-one" }),
+    /^WorkflowRuntimePersistenceError: Workflow runtime database load failed\.$/u);
+  assert.deepEqual(failing.releases, [true]);
+  assert.equal(failing.connections, 1);
+});

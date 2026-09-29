@@ -39,7 +39,8 @@ export interface WorkflowRuntimeSqlClient {
     text: string,
     values?: readonly unknown[],
   ): Promise<WorkflowRuntimeSqlResult<Row>>;
-  release(): void;
+  // destroy=true discards the physical session instead of returning it for reuse.
+  release(destroy?: boolean): void;
 }
 
 export interface WorkflowRuntimeDatabase {
@@ -388,34 +389,42 @@ function commandLeaseDuration(input: number | undefined): number {
   return value;
 }
 
-async function rollback(client: WorkflowRuntimeSqlClient): Promise<void> {
+async function rollback(client: WorkflowRuntimeSqlClient): Promise<boolean> {
   try {
     await client.query("rollback");
+    return true;
   } catch {
     // The original operation remains the only externally visible sanitized error.
+    return false;
   }
 }
 
+// A session is reused only when every statement succeeded or a failure was followed by a
+// successful ROLLBACK. A failed BEGIN, an attempted COMMIT that did not succeed, or a failed
+// ROLLBACK leaves the transaction state unknown, so the session is destroyed.
 async function transaction<T>(
   database: WorkflowRuntimeDatabase,
   operation: (client: WorkflowRuntimeSqlClient) => Promise<T>,
 ): Promise<T> {
   let client: WorkflowRuntimeSqlClient | null = null;
+  let begun = false;
   let commitAttempted = false;
+  let destroy = false;
   try {
     client = await database.connect();
     await client.query("begin");
+    begun = true;
     const result = await operation(client);
     commitAttempted = true;
     await client.query("commit");
     return result;
   } catch (error) {
-    if (client) await rollback(client);
+    if (client && (!await rollback(client) || !begun || commitAttempted)) destroy = true;
     if (commitAttempted) throw new WorkflowRuntimeCommitAmbiguousError();
     if (error instanceof WorkflowRuntimePersistenceError) throw error;
     throw persistenceError("Workflow runtime database operation failed.");
   } finally {
-    client?.release();
+    client?.release(destroy);
   }
 }
 
@@ -822,6 +831,7 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
     invocationId: string,
   ): Promise<ModelInvocationRow | null> {
     let client: WorkflowRuntimeSqlClient | null = null;
+    let failed = false;
     try {
       client = await this.#database.connect();
       const result = await client.query<ModelInvocationRow>(
@@ -852,10 +862,11 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
       if (result.rowCount !== 1) throw persistenceError("Model invocation lookup is ambiguous.");
       return result.rows[0];
     } catch (error) {
+      failed = true;
       if (error instanceof WorkflowRuntimePersistenceError) throw error;
       throw persistenceError("Model invocation lookup failed closed.");
     } finally {
-      client?.release();
+      client?.release(failed);
     }
   }
 
@@ -864,6 +875,7 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
     invocationId: string,
   ): Promise<ModelBudgetReservationRow | null> {
     let client: WorkflowRuntimeSqlClient | null = null;
+    let failed = false;
     try {
       client = await this.#database.connect();
       const result = await client.query<ModelBudgetReservationRow>(
@@ -889,10 +901,11 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
       if (result.rowCount !== 1) throw persistenceError("Budget reservation lookup is ambiguous.");
       return result.rows[0];
     } catch (error) {
+      failed = true;
       if (error instanceof WorkflowRuntimePersistenceError) throw error;
       throw persistenceError("Budget reservation lookup failed closed.");
     } finally {
-      client?.release();
+      client?.release(failed);
     }
   }
 
@@ -901,6 +914,7 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
     mutation: WorkflowRuntimeApprovalMutation,
   ): Promise<boolean> {
     let client: WorkflowRuntimeSqlClient | null = null;
+    let failed = false;
     try {
       client = await this.#database.connect();
       const result = await client.query<Record<string, unknown>>(
@@ -953,9 +967,10 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
         && row.resolved_by_actor_id === mutation.cancelledByActorId
         && row.decision === null;
     } catch {
+      failed = true;
       return false;
     } finally {
-      client?.release();
+      client?.release(failed);
     }
   }
 
@@ -1032,6 +1047,7 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
   async load(input: Readonly<{ runId: string }>): Promise<unknown> {
     if (!stableIdPattern.test(input.runId)) return null;
     let client: WorkflowRuntimeSqlClient | null = null;
+    let failed = false;
     try {
       client = await this.#database.connect();
       const runResult = await client.query<RunRow>(
@@ -1134,10 +1150,11 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
       }
       return state;
     } catch (error) {
+      failed = true;
       if (error instanceof WorkflowRuntimePersistenceError) throw error;
       throw persistenceError("Workflow runtime database load failed.");
     } finally {
-      client?.release();
+      client?.release(failed);
     }
   }
 
@@ -2434,6 +2451,7 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
       return { approved: false };
     }
     let client: WorkflowRuntimeSqlClient | null = null;
+    let failed = false;
     try {
       client = await this.#database.connect();
       const result = await client.query<RuntimeApprovalRow>(
@@ -2477,10 +2495,11 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
         approved: approval.status === "approved" && approval.decision === "approved",
       });
     } catch (error) {
+      failed = true;
       if (error instanceof WorkflowRuntimePersistenceError) throw error;
       throw persistenceError("Runtime risk approval lookup failed closed.");
     } finally {
-      client?.release();
+      client?.release(failed);
     }
   }
 

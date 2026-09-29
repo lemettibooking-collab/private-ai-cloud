@@ -141,3 +141,29 @@ test("resolver outputs are fresh, deterministic, frozen, and caller input is not
   assert.equal(Object.isFrozen(first), true);
   assert.equal(input, "workspace-a");
 });
+
+test("tenant resolver destroys the session when its lookup fails and reuses it on success", async () => {
+  const releases: Array<boolean | undefined> = [];
+  const failing = createPostgresWorkflowRuntimeTenantResolver({
+    async connect() {
+      return {
+        async query() { throw new Error("read ECONNRESET postgres://owner:driver-secret@db.internal"); },
+        release(destroy?: boolean) { releases.push(destroy); },
+      };
+    },
+  });
+  assert.equal(await failing.resolve("workspace-primary"), null);
+  const healthy = createPostgresWorkflowRuntimeTenantResolver({
+    async connect() {
+      return {
+        async query() {
+          return { rows: [{ workspace_database_id: "00000000-0000-4000-8000-000000000001",
+            domain_workspace_id: "workspace-primary", status: "active" }], rowCount: 1 };
+        },
+        release(destroy?: boolean) { releases.push(destroy); },
+      };
+    },
+  });
+  assert.ok(await healthy.resolve("workspace-primary"));
+  assert.deepEqual(releases, [true, false]);
+});

@@ -30,6 +30,7 @@ class ReadDatabase {
   readonly queries: Array<{ tag: string; text: string; values: readonly unknown[] }> = [];
   releases = 0;
   connections = 0;
+  readonly destroyed: boolean[] = [];
 
   constructor(steps: readonly Step[]) { this.steps = [...steps]; }
 
@@ -49,7 +50,7 @@ class ReadDatabase {
         if (step.fail) throw new Error(driverSecret);
         return { rows: (step.rows ?? []) as readonly Row[], rowCount: step.rows?.length ?? 0 };
       },
-      release: () => { this.releases += 1; },
+      release: (destroy?: boolean) => { this.releases += 1; this.destroyed.push(destroy === true); },
     };
   }
 
@@ -572,5 +573,62 @@ test("approval queue remains exactly one factual SELECT without transaction cont
   assert.deepEqual(database.queries[0]?.values, [workspaceDatabaseId, workflowRuntimeReadModelLimits.defaultLimit]);
   assert.equal(database.connections, 1);
   assert.equal(database.releases, 1);
+  database.done();
+});
+
+test("snapshot ROLLBACK, COMMIT, or BEGIN failure destroys the session and the next read gets a fresh one", async () => {
+  const rollbackFails = new ReadDatabase([
+    begin,
+    { tag: "workflow-runtime-read:usage-run", rows: [{ id: "db-run-one" }] },
+    { tag: "workflow-runtime-read:model-usage", fail: true },
+    { ...rollback, fail: true },
+    { tag: "workflow-runtime-read:approval-queue", rows: [] },
+  ]);
+  const readModel = model(rollbackFails);
+  assert.deepEqual(await readModel.getRunModelUsage("run-one"), readFailed);
+  assert.equal((await readModel.listApprovalQueue()).verdict, "allow");
+  assert.equal(rollbackFails.connections, 2);
+  assert.deepEqual(rollbackFails.destroyed, [true, false]);
+  rollbackFails.done();
+
+  const commitFails = new ReadDatabase([
+    begin,
+    { tag: "workflow-runtime-read:audit-run", rows: [{ id: "db-run-one" }] },
+    { tag: "workflow-runtime-read:audit-timeline", rows: [] },
+    { ...commit, fail: true },
+    rollback,
+  ]);
+  assert.deepEqual(await model(commitFails).getRunAuditTimeline("run-one"), readFailed);
+  assert.deepEqual(commitFails.destroyed, [true]);
+  commitFails.done();
+
+  const beginFails = new ReadDatabase([{ ...begin, fail: true }, rollback]);
+  assert.deepEqual(await model(beginFails).getRunOverview("run-one"), readFailed);
+  assert.deepEqual(beginFails.destroyed, [true]);
+  beginFails.done();
+});
+
+test("snapshot data failure followed by a successful ROLLBACK reuses the session", async () => {
+  const database = new ReadDatabase([
+    begin,
+    { tag: "workflow-runtime-read:usage-run", rows: [{ id: "db-run-one" }] },
+    { tag: "workflow-runtime-read:model-usage", fail: true },
+    rollback,
+    begin,
+    { tag: "workflow-runtime-read:usage-run", rows: [{ id: "db-run-one" }] },
+    { tag: "workflow-runtime-read:model-usage", rows: [usageRow()] },
+    commit,
+  ]);
+  const readModel = model(database);
+  assert.deepEqual(await readModel.getRunModelUsage("run-one"), readFailed);
+  assert.equal((await readModel.getRunModelUsage("run-one")).verdict, "allow");
+  assert.deepEqual(database.destroyed, [false, false]);
+  database.done();
+});
+
+test("single-statement approval queue failure destroys the session", async () => {
+  const database = new ReadDatabase([{ tag: "workflow-runtime-read:approval-queue", fail: true }]);
+  assert.deepEqual(await model(database).listApprovalQueue(), readFailed);
+  assert.deepEqual(database.destroyed, [true]);
   database.done();
 });

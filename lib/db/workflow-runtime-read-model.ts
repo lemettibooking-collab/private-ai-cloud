@@ -254,24 +254,41 @@ export class PostgresWorkflowRuntimeReadModel {
     this.#workspaceDatabaseId = options.tenant.workspaceDatabaseId;
   }
 
-  async #withClient<T>(operation: (client: WorkflowRuntimeSqlClient) => Promise<T>): Promise<T> {
+  // A failed operation destroys the session unless it reported a successful ROLLBACK.
+  async #withClient<T>(
+    operation: (client: WorkflowRuntimeSqlClient, recovered: () => void) => Promise<T>,
+  ): Promise<T> {
     const client = await this.#database.connect();
-    try { return await operation(client); } finally { client.release(); }
+    let destroy = false;
+    let recovered = false;
+    try {
+      return await operation(client, () => { recovered = true; });
+    } catch (error) {
+      destroy = !recovered;
+      throw error;
+    } finally {
+      client.release(destroy);
+    }
   }
 
   // A multi-statement Owner read must observe one MVCC snapshot; READ COMMITTED
   // would give each statement its own. Read-only, no locks, no retry.
   async #withReadOnlySnapshot<T>(operation: (client: WorkflowRuntimeSqlClient) => Promise<T>): Promise<T> {
-    return this.#withClient(async (client) => {
+    return this.#withClient(async (client, recovered) => {
+      let begun = false;
+      let commitAttempted = false;
       try {
         await client.query(`/* workflow-runtime-read:snapshot-begin */
           begin transaction isolation level repeatable read read only`);
+        begun = true;
         const result = await operation(client);
+        commitAttempted = true;
         await client.query("/* workflow-runtime-read:snapshot-commit */ commit");
         return result;
       } catch (error) {
         try {
           await client.query("/* workflow-runtime-read:snapshot-rollback */ rollback");
+          if (begun && !commitAttempted) recovered();
         } catch {
           // The original failure remains authoritative and is sanitized by the caller.
         }
