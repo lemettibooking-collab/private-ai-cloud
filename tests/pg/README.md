@@ -50,6 +50,8 @@ pg_ctl -D /tmp/aipc-pg -m fast -w stop && rm -rf /tmp/aipc-pg
 |---|---|
 | `postgres-session-safety.test.mts` | A pooled session is reused only when idle; failed cleanup destroys the session; a terminated backend does not crash the process; server backstops are present; client `query_timeout` is rejected |
 | `workflow-runtime-hd12.test.mts` | HD-12 fail-safe (AI-037.1): no second provider dispatch after a post-dispatch CAS failure (see below) |
+| `workflow-runtime-recovery-concurrency.test.mts` | Owner recovery does not wait on live writer row locks: a read-only preflight denies ineligible state without locks, and every recovery lock is NOWAIT, so a live writer's lock yields `denied` (`recovery_lock_unavailable`) instantly. Writers commit, with no `40P01`. |
+| `workflow-runtime-recovery.test.mts` | AI-037.1.1 Owner recovery through the operator CLI: inspect, refusal without acknowledgement, one audited authorization, idempotent replay, and a later ordinary paid retry; recovery is denied outside the narrow HD-12 state |
 | `workflow-runtime-tenant-integrity.test.mts` | Cross-workspace runtime relations and audit rows fail on their tenant constraints; the canonical Workspace mapping holds |
 | `workflow-runtime-snapshot.test.mts` | `getRunOverview` reads one REPEATABLE READ, READ ONLY snapshot while another connection commits, and never blocks the writer |
 | `workflow-runtime-reconciliation.test.mts` | Current fail-closed reconciliation of a COMMIT that is still in flight (HD-13 baseline for AI-037.3) |
@@ -68,4 +70,4 @@ Boundary tests pin the semantics this fix must not change:
 - a failure before dispatch, or a definitive provider failure, stays a retryable `failed`;
 - with no CAS failure, the Step completes with one dispatch.
 
-Recovery of an `outcome_unknown` execution is out of scope here (HD-6).
+Owner recovery of this exact state (a settled, succeeded invocation) is the explicit AI-037.1.1 operator tool; see `docs/operations/workflow-runtime-recovery.md`. Broader recovery is HD-6.

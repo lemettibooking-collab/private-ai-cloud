@@ -3230,3 +3230,441 @@ test("single-statement reads destroy the session on failure and reuse it on succ
   assert.deepEqual(failing.releases, [true]);
   assert.equal(failing.connections, 1);
 });
+
+// ---------------------------------------------------------------------------------------------
+// AI-037.1.1 minimal Owner recovery for the HD-12 state.
+// ---------------------------------------------------------------------------------------------
+
+const recoveryExecutionDbId = "00000000-0000-4000-8000-000000000971";
+const recoveryTarget = { runId: "run-one", stepId: "step-one", executionId: "execution-step-one-one" };
+const recoveryAcknowledged = { acknowledgeLostProviderResultAndDuplicateCostRisk: true as const };
+
+const recoveryInvocationDbId = "00000000-0000-4000-8000-000000000981";
+
+// Invocation row, then (only when it exists) its budget reservation as a separate statement.
+// Budget fields may be overridden alongside the invocation fields; `budget_status: null` means
+// the reservation is missing.
+function recoveryInvocationSteps(invocation: Record<string, unknown> | null | undefined): ScriptStep[] {
+  if (invocation === null) {
+    return [{ tag: "workflow-runtime:recovery-invocation", rows: [] }];
+  }
+  const merged: Record<string, unknown> = {
+    status: "succeeded", total_tokens: "105", cost_usd_micros: "200",
+    budget_status: "settled", actual_total_tokens: "105", actual_cost_usd_micros: "200", ...invocation,
+  };
+  return [
+    {
+      tag: "workflow-runtime:recovery-invocation",
+      rows: [{
+        model_invocation_id: recoveryInvocationDbId, invocation_id: "invocation-step-one-one",
+        status: merged.status, total_tokens: merged.total_tokens, cost_usd_micros: merged.cost_usd_micros,
+      }],
+      inspect(values) { assert.deepEqual(values, [workspaceDatabaseId, dbRunId, recoveryExecutionDbId]); },
+    },
+    {
+      tag: "workflow-runtime:recovery-budget",
+      rows: merged.budget_status === null ? [] : [{
+        status: merged.budget_status,
+        actual_total_tokens: merged.actual_total_tokens,
+        actual_cost_usd_micros: merged.actual_cost_usd_micros,
+      }],
+      inspect(values) { assert.deepEqual(values, [workspaceDatabaseId, dbRunId, recoveryInvocationDbId]); },
+    },
+  ];
+}
+
+function recoveryFactSteps(overrides: Readonly<{
+  run?: Record<string, unknown>;
+  step?: Record<string, unknown>;
+  execution?: Record<string, unknown>;
+  invocation?: Record<string, unknown> | null;
+  occupancy?: Record<string, unknown>;
+  audit?: Record<string, unknown> | null;
+}> = {}): ScriptStep[] {
+  return [
+    {
+      tag: "workflow-runtime:recovery-run",
+      rows: [{ db_run_id: dbRunId, status: "running", revision: "1", runtime_pause: null, ...overrides.run }],
+      inspect(values) { assert.deepEqual(values, [workspaceDatabaseId, "run-one"]); },
+    },
+    {
+      tag: "workflow-runtime:recovery-step",
+      rows: [{ status: "pending", attempt_count: 0, ...overrides.step }],
+      inspect(values) { assert.deepEqual(values, [workspaceDatabaseId, dbRunId, "step-one"]); },
+    },
+    {
+      tag: "workflow-runtime:recovery-execution",
+      rows: [{
+        id: recoveryExecutionDbId, status: "outcome_unknown", attempt_number: 1, expected_revision: "1",
+        claim_status: "released", ...overrides.execution,
+      }],
+      inspect(values) { assert.deepEqual(values, [workspaceDatabaseId, dbRunId, "step-one", "execution-step-one-one"]); },
+    },
+    ...recoveryInvocationSteps(overrides.invocation),
+    {
+      tag: "workflow-runtime:recovery-attempt-occupancy",
+      rows: [{ siblings: 0, active_claims: 0, ...overrides.occupancy }],
+      inspect(values) {
+        assert.deepEqual(values, [workspaceDatabaseId, dbRunId, "step-one", 1, 1, recoveryExecutionDbId]);
+      },
+    },
+    {
+      tag: "workflow-runtime:recovery-audit",
+      rows: overrides.audit === null || overrides.audit === undefined ? [] : [overrides.audit],
+      inspect(values) {
+        assert.deepEqual(values, [workspaceDatabaseId, "run-one:execution-recovery:step-one:1:1:execution-step-one-one"]);
+      },
+    },
+  ];
+}
+
+const recoveredAudit = {
+  actor_id: "owner-one",
+  metadata: {
+    recoveryAction: "authorize_retry_after_lost_provider_result",
+    runId: "run-one",
+    stepId: "step-one",
+    executionId: "execution-step-one-one",
+  },
+};
+
+test("AI-037.1.1: the exact HD-12 state is recovered once, with the state change and audit in one transaction", async () => {
+  const database = new ScriptedDatabase([
+    ...recoveryFactSteps(), // read-only preflight
+    ...recoveryFactSteps(), // re-read under locks
+    {
+      tag: "workflow-runtime:recovery-authorize-execution",
+      rowCount: 1,
+      inspect(values) { assert.deepEqual(values, [workspaceDatabaseId, recoveryExecutionDbId]); },
+    },
+    {
+      tag: "workflow-runtime:audit-event",
+      rowCount: 1,
+      inspect(values) {
+        assert.equal(values[1], "owner");
+        assert.equal(values[2], "owner-one");
+        assert.equal(values[3], "workflow.execution_recovery_authorized");
+        assert.equal(values[5], "run-one:execution-recovery:step-one:1:1:execution-step-one-one");
+        assert.deepEqual(values[6], {
+          recoveryAction: "authorize_retry_after_lost_provider_result",
+          duplicateCostRiskAcknowledged: "yes",
+          runId: "run-one",
+          stepId: "step-one",
+          executionId: "execution-step-one-one",
+          attemptNumber: 1,
+          expectedRevision: 1,
+          previousExecutionStatus: "outcome_unknown",
+          newExecutionStatus: "failed",
+          invocationId: "invocation-step-one-one",
+          invocationStatus: "succeeded",
+          invocationTotalTokens: 105,
+          invocationCostUsdMicros: 200,
+          budgetStatus: "settled",
+        });
+      },
+    },
+  ]);
+  const decision = await createStore(database).authorizeRetryAfterLostProviderResult({
+    ...recoveryTarget, operatorId: "owner-one", ...recoveryAcknowledged,
+  });
+  assert.deepEqual(decision, { status: "authorized", reasons: [] });
+  // preflight transaction, then the locking transaction holding the mutation and the audit.
+  assert.deepEqual(database.transactions, ["begin", "commit", "begin", "commit"]);
+  database.done();
+  const tags = database.queries.map((query) => query.tag);
+  assert.ok(tags.indexOf("workflow-runtime:recovery-authorize-execution") < tags.indexOf("workflow-runtime:audit-event"));
+});
+
+test("AI-037.1.1: recovery without the explicit literal acknowledgement never touches the database", async () => {
+  for (const acknowledgement of [undefined, false, "true", 1, {}]) {
+    const database = new ScriptedDatabase([]);
+    const decision = await createStore(database).authorizeRetryAfterLostProviderResult({
+      ...recoveryTarget, operatorId: "owner-one", acknowledgeLostProviderResultAndDuplicateCostRisk: acknowledgement,
+    } as never);
+    assert.deepEqual(decision, { status: "denied", reasons: ["acknowledgement_required"] });
+    assert.deepEqual(database.queries, []);
+    assert.deepEqual(database.transactions, []);
+  }
+});
+
+test("AI-037.1.1: only a succeeded invocation with a consistent settled budget is recoverable", async () => {
+  const cases: Array<[Record<string, unknown> | null, string]> = [
+    [{ status: "running", total_tokens: null, cost_usd_micros: null, budget_status: "reserved",
+      actual_total_tokens: null, actual_cost_usd_micros: null }, "invocation_not_succeeded"],
+    [{ status: "outcome_unknown", total_tokens: null, cost_usd_micros: null, budget_status: "outcome_unknown",
+      actual_total_tokens: null, actual_cost_usd_micros: null }, "invocation_not_succeeded"],
+    [{ status: "failed", total_tokens: "0", cost_usd_micros: "0" }, "invocation_not_succeeded"],
+    [null, "invocation_missing"],
+    [{ budget_status: null, actual_total_tokens: null, actual_cost_usd_micros: null }, "budget_missing"],
+    [{ budget_status: "released" }, "budget_not_settled"],
+    [{ actual_total_tokens: "104" }, "budget_inconsistent"],
+  ];
+  for (const [invocation, reason] of cases) {
+    const database = new ScriptedDatabase(recoveryFactSteps({ invocation }));
+    const decision = await createStore(database).authorizeRetryAfterLostProviderResult({
+      ...recoveryTarget, operatorId: "owner-one", ...recoveryAcknowledged,
+    });
+    assert.equal(decision.status, "denied");
+    assert.ok(decision.reasons.includes(reason as never), `${reason} in ${JSON.stringify(decision)}`);
+    assert.equal(database.queries.some((query) => query.tag === "workflow-runtime:recovery-authorize-execution"), false);
+    assert.equal(database.queries.some((query) => query.tag === "workflow-runtime:audit-event"), false);
+    database.done();
+  }
+});
+
+test("AI-037.1.1: execution, Step, Run, revision and attempt occupancy preconditions are all enforced", async () => {
+  const cases: Array<[Parameters<typeof recoveryFactSteps>[0], string]> = [
+    [{ execution: { status: "failed" } }, "execution_not_outcome_unknown"],
+    [{ execution: { status: "running" } }, "execution_not_outcome_unknown"],
+    [{ execution: { claim_status: "active" } }, "claim_active"],
+    [{ occupancy: { active_claims: 1 } }, "claim_active"],
+    [{ occupancy: { siblings: 1 } }, "newer_execution_exists"],
+    [{ run: { revision: "2" } }, "revision_changed"],
+    [{ run: { status: "cancelled" } }, "run_not_running"],
+    [{ run: { runtime_pause: { kind: "risk_approval" } } }, "run_paused"],
+    [{ step: { status: "success" } }, "step_not_pending"],
+  ];
+  for (const [overrides, reason] of cases) {
+    const database = new ScriptedDatabase(recoveryFactSteps(overrides));
+    const decision = await createStore(database).authorizeRetryAfterLostProviderResult({
+      ...recoveryTarget, operatorId: "owner-one", ...recoveryAcknowledged,
+    });
+    assert.equal(decision.status, "denied", reason);
+    assert.ok(decision.reasons.includes(reason as never), `${reason} in ${JSON.stringify(decision)}`);
+    assert.equal(database.queries.some((query) => query.tag === "workflow-runtime:recovery-authorize-execution"), false);
+    database.done();
+  }
+  const missingRun = new ScriptedDatabase([{ tag: "workflow-runtime:recovery-run", rows: [] }]);
+  assert.deepEqual(
+    await createStore(missingRun).authorizeRetryAfterLostProviderResult({
+      ...recoveryTarget, operatorId: "owner-one", ...recoveryAcknowledged,
+    }),
+    { status: "denied", reasons: ["run_not_found"] },
+  );
+});
+
+test("AI-037.1.1: an exact replay is idempotent and a different operator conflicts, without mutation", async () => {
+  for (const [operatorId, expected] of [
+    ["owner-one", { status: "idempotent", reasons: ["already_authorized"] }],
+    ["owner-two", { status: "conflict", reasons: ["already_authorized_by_another_operator"] }],
+  ] as const) {
+    const recovered = { execution: { status: "failed" }, audit: recoveredAudit };
+    const database = new ScriptedDatabase([...recoveryFactSteps(recovered), ...recoveryFactSteps(recovered)]);
+    const decision = await createStore(database).authorizeRetryAfterLostProviderResult({
+      ...recoveryTarget, operatorId, ...recoveryAcknowledged,
+    });
+    assert.deepEqual(decision, expected);
+    assert.equal(database.queries.some((query) => query.tag === "workflow-runtime:recovery-authorize-execution"), false);
+    assert.equal(database.queries.some((query) => query.tag === "workflow-runtime:audit-event"), false);
+    database.done();
+  }
+});
+
+test("AI-037.1.1: an ambiguous recovery COMMIT is reconciled from durable state, never retried", async () => {
+  for (const [audit, expected] of [
+    [null, { status: "recovery_required", reasons: ["commit_outcome_unknown"] }],
+    [recoveredAudit, { status: "authorized", reasons: [] }],
+  ] as const) {
+    const database = new ScriptedDatabase([
+      ...recoveryFactSteps(),
+      ...recoveryFactSteps(),
+      { tag: "workflow-runtime:recovery-authorize-execution", rowCount: 1 },
+      { tag: "workflow-runtime:audit-event", rowCount: 1 },
+      ...recoveryFactSteps({ execution: { status: audit ? "failed" : "outcome_unknown" }, audit }),
+    ]);
+    // Lose the acknowledgement of the second COMMIT: the recovery transaction (the first COMMIT
+    // belongs to the read-only preflight).
+    let commits = 0;
+    const lossyDatabase = {
+      async connect() {
+        const client = await database.connect();
+        return {
+          query: async <Row extends Record<string, unknown>>(text: string, values?: readonly unknown[]) => {
+            if (text.trim().toLowerCase() === "commit") {
+              commits += 1;
+              if (commits === 2) {
+                await client.query<Row>(text, values);
+                throw new Error("lost PostgreSQL COMMIT acknowledgement");
+              }
+            }
+            return client.query<Row>(text, values);
+          },
+          release: (destroy?: boolean) => client.release(destroy),
+        };
+      },
+    };
+    const decision = await new PostgresWorkflowRuntimeStateStore({ database: lossyDatabase as never, tenant: resolvedTenant })
+      .authorizeRetryAfterLostProviderResult({ ...recoveryTarget, operatorId: "owner-one", ...recoveryAcknowledged });
+    assert.deepEqual(decision, expected);
+    assert.equal(
+      database.queries.filter((query) => query.tag === "workflow-runtime:recovery-authorize-execution").length, 1,
+      "the mutation is never re-sent",
+    );
+    database.done();
+  }
+});
+
+test("AI-037.1.1: inspection is read-only and reports eligibility with sanitized facts", async () => {
+  const database = new ScriptedDatabase(recoveryFactSteps());
+  const inspection = await createStore(database).inspectExecutionRecovery(recoveryTarget);
+  assert.equal(inspection.eligible, true);
+  assert.deepEqual(inspection.reasons, []);
+  assert.equal(inspection.recoveryAuthorizedBy, null);
+  assert.deepEqual(inspection.execution, {
+    executionId: "execution-step-one-one", status: "outcome_unknown", attemptNumber: 1, expectedRevision: 1,
+    claimStatus: "released",
+  });
+  assert.equal(JSON.stringify(inspection).includes(recoveryExecutionDbId), false);
+  assert.equal(JSON.stringify(inspection).includes(dbRunId), false);
+  assert.equal(database.queries.some((query) => query.tag.includes("authorize") || query.tag.includes("audit-event")), false);
+  database.done();
+  const invalid = new ScriptedDatabase([]);
+  const rejected = await createStore(invalid).inspectExecutionRecovery({ ...recoveryTarget, runId: "Run One" });
+  assert.equal(rejected.eligible, false);
+  assert.deepEqual(rejected.reasons, ["invalid_target"]);
+  assert.deepEqual(invalid.queries, []);
+});
+
+// Records the SQL text sent through a ScriptedDatabase so row-lock clauses can be asserted.
+function recordingSql(database: ScriptedDatabase) {
+  const statements: Array<{ tag: string; text: string }> = [];
+  return {
+    statements,
+    database: {
+      async connect() {
+        const client = await database.connect();
+        return {
+          query: async <Row extends Record<string, unknown>>(text: string, values?: readonly unknown[]) => {
+            const tag = text.match(/\/\* ([^*]+) \*\//u)?.[1];
+            if (tag) statements.push({ tag, text: text.replace(/\s+/gu, " ").trim() });
+            return client.query<Row>(text, values);
+          },
+          release: (destroy?: boolean) => client.release(destroy),
+        };
+      },
+    },
+  };
+}
+
+test("AI-037.1.1: authorization locks every eligibility fact in order Run → Step → execution/claim → invocation → budget → audit; inspection takes no locks", async () => {
+  const lockOf = (text: string) => text.match(/ for (update( of [a-z, ]+?)?|share)( nowait)?$/u)?.[0].trim() ?? null;
+
+  const authorizing = recordingSql(new ScriptedDatabase([
+    ...recoveryFactSteps(),
+    ...recoveryFactSteps(),
+    { tag: "workflow-runtime:recovery-authorize-execution", rowCount: 1 },
+    { tag: "workflow-runtime:audit-event", rowCount: 1 },
+  ]));
+  const decision = await new PostgresWorkflowRuntimeStateStore({
+    database: authorizing.database as never,
+    tenant: resolvedTenant,
+  }).authorizeRetryAfterLostProviderResult({ ...recoveryTarget, operatorId: "owner-one", ...recoveryAcknowledged });
+  assert.deepEqual(decision, { status: "authorized", reasons: [] });
+  const factStatements = authorizing.statements.filter((statement) => statement.tag !== "workflow-runtime:recovery-attempt-occupancy"
+    && statement.tag.startsWith("workflow-runtime:recovery-") && statement.tag !== "workflow-runtime:recovery-authorize-execution");
+  // The read-only preflight requests no row locks at all.
+  assert.deepEqual(factStatements.slice(0, 6).map((statement) => [statement.tag, lockOf(statement.text)]), [
+    ["workflow-runtime:recovery-run", null],
+    ["workflow-runtime:recovery-step", null],
+    ["workflow-runtime:recovery-execution", null],
+    ["workflow-runtime:recovery-invocation", null],
+    ["workflow-runtime:recovery-budget", null],
+    ["workflow-runtime:recovery-audit", null],
+  ]);
+  // The locking transaction takes every lock NOWAIT, in order Run → … → audit.
+  assert.deepEqual(factStatements.slice(6).map((statement) => [statement.tag, lockOf(statement.text)]), [
+    ["workflow-runtime:recovery-run", "for update nowait"],
+    ["workflow-runtime:recovery-step", "for update nowait"],
+    ["workflow-runtime:recovery-execution", "for update of execution, claim nowait"],
+    ["workflow-runtime:recovery-invocation", "for update of invocation nowait"],
+    ["workflow-runtime:recovery-budget", "for update of budget nowait"],
+    ["workflow-runtime:recovery-audit", "for share nowait"],
+  ]);
+  const budget = authorizing.statements.find((statement) => statement.tag === "workflow-runtime:recovery-budget"
+    && lockOf(statement.text) !== null);
+  assert.ok(budget);
+  assert.match(budget.text, /from workflow_model_budget_reservations as budget/u);
+  assert.match(budget.text, /budget\.model_invocation_id = \$3::uuid/u);
+  // The invocation statement no longer joins the budget; the budget has its own row lock.
+  const invocation = authorizing.statements.find((statement) => statement.tag === "workflow-runtime:recovery-invocation"
+    && lockOf(statement.text) !== null);
+  assert.ok(invocation);
+  assert.equal(/budget/u.test(invocation.text), false);
+  const tags = authorizing.statements.map((statement) => statement.tag);
+  assert.ok(tags.lastIndexOf("workflow-runtime:recovery-budget") < tags.indexOf("workflow-runtime:recovery-authorize-execution"));
+
+  const inspecting = recordingSql(new ScriptedDatabase(recoveryFactSteps()));
+  const inspection = await new PostgresWorkflowRuntimeStateStore({
+    database: inspecting.database as never,
+    tenant: resolvedTenant,
+  }).inspectExecutionRecovery(recoveryTarget);
+  assert.equal(inspection.eligible, true);
+  assert.ok(inspecting.statements.some((statement) => statement.tag === "workflow-runtime:recovery-budget"));
+  assert.deepEqual(inspecting.statements.filter((statement) => lockOf(statement.text) !== null), []);
+});
+
+test("AI-037.1.1: a clearly ineligible state is denied by the read-only preflight without a locking transaction", async () => {
+  const recorded = recordingSql(new ScriptedDatabase(recoveryFactSteps({
+    execution: { status: "running", claim_status: "active" },
+    invocation: { status: "running", total_tokens: null, cost_usd_micros: null, budget_status: "reserved",
+      actual_total_tokens: null, actual_cost_usd_micros: null },
+  })));
+  const scripted = recorded.database;
+  const decision = await new PostgresWorkflowRuntimeStateStore({ database: scripted as never, tenant: resolvedTenant })
+    .authorizeRetryAfterLostProviderResult({ ...recoveryTarget, operatorId: "owner-one", ...recoveryAcknowledged });
+  assert.equal(decision.status, "denied");
+  assert.ok(decision.reasons.includes("claim_active"));
+  assert.ok(decision.reasons.includes("invocation_not_succeeded"));
+  assert.deepEqual(recorded.statements.filter((statement) => / for (update|share)/u.test(statement.text)), [],
+    "no row lock was requested");
+  assert.equal(recorded.statements.some((statement) => statement.tag === "workflow-runtime:recovery-authorize-execution"), false);
+});
+
+test("AI-037.1.1: a lock held by a live writer (55P03) denies recovery as retryable, rolls back, and writes nothing", async () => {
+  const lockUnavailable = Object.assign(new Error("could not obtain lock on row"), { code: "55P03", severity: "ERROR" });
+  for (const lockedTag of [
+    "workflow-runtime:recovery-run",
+    "workflow-runtime:recovery-execution",
+    "workflow-runtime:recovery-invocation",
+    "workflow-runtime:recovery-budget",
+  ]) {
+    const locked = recoveryFactSteps();
+    const index = locked.findIndex((step) => step.tag === lockedTag);
+    const database = new ScriptedDatabase([
+      ...recoveryFactSteps(),
+      ...locked.slice(0, index),
+      { tag: lockedTag, error: lockUnavailable },
+    ]);
+    const decision = await createStore(database).authorizeRetryAfterLostProviderResult({
+      ...recoveryTarget, operatorId: "owner-one", ...recoveryAcknowledged,
+    });
+    assert.deepEqual(decision, { status: "denied", reasons: ["recovery_lock_unavailable"] }, lockedTag);
+    assert.deepEqual(database.transactions, ["begin", "commit", "begin", "rollback"], lockedTag);
+    assert.equal(database.queries.some((query) => query.tag === "workflow-runtime:recovery-authorize-execution"), false);
+    assert.equal(database.queries.some((query) => query.tag === "workflow-runtime:audit-event"), false);
+    assert.equal(JSON.stringify(decision).includes("could not obtain"), false, "no driver detail leaks");
+    database.done();
+  }
+});
+
+test("AI-037.1.1: the re-check under locks rejects a state that changed after the preflight", async () => {
+  for (const [changed, reason] of [
+    [{ execution: { status: "failed" } }, "execution_not_outcome_unknown"],
+    [{ occupancy: { siblings: 1 } }, "newer_execution_exists"],
+    [{ run: { revision: "2" } }, "revision_changed"],
+    [{ invocation: { budget_status: "released" } }, "budget_not_settled"],
+  ] as const) {
+    const database = new ScriptedDatabase([
+      ...recoveryFactSteps(), // preflight: eligible
+      ...recoveryFactSteps(changed as Parameters<typeof recoveryFactSteps>[0]), // under locks: changed
+    ]);
+    const decision = await createStore(database).authorizeRetryAfterLostProviderResult({
+      ...recoveryTarget, operatorId: "owner-one", ...recoveryAcknowledged,
+    });
+    assert.equal(decision.status, "denied", reason);
+    assert.ok(decision.reasons.includes(reason), `${reason} in ${JSON.stringify(decision)}`);
+    assert.equal(database.queries.some((query) => query.tag === "workflow-runtime:recovery-authorize-execution"), false);
+    assert.equal(database.queries.some((query) => query.tag === "workflow-runtime:audit-event"), false);
+    database.done();
+  }
+});

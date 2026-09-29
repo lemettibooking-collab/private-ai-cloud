@@ -242,6 +242,15 @@ class WorkflowRuntimeCommitAmbiguousError extends WorkflowRuntimePersistenceErro
   }
 }
 
+// A recovery row lock was held by a live writer (SQLSTATE 55P03 under NOWAIT). Recovery never
+// waits: its transaction rolls back and the request is denied as retryable.
+class WorkflowRuntimeRecoveryLockUnavailableError extends WorkflowRuntimePersistenceError {
+  constructor() {
+    super("Workflow execution recovery row lock is unavailable.");
+    this.name = "WorkflowRuntimeRecoveryLockUnavailableError";
+  }
+}
+
 function persistenceError(message: string): WorkflowRuntimePersistenceError {
   return new WorkflowRuntimePersistenceError(message);
 }
@@ -264,6 +273,10 @@ function safeInteger(input: unknown): input is number {
 function databaseInteger(input: string | number): number | null {
   const value = typeof input === "string" ? Number(input) : input;
   return safeInteger(value) ? value : null;
+}
+
+function nullableInteger(input: string | null): number | null {
+  return input === null ? null : databaseInteger(input);
 }
 
 function canonicalData(input: unknown): string {
@@ -431,6 +444,128 @@ async function transaction<T>(
 function terminalExecutionStatus(state: WorkflowRuntimeState, stepId: string): "completed" | "failed" {
   const step = state.snapshot.stepStates.find((candidate) => candidate.stepId === stepId);
   return step?.status === "success" ? "completed" : "failed";
+}
+
+// ---------------------------------------------------------------------------------------------
+// AI-037.1.1 execution recovery (narrow HD-12 case only).
+// ---------------------------------------------------------------------------------------------
+
+export const workflowRuntimeExecutionRecoveryAction = "authorize_retry_after_lost_provider_result";
+
+export type WorkflowRuntimeExecutionRecoveryTarget = Readonly<{
+  runId: string;
+  stepId: string;
+  executionId: string;
+}>;
+
+export type WorkflowRuntimeExecutionRecoveryAuthorization = WorkflowRuntimeExecutionRecoveryTarget & Readonly<{
+  operatorId: string;
+  // Must be literally `true`: the Owner abandons the lost provider result and accepts that the
+  // next ordinary advance may pay for a new provider call.
+  acknowledgeLostProviderResultAndDuplicateCostRisk: true;
+}>;
+
+export type WorkflowRuntimeExecutionRecoveryReason =
+  | "invalid_target" | "acknowledgement_required" | "run_not_found" | "run_not_running" | "run_paused"
+  | "step_not_found" | "step_not_pending" | "execution_not_found" | "execution_identity_ambiguous"
+  | "execution_not_outcome_unknown" | "claim_active" | "revision_changed" | "invocation_missing"
+  | "invocation_not_succeeded" | "budget_missing" | "budget_not_settled" | "budget_inconsistent"
+  | "newer_execution_exists" | "already_authorized" | "already_authorized_by_another_operator"
+  | "commit_outcome_unknown" | "recovery_lock_unavailable";
+
+export type WorkflowRuntimeExecutionRecoveryInspection = Readonly<{
+  eligible: boolean;
+  reasons: readonly WorkflowRuntimeExecutionRecoveryReason[];
+  recoveryAuthorizedBy: string | null;
+  run: Readonly<{ runId: string; status: string; revision: number | null; paused: boolean }> | null;
+  step: Readonly<{ stepId: string; status: string; attemptCount: number }> | null;
+  execution: Readonly<{
+    executionId: string; status: string; attemptNumber: number; expectedRevision: number; claimStatus: string;
+  }> | null;
+  invocation: Readonly<{
+    invocationId: string; status: string; totalTokens: number | null; costUsdMicros: number | null;
+  }> | null;
+  budget: Readonly<{ status: string; actualTotalTokens: number | null; actualCostUsdMicros: number | null }> | null;
+}>;
+
+export type WorkflowRuntimeExecutionRecoveryDecision = Readonly<{
+  status: "authorized" | "idempotent" | "denied" | "conflict" | "recovery_required";
+  reasons: readonly WorkflowRuntimeExecutionRecoveryReason[];
+}>;
+
+type ExecutionRecoveryFacts = {
+  target: WorkflowRuntimeExecutionRecoveryTarget;
+  run: { status: string; revision: number | null; paused: boolean } | null;
+  step: { status: string; attemptCount: number } | null;
+  execution: { id: string; status: string; attemptNumber: number; expectedRevision: number; claimStatus: string } | null;
+  invocation: { invocationId: string; status: string; totalTokens: number | null; costUsdMicros: number | null } | null;
+  budget: { status: string; actualTotalTokens: number | null; actualCostUsdMicros: number | null } | null;
+  siblingExecutions: number;
+  activeClaims: number;
+  eventKey: string;
+  recovery: { operatorId: string } | null;
+  ambiguous: boolean;
+};
+
+function validRecoveryTarget(input: unknown): input is WorkflowRuntimeExecutionRecoveryTarget {
+  if (!plainRecord(input)) return false;
+  return typeof input.runId === "string" && stableIdPattern.test(input.runId)
+    && typeof input.stepId === "string" && stableIdPattern.test(input.stepId)
+    && typeof input.executionId === "string" && stableIdPattern.test(input.executionId);
+}
+
+// Every precondition of the narrow HD-12 recovery; an empty list means eligible.
+function executionRecoveryIneligibility(facts: ExecutionRecoveryFacts): WorkflowRuntimeExecutionRecoveryReason[] {
+  const reasons: WorkflowRuntimeExecutionRecoveryReason[] = [];
+  if (!facts.run) return ["run_not_found"];
+  if (facts.ambiguous) return ["execution_identity_ambiguous"];
+  if (facts.run.status !== "running") reasons.push("run_not_running");
+  if (facts.run.paused) reasons.push("run_paused");
+  if (!facts.step) reasons.push("step_not_found");
+  else if (facts.step.status !== "pending") reasons.push("step_not_pending");
+  if (!facts.execution) return [...reasons, "execution_not_found"];
+  if (facts.recovery) reasons.push("already_authorized");
+  if (facts.execution.status !== "outcome_unknown") reasons.push("execution_not_outcome_unknown");
+  if (facts.execution.claimStatus === "active" || facts.activeClaims > 0) reasons.push("claim_active");
+  if (facts.run.revision !== facts.execution.expectedRevision) reasons.push("revision_changed");
+  if (!facts.invocation) reasons.push("invocation_missing");
+  else if (facts.invocation.status !== "succeeded") reasons.push("invocation_not_succeeded");
+  if (facts.invocation) {
+    if (!facts.budget) reasons.push("budget_missing");
+    else if (facts.budget.status !== "settled") reasons.push("budget_not_settled");
+    else if (facts.budget.actualTotalTokens === null
+      || facts.budget.actualTotalTokens !== facts.invocation.totalTokens
+      || facts.budget.actualCostUsdMicros !== facts.invocation.costUsdMicros) {
+      reasons.push("budget_inconsistent");
+    }
+  }
+  if (facts.siblingExecutions > 0) reasons.push("newer_execution_exists");
+  return reasons;
+}
+
+// Sanitized: no database ids, reservation tokens, fingerprints, prompts or provider output.
+function recoveryInspection(
+  facts: ExecutionRecoveryFacts | null,
+  reasons: readonly WorkflowRuntimeExecutionRecoveryReason[],
+): WorkflowRuntimeExecutionRecoveryInspection {
+  return Object.freeze({
+    eligible: reasons.length === 0,
+    reasons: Object.freeze([...reasons]),
+    recoveryAuthorizedBy: facts?.recovery?.operatorId ?? null,
+    run: facts?.run ? Object.freeze({ runId: facts.target.runId, ...facts.run }) : null,
+    step: facts?.step ? Object.freeze({ stepId: facts.target.stepId, ...facts.step }) : null,
+    execution: facts?.execution
+      ? Object.freeze({
+        executionId: facts.target.executionId,
+        status: facts.execution.status,
+        attemptNumber: facts.execution.attemptNumber,
+        expectedRevision: facts.execution.expectedRevision,
+        claimStatus: facts.execution.claimStatus,
+      })
+      : null,
+    invocation: facts?.invocation ? Object.freeze({ ...facts.invocation }) : null,
+    budget: facts?.budget ? Object.freeze({ ...facts.budget }) : null,
+  });
 }
 
 function sameRuntimeState(left: WorkflowRuntimeState, right: WorkflowRuntimeState): boolean {
@@ -1828,6 +1963,266 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
         throw persistenceError("Workflow known execution outcome failed closed.");
       }
     });
+  }
+
+  // AI-037.1.1: read-only view of whether one execution is in the narrow HD-12 state that an
+  // Owner may explicitly recover. Advisory only; authorizeRetryAfterLostProviderResult re-checks
+  // every fact under row locks.
+  async inspectExecutionRecovery(
+    input: WorkflowRuntimeExecutionRecoveryTarget,
+  ): Promise<WorkflowRuntimeExecutionRecoveryInspection> {
+    if (!validRecoveryTarget(input)) {
+      return recoveryInspection(null, ["invalid_target"]);
+    }
+    try {
+      return await transaction(this.#database, async (client) => {
+        const facts = await this.#executionRecoveryFacts(client, input, false);
+        return recoveryInspection(facts, executionRecoveryIneligibility(facts));
+      });
+    } catch {
+      throw persistenceError("Workflow execution recovery inspection failed closed.");
+    }
+  }
+
+  // AI-037.1.1: explicit Owner recovery for the HD-12 state only. The Owner abandons the lost
+  // result of a settled, succeeded provider call whose Step result was never committed, and
+  // accepts that a later ordinary advance may pay for a new provider call. Nothing is dispatched
+  // here: the execution moves outcome_unknown -> failed (so it no longer blocks a new claim of
+  // the same Step attempt) together with its audit event, in one transaction. The invocation and
+  // its settled budget are never rewritten.
+  async authorizeRetryAfterLostProviderResult(
+    input: WorkflowRuntimeExecutionRecoveryAuthorization,
+  ): Promise<WorkflowRuntimeExecutionRecoveryDecision> {
+    if (input?.acknowledgeLostProviderResultAndDuplicateCostRisk !== true) {
+      return { status: "denied", reasons: ["acknowledgement_required"] };
+    }
+    if (!validRecoveryTarget(input) || typeof input.operatorId !== "string"
+      || !actorIdPattern.test(input.operatorId)) {
+      return { status: "denied", reasons: ["invalid_target"] };
+    }
+    // Read-only preflight (plain MVCC reads, no row locks): clearly ineligible state is denied
+    // without a locking transaction, so recovery never contends with live writers for it. The
+    // preflight is not authority; every fact is re-read and re-checked under locks below.
+    const preflight = await this.inspectExecutionRecovery(input);
+    if (!preflight.eligible && preflight.recoveryAuthorizedBy === null) {
+      return { status: "denied", reasons: preflight.reasons };
+    }
+    try {
+      return await transaction(this.#database, async (client) => {
+        const facts = await this.#executionRecoveryFacts(client, input, true);
+        if (facts.recovery) {
+          return facts.recovery.operatorId === input.operatorId
+            ? { status: "idempotent" as const, reasons: ["already_authorized"] }
+            : { status: "conflict" as const, reasons: ["already_authorized_by_another_operator"] };
+        }
+        const ineligible = executionRecoveryIneligibility(facts);
+        if (ineligible.length > 0 || !facts.execution || !facts.invocation || !facts.budget) {
+          return { status: "denied" as const, reasons: ineligible };
+        }
+        const recovered = await client.query(
+          `/* workflow-runtime:recovery-authorize-execution */
+           update workflow_runtime_executions
+           set status = 'failed'
+           where workspace_id = $1 and id = $2 and status = 'outcome_unknown'`,
+          [this.#workspaceDatabaseId, facts.execution.id],
+        );
+        if (recovered.rowCount !== 1) throw persistenceError("Workflow execution recovery failed closed.");
+        await this.#appendAuditEvent(client, {
+          runId: input.runId,
+          eventKey: facts.eventKey,
+          eventType: "workflow.execution_recovery_authorized",
+          actorKind: "owner",
+          actorId: input.operatorId,
+          metadata: {
+            recoveryAction: workflowRuntimeExecutionRecoveryAction,
+            duplicateCostRiskAcknowledged: "yes",
+            runId: input.runId,
+            stepId: input.stepId,
+            executionId: input.executionId,
+            attemptNumber: facts.execution.attemptNumber,
+            expectedRevision: facts.execution.expectedRevision,
+            previousExecutionStatus: "outcome_unknown",
+            newExecutionStatus: "failed",
+            invocationId: facts.invocation.invocationId,
+            invocationStatus: facts.invocation.status,
+            invocationTotalTokens: facts.invocation.totalTokens,
+            invocationCostUsdMicros: facts.invocation.costUsdMicros,
+            budgetStatus: facts.budget.status,
+          },
+        });
+        return { status: "authorized" as const, reasons: [] };
+      });
+    } catch (error) {
+      if (error instanceof WorkflowRuntimeRecoveryLockUnavailableError) {
+        return { status: "denied", reasons: ["recovery_lock_unavailable"] };
+      }
+      if (!(error instanceof WorkflowRuntimeCommitAmbiguousError)) {
+        throw persistenceError("Workflow execution recovery failed closed.");
+      }
+      // Never retry the mutation blindly: report only what durable state proves.
+      try {
+        const current = await this.inspectExecutionRecovery(input);
+        return current.recoveryAuthorizedBy === input.operatorId
+          ? { status: "authorized", reasons: [] }
+          : { status: "recovery_required", reasons: ["commit_outcome_unknown"] };
+      } catch {
+        return { status: "recovery_required", reasons: ["commit_outcome_unknown"] };
+      }
+    }
+  }
+
+  async #executionRecoveryFacts(
+    sqlClient: WorkflowRuntimeSqlClient,
+    input: WorkflowRuntimeExecutionRecoveryTarget,
+    lock: boolean,
+  ): Promise<ExecutionRecoveryFacts> {
+    // Locked reads use NOWAIT: a lock held by a live writer raises 55P03 instead of waiting, so
+    // recovery can never be part of a deadlock cycle and never makes a live writer its victim.
+    const client: Pick<WorkflowRuntimeSqlClient, "query"> = !lock ? sqlClient : {
+      async query<Row extends Record<string, unknown> = Record<string, unknown>>(
+        text: string,
+        values?: readonly unknown[],
+      ): Promise<WorkflowRuntimeSqlResult<Row>> {
+        try {
+          return await sqlClient.query<Row>(text, values);
+        } catch (error) {
+          if (typeof error === "object" && error !== null && (error as { code?: unknown }).code === "55P03") {
+            throw new WorkflowRuntimeRecoveryLockUnavailableError();
+          }
+          throw error;
+        }
+      },
+    };
+    const run = await client.query<{ db_run_id: string; status: string; revision: string; runtime_pause: unknown }>(
+      `/* workflow-runtime:recovery-run */
+       select id::text as db_run_id, status, revision::text as revision, runtime_pause
+       from workflow_runs
+       where workspace_id = $1 and runtime_id = $2${lock ? " for update nowait" : ""}`,
+      [this.#workspaceDatabaseId, input.runId],
+    );
+    const facts: ExecutionRecoveryFacts = {
+      target: input, run: null, step: null, execution: null, invocation: null, budget: null,
+      siblingExecutions: 0, activeClaims: 0, eventKey: "", recovery: null, ambiguous: false,
+    };
+    if (run.rowCount !== 1) return facts;
+    const dbRunId = run.rows[0].db_run_id;
+    facts.run = {
+      status: run.rows[0].status,
+      revision: databaseInteger(run.rows[0].revision),
+      paused: run.rows[0].runtime_pause !== null,
+    };
+    const step = await client.query<{ status: string; attempt_count: number }>(
+      `/* workflow-runtime:recovery-step */
+       select status, attempt_count
+       from workflow_step_runs
+       where workspace_id = $1 and run_id = $2 and step_key = $3${lock ? " for update nowait" : ""}`,
+      [this.#workspaceDatabaseId, dbRunId, input.stepId],
+    );
+    if (step.rowCount === 1) facts.step = { status: step.rows[0].status, attemptCount: step.rows[0].attempt_count };
+    const execution = await client.query<{
+      id: string; status: string; attempt_number: number; expected_revision: string; claim_status: string;
+    }>(
+      `/* workflow-runtime:recovery-execution */
+       select execution.id::text as id, execution.status, execution.attempt_number,
+              execution.expected_revision::text as expected_revision, claim.status as claim_status
+       from workflow_runtime_executions as execution
+       join workflow_runtime_claims as claim
+         on claim.id = execution.claim_id and claim.workspace_id = execution.workspace_id
+        and claim.run_id = execution.run_id and claim.step_id = execution.step_id
+       where execution.workspace_id = $1 and execution.run_id = $2
+         and execution.step_id = $3 and execution.execution_id = $4${lock ? " for update of execution, claim nowait" : ""}`,
+      [this.#workspaceDatabaseId, dbRunId, input.stepId, input.executionId],
+    );
+    if (execution.rowCount > 1) {
+      facts.ambiguous = true;
+      return facts;
+    }
+    if (execution.rowCount !== 1) return facts;
+    const expectedRevision = databaseInteger(execution.rows[0].expected_revision);
+    if (expectedRevision === null) throw persistenceError("Persisted Workflow execution revision is invalid.");
+    facts.execution = {
+      id: execution.rows[0].id,
+      status: execution.rows[0].status,
+      attemptNumber: execution.rows[0].attempt_number,
+      expectedRevision,
+      claimStatus: execution.rows[0].claim_status,
+    };
+    facts.eventKey = `${input.runId}:execution-recovery:${input.stepId}:${facts.execution.attemptNumber}:`
+      + `${expectedRevision}:${input.executionId}`;
+    const invocation = await client.query<{
+      model_invocation_id: string; invocation_id: string; status: string;
+      total_tokens: string | null; cost_usd_micros: string | null;
+    }>(
+      `/* workflow-runtime:recovery-invocation */
+       select invocation.id::text as model_invocation_id, invocation.invocation_id, invocation.status,
+              invocation.total_tokens::text as total_tokens,
+              invocation.cost_usd_micros::text as cost_usd_micros
+       from workflow_model_invocations as invocation
+       where invocation.workspace_id = $1 and invocation.workflow_run_id = $2
+         and invocation.workflow_execution_id = $3${lock ? " for update of invocation nowait" : ""}`,
+      [this.#workspaceDatabaseId, dbRunId, facts.execution.id],
+    );
+    if (invocation.rowCount === 1) {
+      const row = invocation.rows[0];
+      facts.invocation = {
+        invocationId: row.invocation_id,
+        status: row.status,
+        totalTokens: nullableInteger(row.total_tokens),
+        costUsdMicros: nullableInteger(row.cost_usd_micros),
+      };
+      // Locked after the invocation, matching recordModelInvocationOutcome (invocation → budget).
+      const budget = await client.query<{
+        status: string; actual_total_tokens: string | null; actual_cost_usd_micros: string | null;
+      }>(
+        `/* workflow-runtime:recovery-budget */
+         select budget.status,
+                budget.actual_total_tokens::text as actual_total_tokens,
+                budget.actual_cost_usd_micros::text as actual_cost_usd_micros
+         from workflow_model_budget_reservations as budget
+         where budget.workspace_id = $1 and budget.workflow_run_id = $2
+           and budget.model_invocation_id = $3::uuid${lock ? " for update of budget nowait" : ""}`,
+        [this.#workspaceDatabaseId, dbRunId, row.model_invocation_id],
+      );
+      if (budget.rowCount === 1) {
+        facts.budget = {
+          status: budget.rows[0].status,
+          actualTotalTokens: nullableInteger(budget.rows[0].actual_total_tokens),
+          actualCostUsdMicros: nullableInteger(budget.rows[0].actual_cost_usd_micros),
+        };
+      }
+    }
+    const siblings = await client.query<{ siblings: number; active_claims: number }>(
+      `/* workflow-runtime:recovery-attempt-occupancy */
+       select
+         (select count(*)::int from workflow_runtime_executions
+          where workspace_id = $1 and run_id = $2 and step_id = $3
+            and attempt_number = $4 and expected_revision = $5 and id <> $6::uuid) as siblings,
+         (select count(*)::int from workflow_runtime_claims
+          where workspace_id = $1 and run_id = $2 and step_id = $3 and status = 'active') as active_claims`,
+      [
+        this.#workspaceDatabaseId, dbRunId, input.stepId, facts.execution.attemptNumber,
+        expectedRevision, facts.execution.id,
+      ],
+    );
+    facts.siblingExecutions = siblings.rows[0]?.siblings ?? 0;
+    facts.activeClaims = siblings.rows[0]?.active_claims ?? 0;
+    const recovery = await client.query<{ actor_id: string; metadata: unknown }>(
+      `/* workflow-runtime:recovery-audit */
+       select actor_id, metadata from audit_events
+       where workspace_id = $1 and runtime_event_key = $2
+         and event_type = 'workflow.execution_recovery_authorized'${lock ? " for share nowait" : ""}`,
+      [this.#workspaceDatabaseId, facts.eventKey],
+    );
+    if (recovery.rowCount === 1) {
+      const metadata = recovery.rows[0].metadata;
+      if (!plainRecord(metadata) || metadata.executionId !== input.executionId
+        || metadata.stepId !== input.stepId || metadata.runId !== input.runId
+        || metadata.recoveryAction !== workflowRuntimeExecutionRecoveryAction) {
+        throw persistenceError("Workflow execution recovery audit is inconsistent.");
+      }
+      facts.recovery = { operatorId: recovery.rows[0].actor_id };
+    }
+    return facts;
   }
 
   async reserveModelInvocation(
