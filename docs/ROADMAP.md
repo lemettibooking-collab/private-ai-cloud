@@ -116,8 +116,8 @@ The census recorded the current hardening debt and moved development to mileston
 - **AI-037.0 Live PostgreSQL Regression Suite — DONE**
 - **AI-037.1 HD-12 duplicate paid dispatch fail-safe — DONE**
 - **AI-037.1.1 Minimal Owner Recovery — DONE**
-- **AI-037.6a Provider timeout ≤ claim lease — NEXT**
-- **AI-037.4a Pool release guard + minimum metrics — PLANNED**
+- **AI-037.6a Provider timeout ≤ claim lease — DONE**
+- **AI-037.4a Pool release guard + minimum metrics — NEXT**
 - **Real Provider Gate — after M1 safety criteria pass**
 
 AI-037.1.1 passed independent re-gate and was committed/pushed through the Owner-approved repository workflow.
@@ -155,7 +155,7 @@ Safe behavior:
 
 `provider dispatched + final state not confirmed → outcome_unknown / recovery_required → automatic provider redispatch blocked`
 
-### AI-037.1.1 — Minimal Owner Recovery — IN REVIEW
+### AI-037.1.1 — Minimal Owner Recovery — DONE
 
 - local Owner-operated recovery for the narrow HD-12 case
 - factual view of Run / Step / execution / invocation / budget / audit
@@ -164,7 +164,7 @@ Safe behavior:
 - every recovery action is audited
 - full reuse of the already returned provider output remains deferred to durable Step result recovery
 
-### AI-037.6a — Provider timeout ≤ claim lease — PLANNED / NEXT
+### AI-037.6a — Provider timeout ≤ claim lease — DONE
 
 Composition-time validation:
 
@@ -172,7 +172,7 @@ Composition-time validation:
 
 Heartbeat/lease renewal remains deferred until there is evidence that a fixed lease is insufficient.
 
-### AI-037.4a — Pool release guard + minimum metrics — PLANNED
+### AI-037.4a — Pool release guard + minimum metrics — PLANNED / NEXT
 
 - FATAL/PANIC → session-breaking
 - reusable release only when transaction status is safe
@@ -658,7 +658,7 @@ Roadmap does not imply strictly serial development. Parallel work is allowed onl
 
 ### Current critical line
 
-`AI-037.0 DONE → AI-037.1 DONE → AI-037.1.1 DONE → AI-037.6a NEXT → AI-037.4a → M1 Review Gate → Real Provider Gate → M2 Review Gate`
+`AI-037.0 DONE → AI-037.1 DONE → AI-037.1.1 DONE → AI-037.6a DONE → AI-037.4a NEXT → M1 Review Gate → Real Provider Gate → M2 Review Gate`
 
 ### Early development automation
 
@@ -728,7 +728,7 @@ The key production proof remains a real Smart Algorithms feature moving from exe
 ### v1.2 change summary
 
 - `docs/ROADMAP.md` becomes the canonical source of truth; PDF becomes a generated snapshot.
-- AI-037.0 and AI-037.1 statuses updated to DONE; AI-037.1.1 is IN REVIEW.
+- v1.2 introduced repository-tracked execution status for the active AI-037 hardening sequence.
 - Added mandatory Roadmap Review Gates after M1 and M2.
 - Split AI-040 into early `AI-040a Local Developer Handoff` and later `AI-040b Owner UI Integration`.
 - Simplified first Owner navigation to Dashboard / Projects / Runs / Approvals / Settings.
