@@ -117,7 +117,8 @@ The census recorded the current hardening debt and moved development to mileston
 - **AI-037.1 HD-12 duplicate paid dispatch fail-safe — DONE**
 - **AI-037.1.1 Minimal Owner Recovery — DONE**
 - **AI-037.6a Provider timeout ≤ claim lease — DONE**
-- **AI-037.4a Pool release guard + minimum metrics — NEXT**
+- **AI-037.4a Pool release guard + minimum metrics — DONE**
+- **M1 Roadmap Review Gate — IN REVIEW / BLOCKED** (see §6)
 - **Real Provider Gate — after M1 safety criteria pass**
 
 AI-037.1.1 passed independent re-gate and was committed/pushed through the Owner-approved repository workflow.
@@ -172,13 +173,16 @@ Composition-time validation:
 
 Heartbeat/lease renewal remains deferred until there is evidence that a fixed lease is insufficient.
 
-### AI-037.4a — Pool release guard + minimum metrics — PLANNED / NEXT
+### AI-037.4a — Pool release guard + minimum metrics — DONE
 
 - FATAL/PANIC → session-breaking
 - reusable release only when transaction status is safe
 - minimum counters/signals: DB failures, destroyed sessions, `recovery_required`, `outcome_unknown`, ambiguous commit, provider redispatch
 
-### M1 Roadmap Review Gate — REQUIRED
+### M1 Roadmap Review Gate — IN REVIEW / BLOCKED
+
+Status: the author review found one M1 blocker. A **paid** definitive provider failure (for example an OpenAI `content_filter` result, which is billed) followed by lost final Step persistence leaves the execution `failed`, not `outcome_unknown`. The next ordinary advance then pays again for the same Step attempt without Owner action. The proposed corrective is a Roadmap Change Request pending Owner approval. The independent reviewer decides the gate verdict.
+
 
 After M1 passes, stop implementation briefly and review:
 
@@ -658,7 +662,7 @@ Roadmap does not imply strictly serial development. Parallel work is allowed onl
 
 ### Current critical line
 
-`AI-037.0 DONE → AI-037.1 DONE → AI-037.1.1 DONE → AI-037.6a DONE → AI-037.4a NEXT → M1 Review Gate → Real Provider Gate → M2 Review Gate`
+`AI-037.0 DONE → AI-037.1 DONE → AI-037.1.1 DONE → AI-037.6a DONE → AI-037.4a DONE → M1 Review Gate IN REVIEW / BLOCKED → Real Provider Gate → M2 Review Gate`
 
 ### Early development automation
 
