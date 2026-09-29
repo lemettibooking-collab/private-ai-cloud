@@ -47,7 +47,9 @@ async function resetRuntime() {
 }
 
 async function persistenceFor(database: any, domain: string) {
-  const persistence = await persistenceContract.createPostgresWorkflowRuntimePersistence({ database, domainWorkspaceId: domain });
+  const persistence = await persistenceContract.createPostgresWorkflowRuntimePersistence({
+    database, domainWorkspaceId: domain, providerExecutionTiming: fixtures.providerExecutionTiming(),
+  });
   assert.ok(persistence);
   return persistence;
 }

@@ -28,6 +28,9 @@ import { modelInvocationFinishReasons, modelInvocationLimits } from "../contract
 import { normalizeWorkflowRuntimeState, workflowRuntimeServiceStatuses, workflowRuntimeServiceVerdicts } from "../workflows/workflow-runtime-service.ts";
 // @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
 import { isResolvedWorkflowRuntimeTenant } from "./workflow-runtime-tenant.ts";
+import type { ProviderClaimLeaseTiming } from "../contracts/provider-claim-lease-policy";
+// @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
+import { isTrustedProviderClaimLeaseTiming } from "../contracts/provider-claim-lease-policy.ts";
 
 export type WorkflowRuntimeSqlResult<Row extends Record<string, unknown>> = Readonly<{
   rows: readonly Row[];
@@ -62,6 +65,10 @@ export type PostgresWorkflowRuntimeStoreOptions = Readonly<{
   database: WorkflowRuntimeDatabase;
   tenant: ResolvedWorkflowRuntimeTenant;
   leaseDurationMs?: number;
+  // AI-037.6a: the trusted timing the provider client was built with (from
+  // validateProviderClaimLeaseTiming / composeProviderWithinClaimLease). It fixes the claim lease
+  // and is required for provider start; without it provider start fails closed.
+  providerExecutionTiming?: ProviderClaimLeaseTiming;
   commandLeaseDurationMs?: number;
   recoverAbandonedCommands?: boolean;
   recoverStaleCommands?: boolean;
@@ -855,6 +862,7 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
   readonly #workspaceId: string;
   readonly #workspaceDatabaseId: string;
   readonly #leaseDurationMs: number;
+  readonly #providerExecutionTiming: ProviderClaimLeaseTiming | null;
   readonly #commandLeaseDurationMs: number;
   readonly #recoverAbandonedCommands: boolean;
   readonly #recoverStaleCommands: boolean;
@@ -873,11 +881,23 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
     this.#database = options.database;
     this.#workspaceId = options.tenant.workspaceId;
     this.#workspaceDatabaseId = options.tenant.workspaceDatabaseId;
-    this.#leaseDurationMs = leaseDuration(options.leaseDurationMs);
+    const providerTiming = options.providerExecutionTiming;
+    if (providerTiming !== undefined && (!isTrustedProviderClaimLeaseTiming(providerTiming)
+      || (options.leaseDurationMs !== undefined && options.leaseDurationMs !== providerTiming.claimLeaseDurationMs))) {
+      throw persistenceError("Workflow runtime provider timing is invalid.");
+    }
+    this.#providerExecutionTiming = providerTiming ?? null;
+    this.#leaseDurationMs = leaseDuration(providerTiming ? providerTiming.claimLeaseDurationMs : options.leaseDurationMs);
     this.#commandLeaseDurationMs = commandLeaseDuration(options.commandLeaseDurationMs);
     this.#recoverAbandonedCommands = options.recoverAbandonedCommands ?? false;
     this.#recoverStaleCommands = options.recoverStaleCommands ?? false;
     this.#now = options.now ?? (() => new Date());
+  }
+
+  // AI-037.6a: the factual claim lease, for provider timing composition
+  // (lib/contracts/provider-claim-lease-policy.ts). Read-only.
+  get claimLeaseDurationMs(): number {
+    return this.#leaseDurationMs;
   }
 
   #trustedNow(): Date {
@@ -1818,6 +1838,14 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
         return { status: "conflict" as const };
       }
       if (input.providerStart) {
+        // AI-037.6a: the generation this fence admits may run for the provider's full timeout, so
+        // the REMAINING claim lease must cover that timeout plus the safety margin. This first check
+        // is only a fast rejection; the authoritative one runs after the invocation/budget locks.
+        const timing = this.#providerExecutionTiming;
+        if (!timing
+          || expiresAt.getTime() - now.getTime() < timing.providerTimeoutMs + timing.safetyMarginMs) {
+          return { status: "conflict" as const };
+        }
         const reservation = input.providerStart;
         if (runRevision === null || reservation.runRevision !== runRevision + 1) {
           return { status: "conflict" as const };
@@ -1906,12 +1934,25 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
           return { status: "recovery_required" as const };
         }
       }
+      let startedAt = now;
+      if (input.providerStart) {
+        // AI-037.6a: authoritative provider-start timing check. Every row lock this fence takes is
+        // held and the invocation/budget authority is verified, but waiting for those locks used
+        // lease time, so re-read the trusted (application) clock immediately before the execution
+        // becomes running. The same instant is the execution's start time.
+        const timing = this.#providerExecutionTiming;
+        startedAt = this.#trustedNow();
+        if (!timing
+          || expiresAt.getTime() - startedAt.getTime() < timing.providerTimeoutMs + timing.safetyMarginMs) {
+          return { status: "conflict" as const };
+        }
+      }
       const started = await client.query(
         `/* workflow-runtime:start-execution */
          update workflow_runtime_executions
          set status = 'running', started_at = $2
          where workspace_id = $1 and claim_id = $3 and status = 'prepared'`,
-        [this.#workspaceDatabaseId, now, input.claimId],
+        [this.#workspaceDatabaseId, startedAt, input.claimId],
       );
       if (started.rowCount !== 1) throw persistenceError("Workflow execution start failed closed.");
       return { status: "started" as const };

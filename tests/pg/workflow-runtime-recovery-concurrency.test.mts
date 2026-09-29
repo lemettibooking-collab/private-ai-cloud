@@ -79,7 +79,7 @@ async function runtime() {
   await resetRuntime();
   const database = postgres.createWorkflowRuntimePostgresDatabase({ connectionString: db.url, maxConnections: 6 });
   const persistence = await persistenceContract.createPostgresWorkflowRuntimePersistence({
-    database, domainWorkspaceId: live.primaryWorkspace.domain,
+    database, domainWorkspaceId: live.primaryWorkspace.domain, providerExecutionTiming: fixtures.providerExecutionTiming(),
   });
   assert.ok(persistence);
   const store = persistence.stateStore;

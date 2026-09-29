@@ -93,7 +93,9 @@ async function runtime() {
   const database = postgres.createWorkflowRuntimePostgresDatabase({ connectionString: db.url, maxConnections: 4 });
   const tenant = await tenantContract.createPostgresWorkflowRuntimeTenantResolver(database).resolve(live.primaryWorkspace.domain);
   assert.ok(tenant);
-  const real = new storeContract.PostgresWorkflowRuntimeStateStore({ database, tenant });
+  const real = new storeContract.PostgresWorkflowRuntimeStateStore({
+    database, tenant, providerExecutionTiming: fixtures.providerExecutionTiming(),
+  });
   await real.create({ state: fixtures.executableRuntimeState() });
   const recording = fixtures.recordingStore(real);
   let dispatched = false;

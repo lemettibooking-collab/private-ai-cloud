@@ -15,6 +15,9 @@ const adapterContract = (await import(
 const dataHandlingContract = (await import(
   new URL("../../../lib/contracts/model-invocation-data-handling.ts", import.meta.url).href
 )) as typeof import("../../../lib/contracts/model-invocation-data-handling");
+const leasePolicy = (await import(
+  new URL("../../../lib/contracts/provider-claim-lease-policy.ts", import.meta.url).href
+)) as typeof import("../../../lib/contracts/provider-claim-lease-policy");
 const serviceContract = (await import(
   new URL("../../../lib/workflows/workflow-runtime-service.ts", import.meta.url).href
 )) as typeof import("../../../lib/workflows/workflow-runtime-service");
@@ -23,6 +26,14 @@ export const { createWorkflowRuntimeStateFixture, transitionRuntimeState } = fix
 
 export const runId = "run-one";
 export const stepId = "step-one";
+
+// AI-037.6a: the trusted provider timing a real composition binds to both the provider client and
+// the store (default 300 s claim lease; 20 s provider timeout + 10 s margin).
+export function providerExecutionTiming(providerTimeoutMs = 20_000, claimLeaseDurationMs = 300_000) {
+  const decision = leasePolicy.validateProviderClaimLeaseTiming({ providerTimeoutMs, claimLeaseDurationMs });
+  assert.equal(decision.verdict, "allow");
+  return decision.timing as NonNullable<typeof decision.timing>;
+}
 
 export function localMockModelProviderRegistry() {
   return {

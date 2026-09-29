@@ -1693,7 +1693,7 @@ test("provider-start fence atomically requires the exact running invocation rese
     },
     { tag: "workflow-runtime:start-execution", rowCount: 1 },
   ]);
-  assert.deepEqual(await createStore(database).startExecution({
+  assert.deepEqual(await createStore(database, { providerExecutionTiming: trustedTiming(10_000, 300_000) }).startExecution({
     runId: "run-one",
     claimId,
     providerStart: budgetReservation(),
@@ -1711,7 +1711,7 @@ test("provider-start fence denies missing or terminal invocation authority witho
       { tag: "workflow-runtime:read-execution", rows: [executionBoundaryRow()] },
       { tag: "workflow-runtime:provider-start-invocation", rows },
     ]);
-    assert.deepEqual(await createStore(database).startExecution({
+    assert.deepEqual(await createStore(database, { providerExecutionTiming: trustedTiming(10_000, 300_000) }).startExecution({
       runId: "run-one",
       claimId,
       providerStart: budgetReservation(),
@@ -1736,7 +1736,7 @@ test("provider-start fence binds the pinned request model and cannot authorize l
         },
       },
     ]);
-    assert.deepEqual(await createStore(database).startExecution({
+    assert.deepEqual(await createStore(database, { providerExecutionTiming: trustedTiming(10_000, 300_000) }).startExecution({
       runId: "run-one",
       claimId,
       providerStart,
@@ -3667,4 +3667,142 @@ test("AI-037.1.1: the re-check under locks rejects a state that changed after th
     assert.equal(database.queries.some((query) => query.tag === "workflow-runtime:audit-event"), false);
     database.done();
   }
+});
+
+// ---------------------------------------------------------------------------------------------
+// AI-037.6a: provider timeout + safety margin <= claim lease.
+// ---------------------------------------------------------------------------------------------
+
+test("AI-037.6a: the store exposes its factual, immutable claim lease for timing composition", () => {
+  assert.equal(createStore(new ScriptedDatabase([])).claimLeaseDurationMs, postgresWorkflowRuntimeStoreLimits.defaultLeaseDurationMs);
+  const store = createStore(new ScriptedDatabase([]), { leaseDurationMs: postgresWorkflowRuntimeStoreLimits.minimumLeaseDurationMs });
+  assert.equal(store.claimLeaseDurationMs, 30_000);
+  assert.throws(() => { (store as { claimLeaseDurationMs: number }).claimLeaseDurationMs = 900_000; });
+  assert.equal(store.claimLeaseDurationMs, 30_000);
+});
+
+const leasePolicy = (await import(
+  new URL("../lib/contracts/provider-claim-lease-policy.ts", import.meta.url).href
+)) as typeof import("../lib/contracts/provider-claim-lease-policy");
+
+// Trusted timing produced by the composition policy (the same object the provider factory uses).
+function trustedTiming(providerTimeoutMs: number, claimLeaseDurationMs: number) {
+  const decision = leasePolicy.validateProviderClaimLeaseTiming({ providerTimeoutMs, claimLeaseDurationMs });
+  assert.equal(decision.verdict, "allow");
+  return decision.timing as NonNullable<typeof decision.timing>;
+}
+
+// Claim acquired at 10:00:00.000 with a 30 s lease; provider timeout 10 s + 10 s margin, so the
+// provider-start fence needs at least 20 000 ms of remaining lease.
+const claimAcquiredAt = Date.parse("2026-09-01T10:00:00.000Z");
+const leaseRow = () => executionBoundaryRow({ lease_expires_at: new Date(claimAcquiredAt + 30_000).toISOString() });
+
+async function providerStartAt(elapsedMs: number, options: Readonly<Record<string, unknown>> = {}) {
+  const database = new ScriptedDatabase([
+    { tag: "workflow-runtime:read-execution", rows: [leaseRow()] },
+    { tag: "workflow-runtime:provider-start-invocation", rows: [{ status: "running", budget_status: "reserved" }] },
+    { tag: "workflow-runtime:start-execution", rowCount: 1 },
+  ]);
+  const store = createStore(database, {
+    providerExecutionTiming: trustedTiming(10_000, 30_000),
+    now: () => new Date(claimAcquiredAt + elapsedMs),
+    ...options,
+  });
+  const decision = await store.startExecution({ runId: "run-one", claimId, providerStart: budgetReservation() });
+  return {
+    decision,
+    tags: database.queries.map((query) => query.tag),
+    transactions: database.transactions,
+  };
+}
+
+test("AI-037.6a: the provider-start fence requires remaining lease >= provider timeout + safety margin", async () => {
+  // remaining 30 000 / 20 001 / 20 000 (exact boundary) → allow
+  for (const elapsed of [0, 9_999, 10_000]) {
+    const result = await providerStartAt(elapsed);
+    assert.deepEqual(result.decision, { status: "started" }, `elapsed ${elapsed}`);
+    assert.ok(result.tags.includes("workflow-runtime:start-execution"));
+  }
+  // remaining 19 999 (boundary - 1 ms), a long preflight leaving 5 s, the last live millisecond,
+  // exact expiry and an expired claim → deny before any mutation.
+  for (const elapsed of [10_001, 25_000, 29_999, 30_000, 31_000]) {
+    const result = await providerStartAt(elapsed);
+    assert.deepEqual(result.decision, { status: "conflict" }, `elapsed ${elapsed}`);
+    assert.deepEqual(result.tags, ["workflow-runtime:read-execution"], `elapsed ${elapsed}: no invocation re-check, no start`);
+    assert.deepEqual(result.transactions, ["begin", "commit"]);
+  }
+});
+
+test("AI-037.6a: provider start fails closed when no trusted provider timing is bound to the store", async () => {
+  const database = new ScriptedDatabase([{ tag: "workflow-runtime:read-execution", rows: [leaseRow()] }]);
+  const store = createStore(database, { now: () => new Date(claimAcquiredAt) });
+  assert.deepEqual(await store.startExecution({ runId: "run-one", claimId, providerStart: budgetReservation() }),
+    { status: "conflict" });
+  assert.equal(database.queries.some((query) => query.tag === "workflow-runtime:start-execution"), false);
+  database.done();
+});
+
+test("AI-037.6a: the store binds its claim lease to the trusted timing and rejects forged or drifting timing", () => {
+  const timing = trustedTiming(10_000, 30_000);
+  assert.equal(createStore(new ScriptedDatabase([]), { providerExecutionTiming: timing }).claimLeaseDurationMs, 30_000);
+  assert.equal(createStore(new ScriptedDatabase([]), { providerExecutionTiming: timing, leaseDurationMs: 30_000 })
+    .claimLeaseDurationMs, 30_000);
+  const forged = [
+    { providerTimeoutMs: 1, claimLeaseDurationMs: 30_000, safetyMarginMs: 10_000 },
+    Object.freeze({ ...timing }),
+    { ...timing, providerTimeoutMs: 1 },
+    new Proxy(timing, {}),
+    "timing",
+  ];
+  for (const value of forged) {
+    assert.throws(() => createStore(new ScriptedDatabase([]), { providerExecutionTiming: value }),
+      { message: "Workflow runtime provider timing is invalid." });
+  }
+  // A lease that differs from the one the provider timeout was validated against is rejected.
+  assert.throws(() => createStore(new ScriptedDatabase([]), { providerExecutionTiming: timing, leaseDurationMs: 300_000 }),
+    { message: "Workflow runtime provider timing is invalid." });
+  // A trusted timing whose lease is outside the store's lease bounds is rejected by the store.
+  assert.throws(() => createStore(new ScriptedDatabase([]), { providerExecutionTiming: trustedTiming(10_000, 20_000) }),
+    { message: "Workflow runtime lease policy is invalid." });
+});
+
+// The provider-start invocation/budget FOR UPDATE can wait behind a live writer while the lease keeps
+// running down. The clock below advances exactly while that statement executes.
+async function providerStartWithLockWait(earlyElapsedMs: number, finalElapsedMs: number) {
+  const clock = { elapsedMs: earlyElapsedMs };
+  const startValues: unknown[][] = [];
+  const database = new ScriptedDatabase([
+    { tag: "workflow-runtime:read-execution", rows: [leaseRow()] },
+    {
+      tag: "workflow-runtime:provider-start-invocation",
+      rows: [{ status: "running", budget_status: "reserved" }],
+      inspect() { clock.elapsedMs = finalElapsedMs; },
+    },
+    { tag: "workflow-runtime:start-execution", rowCount: 1, inspect(values) { startValues.push([...values]); } },
+  ]);
+  const store = createStore(database, {
+    providerExecutionTiming: trustedTiming(10_000, 30_000),
+    now: () => new Date(claimAcquiredAt + clock.elapsedMs),
+  });
+  const decision = await store.startExecution({ runId: "run-one", claimId, providerStart: budgetReservation() });
+  return { decision, tags: database.queries.map((query) => query.tag), startValues, database };
+}
+
+test("AI-037.6a: the authoritative remaining-lease check runs after the invocation/budget locks, on a fresh clock", async () => {
+  // Early check sees 20 500 ms (passes); the invocation/budget lock waits 3 s → 17 500 ms remain.
+  const waited = await providerStartWithLockWait(9_500, 12_500);
+  assert.deepEqual(waited.decision, { status: "conflict" });
+  assert.equal(waited.tags.includes("workflow-runtime:provider-start-invocation"), true, "authority was verified first");
+  assert.equal(waited.tags.includes("workflow-runtime:start-execution"), false, "no start-execution");
+
+  // Final boundary: exactly timeout + margin remaining → allowed; one millisecond less → denied.
+  const boundary = await providerStartWithLockWait(0, 10_000);
+  assert.deepEqual(boundary.decision, { status: "started" });
+  // started_at is the fresh time of the final authorization, not the early read.
+  assert.deepEqual(boundary.startValues, [[workspaceDatabaseId, new Date(claimAcquiredAt + 10_000), claimId]]);
+  boundary.database.done();
+
+  const short = await providerStartWithLockWait(0, 10_001);
+  assert.deepEqual(short.decision, { status: "conflict" });
+  assert.equal(short.tags.includes("workflow-runtime:start-execution"), false);
 });

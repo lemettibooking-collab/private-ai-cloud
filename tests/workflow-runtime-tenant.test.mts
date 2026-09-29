@@ -167,3 +167,32 @@ test("tenant resolver destroys the session when its lookup fails and reuses it o
   assert.ok(await healthy.resolve("workspace-primary"));
   assert.deepEqual(releases, [true, false]);
 });
+
+test("AI-037.6a: persistence binds only a trusted provider timing to the store", async () => {
+  const leasePolicy = (await import(
+    new URL("../lib/contracts/provider-claim-lease-policy.ts", import.meta.url).href
+  )) as typeof import("../lib/contracts/provider-claim-lease-policy");
+  const decision = leasePolicy.validateProviderClaimLeaseTiming({ providerTimeoutMs: 20_000, claimLeaseDurationMs: 60_000 });
+  assert.equal(decision.verdict, "allow");
+  const database = new TenantDatabase({ "workspace-a": [row("workspace-a", workspaceA)] });
+  const bound = await createPostgresWorkflowRuntimePersistence({
+    database, domainWorkspaceId: "workspace-a", providerExecutionTiming: decision.timing,
+  });
+  assert.ok(bound);
+  assert.equal(bound.stateStore.claimLeaseDurationMs, 60_000);
+  for (const forged of [
+    { providerTimeoutMs: 1, claimLeaseDurationMs: 60_000, safetyMarginMs: 10_000 },
+    { ...decision.timing },
+    null,
+  ]) {
+    assert.equal(await createPostgresWorkflowRuntimePersistence({
+      database, domainWorkspaceId: "workspace-a", providerExecutionTiming: forged,
+    }), null);
+  }
+  const getter = { database, domainWorkspaceId: "workspace-a" } as Record<string, unknown>;
+  Object.defineProperty(getter, "providerExecutionTiming", { enumerable: true, get: () => decision.timing });
+  assert.equal(await createPostgresWorkflowRuntimePersistence(getter), null);
+  assert.equal(await createPostgresWorkflowRuntimePersistence({
+    database, domainWorkspaceId: "workspace-a", providerExecutionTiming: decision.timing, extra: true,
+  }), null);
+});

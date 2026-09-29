@@ -61,6 +61,7 @@ async function runScenario(options: ScenarioOptions) {
     const persistence = await persistenceContract.createPostgresWorkflowRuntimePersistence({
       database,
       domainWorkspaceId: live.primaryWorkspace.domain,
+      providerExecutionTiming: fixtures.providerExecutionTiming(),
     });
     assert.ok(persistence);
     const store = persistence.stateStore;
