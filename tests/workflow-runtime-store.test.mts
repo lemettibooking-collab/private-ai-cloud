@@ -1823,6 +1823,55 @@ test("known normal AI-029 outcome terminalizes a running journal row as failed",
   assert.deepEqual(database.transactions, ["begin", "commit"]);
 });
 
+test("HD-12: a known outcome never turns a possibly dispatched execution into a retryable failure", () => {
+  const source = readFileSync(
+    new URL("../lib/db/workflow-runtime-store.ts", import.meta.url),
+    "utf8",
+  );
+  const known = source.slice(
+    source.indexOf("/* workflow-runtime:record-known-execution */"),
+    source.indexOf("/* workflow-runtime:read-known-execution */"),
+  );
+  // Only a `running` execution is terminalized here; its fate is derived from the durable
+  // invocation linked to that exact execution, not from the caller.
+  assert.match(known, /and execution\.status = 'running'/u);
+  assert.match(known, /set status = case when exists \(/u);
+  assert.match(known, /from workflow_model_invocations as invocation/u);
+  assert.match(known, /invocation\.workspace_id = \$1/u);
+  assert.match(known, /invocation\.workflow_execution_id = execution\.id/u);
+  // provider started (running), settled success, or ambiguous outcome → unresolved.
+  assert.match(known, /invocation\.status in \('running', 'succeeded', 'outcome_unknown'\)/u);
+  assert.match(known, /then 'outcome_unknown' else 'failed' end/u);
+  // No other path may write a plain `failed` for a running execution.
+  assert.equal(known.match(/'failed'/gu)?.length, 1);
+
+  // The unresolved state is what blocks every later claim of the same Step attempt.
+  const unresolved = source.slice(
+    source.indexOf("/* workflow-runtime:read-unresolved-execution */"),
+    source.indexOf("/* workflow-runtime:insert-claim */"),
+  );
+  assert.match(unresolved, /status in \('prepared', 'running', 'outcome_unknown'\)/u);
+  assert.match(unresolved, /return \{ status: "recovery_required" as const, claimId: null \}/u);
+  // Claim release keeps its prepared→failed / running→outcome_unknown split.
+  assert.match(source, /set status = case when status = 'prepared' then 'failed' else 'outcome_unknown' end/u);
+});
+
+test("HD-12: a running execution whose invocation reached the provider is recorded in one guarded statement", async () => {
+  const database = new ScriptedDatabase([
+    {
+      tag: "workflow-runtime:record-known-execution",
+      rowCount: 1,
+      inspect(values) {
+        assert.deepEqual(values.slice(0, 3), [workspaceDatabaseId, "run-one", claimId]);
+        assert.equal(values.length, 4);
+      },
+    },
+  ]);
+  await createStore(database).recordKnownExecutionOutcome({ runId: "run-one", claimId });
+  assert.deepEqual(database.queries.map((query) => query.tag), ["workflow-runtime:record-known-execution"]);
+  assert.deepEqual(database.transactions, ["begin", "commit"]);
+});
+
 test("known terminal execution is preserved instead of becoming outcome_unknown", async () => {
   const database = new ScriptedDatabase([
     { tag: "workflow-runtime:record-known-execution", rowCount: 0 },

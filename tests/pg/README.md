@@ -49,16 +49,23 @@ pg_ctl -D /tmp/aipc-pg -m fast -w stop && rm -rf /tmp/aipc-pg
 | File | Invariant |
 |---|---|
 | `postgres-session-safety.test.mts` | A pooled session is reused only when idle; failed cleanup destroys the session; a terminated backend does not crash the process; server backstops are present; client `query_timeout` is rejected |
-| `workflow-runtime-hd12.test.mts` | **HD-12 known debt** (see below) |
+| `workflow-runtime-hd12.test.mts` | HD-12 fail-safe (AI-037.1): no second provider dispatch after a post-dispatch CAS failure (see below) |
 | `workflow-runtime-tenant-integrity.test.mts` | Cross-workspace runtime relations and audit rows fail on their tenant constraints; the canonical Workspace mapping holds |
 | `workflow-runtime-snapshot.test.mts` | `getRunOverview` reads one REPEATABLE READ, READ ONLY snapshot while another connection commits, and never blocks the writer |
 | `workflow-runtime-reconciliation.test.mts` | Current fail-closed reconciliation of a COMMIT that is still in flight (HD-13 baseline for AI-037.3) |
 
-## HD-12 is intentionally RED
+## HD-12 (fixed in AI-037.1)
 
-`workflow-runtime-hd12.test.mts` keeps executable evidence of an open defect: after a definitive failure of the post-dispatch CAS, the same logical Step reaches the provider twice.
+`workflow-runtime-hd12.test.mts` proves that the provider is never dispatched twice for the same logical Step when the provider call may already have happened but the post-dispatch CAS failed definitively (a real SQLSTATE 40001 is injected).
 
-- **`HD-12 CURRENT BEHAVIOUR …`** is a characterization test. It **passes** on current code by asserting the defect exactly: 2 dispatches, both settled, the first output unrecoverable.
-- **`HD-12 AI-037.1 TARGET …`** asserts the corrected behaviour. It is marked `todo`, so it runs and fails today without failing the suite.
+- The execution stays `outcome_unknown`.
+- A replay returns the stored response.
+- A new command, whether it reuses the execution id or brings a new one, gets `recovery_required`.
+- There is exactly one dispatch and one settlement.
 
-AI-037.1 must make the TARGET test pass and remove its `todo`. It must also delete the CURRENT BEHAVIOUR test, which will start failing once the fix lands. Do not weaken either test.
+Boundary tests pin the semantics this fix must not change:
+- an ambiguous provider outcome stays unresolved;
+- a failure before dispatch, or a definitive provider failure, stays a retryable `failed`;
+- with no CAS failure, the Step completes with one dispatch.
+
+Recovery of an `outcome_unknown` execution is out of scope here (HD-6).

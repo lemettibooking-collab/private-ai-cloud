@@ -1792,10 +1792,20 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
     }
     await transaction(this.#database, async (client) => {
       const now = this.#trustedNow();
+      // A ledger execution reaches `running` only through the provider-start fence, so an
+      // invocation that is `running`, `succeeded` or `outcome_unknown` means the provider may
+      // already have been dispatched while the Step result was not committed. Such an execution
+      // stays unresolved (`outcome_unknown`) so no new execution can dispatch the Step again.
       const recorded = await client.query(
         `/* workflow-runtime:record-known-execution */
          update workflow_runtime_executions as execution
-         set status = 'failed', completed_at = $4
+         set status = case when exists (
+               select 1 from workflow_model_invocations as invocation
+               where invocation.workspace_id = $1
+                 and invocation.workflow_execution_id = execution.id
+                 and invocation.status in ('running', 'succeeded', 'outcome_unknown')
+             ) then 'outcome_unknown' else 'failed' end,
+             completed_at = $4
          from workflow_runtime_claims as claim, workflow_runs as run
          where execution.claim_id = claim.id and execution.run_id = run.id
            and execution.workspace_id = $1 and claim.workspace_id = $1

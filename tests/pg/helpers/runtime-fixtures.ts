@@ -75,7 +75,14 @@ export const mockUsage = Object.freeze({ inputTokens: 100, outputTokens: 5, tota
 
 // Local deterministic provider following the adapter contract used by the durable ledger
 // (preflight + run). The output text embeds the invocation id so each dispatch is distinguishable.
-export function localMockProvider(options: { beforeRun?: (invocationId: string) => void | Promise<void> } = {}) {
+// `outcome` selects what a dispatched call returns: `succeeded` (default), a definitive provider
+// `failed` result, or `lost` (the outcome is unknown after dispatch). `failPreflight` rejects before
+// any dispatch.
+export function localMockProvider(options: {
+  beforeRun?: (invocationId: string) => void | Promise<void>;
+  outcome?: () => "succeeded" | "failed" | "lost";
+  failPreflight?: () => boolean;
+} = {}) {
   const dispatches: MockDispatch[] = [];
   const adapter = {
     identity: {
@@ -87,6 +94,7 @@ export function localMockProvider(options: { beforeRun?: (invocationId: string) 
       providerModelVersion: "version-1",
     },
     async preflight(input: unknown, budgetInput: any) {
+      if (options.failPreflight?.()) throw new Error("mock preflight unavailable");
       const requestDecision = invocationContract.validateAndNormalizeModelInvocationRequest(input);
       assert.ok(requestDecision.normalizedRequest);
       const sourceRequestFingerprint = dataHandlingContract.createModelInvocationRequestFingerprint(
@@ -133,25 +141,47 @@ export function localMockProvider(options: { beforeRun?: (invocationId: string) 
       await options.beforeRun?.(request.invocationId);
       const outputText = `Output of ${request.invocationId}`;
       dispatches.push(Object.freeze({ invocationId: request.invocationId, stepId: request.stepId, outputText }));
+      const outcome = options.outcome?.() ?? "succeeded";
+      if (outcome === "lost") {
+        return {
+          verdict: "deny" as const,
+          reasons: [{
+            code: "provider_exception",
+            path: "response",
+            message: "Provider request outcome is unknown after dispatch.",
+            providerId: "provider-mock",
+            deploymentId: "deployment-mock",
+            invocationId: request.invocationId,
+          }],
+          requestDecision,
+          resultDecision: null,
+          normalizedResult: null,
+        };
+      }
+      const failed = outcome === "failed";
       const normalizedResult = {
         invocationId: request.invocationId,
-        outcome: "succeeded",
-        finishReason: "stop",
+        outcome: failed ? "failed" : "succeeded",
+        finishReason: failed ? "error" : "stop",
         providerId: "provider-mock",
         providerModelId: "mock/model:alias",
         providerRequestModelId: "mock/model:v1",
         providerModelVersion: "version-1",
-        outputText,
+        outputText: failed ? null : outputText,
         structuredOutput: null,
         toolCallProposals: [],
-        usage: {
-          inputTokens: mockUsage.inputTokens,
-          outputTokens: mockUsage.outputTokens,
-          totalTokens: mockUsage.totalTokens,
-        },
+        usage: failed
+          ? { inputTokens: 0, outputTokens: 0, totalTokens: 0 }
+          : {
+            inputTokens: mockUsage.inputTokens,
+            outputTokens: mockUsage.outputTokens,
+            totalTokens: mockUsage.totalTokens,
+          },
         latencyMs: 5,
-        costUsdMicros: mockUsage.costUsdMicros,
-        error: null,
+        costUsdMicros: failed ? 0 : mockUsage.costUsdMicros,
+        error: failed
+          ? { category: "rate_limited", code: "rate_limited", message: "Rate limited.", retryable: true }
+          : null,
       };
       const resultDecision = invocationContract.validateAndNormalizeModelInvocationResult(normalizedResult);
       return { verdict: "allow" as const, reasons: [], requestDecision, resultDecision, normalizedResult };

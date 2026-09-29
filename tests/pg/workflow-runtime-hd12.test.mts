@@ -1,14 +1,12 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- live driver instrumentation crosses untyped pg boundaries */
-// Live PostgreSQL: HD-12 — a logical Step is dispatched to the provider again after a definitive
-// failure of the post-dispatch CAS. KNOWN DEBT (AI-037 census, P1 #1), retained as RED evidence.
+// Live PostgreSQL: HD-12 — no second provider dispatch for a logical Step once the provider may
+// already have been dispatched and the Step result was not committed (fixed in AI-037.1).
 //
-// Representation (see tests/pg/README.md):
-// - "HD-12 CURRENT BEHAVIOUR ..." is a characterization test. It passes on current code and asserts
-//   every fact of the defect strictly (dispatch count === 2, first output unrecoverable, ...).
-// - "HD-12 AI-037.1 TARGET ..." runs the same scenario with the corrected expectations and is
-//   marked `todo`: it executes and fails today without failing the suite.
-// AI-037.1 must make the TARGET test pass, remove its `todo`, and delete the CURRENT BEHAVIOUR test
-// (which will then fail by design). Neither test may be weakened.
+// The post-dispatch `update-run` CAS statement is made to fail definitively with a real server
+// SQLSTATE 40001 (the ROLLBACK succeeds). An execution whose provider may have run must stay
+// unresolved (`outcome_unknown`) so every later claim of the same Step attempt answers
+// recovery_required. Executions that never reached the provider, or whose provider call failed
+// definitively, keep their existing retryable `failed` semantics.
 //
 // Derived from /tmp/ai037/hd12.mts (T1) and /tmp/ai036-regate2/cas-lost.mts.
 import assert from "node:assert/strict";
@@ -45,20 +43,17 @@ async function resetRuntime() {
   ]) await db.admin.query(sql);
 }
 
-async function outputPersistedAnywhere(outputText: string): Promise<number> {
-  const pattern = `%${outputText}%`;
-  const count = async (sql: string) => (await db.admin.query(sql, [pattern])).rows[0].n as number;
-  return await count("select count(*)::int as n from workflow_runs where runtime_snapshot::text like $1")
-    + await count("select count(*)::int as n from workflow_step_runs where state_payload::text like $1")
-    + await count("select count(*)::int as n from audit_events where metadata::text like $1")
-    + await count("select count(*)::int as n from workflow_model_invocations as i where row_to_json(i)::text like $1")
-    + await count("select count(*)::int as n from workflow_runtime_commands where response_payload::text like $1");
-}
+type ScenarioOptions = Readonly<{
+  firstOutcome?: "succeeded" | "failed" | "lost";
+  failFirstPreflight?: boolean;
+  failPostDispatchCas?: boolean;
+  failPreDispatchCas?: boolean;
+}>;
 
-// provider dispatch #1 succeeds and is settled → the post-dispatch `update-run` CAS statement fails
-// with a real server SQLSTATE 40001 (the ROLLBACK succeeds, so the failure is definitive) → the
-// Owner retries with a new command / execution at the current revision.
-async function runPostDispatchCasFailureScenario() {
+// Owner starts the Run and advances step-one (execution/invocation "one"); optionally the first
+// dispatch's post-dispatch CAS fails definitively. Afterwards the Owner replays the same command,
+// reuses the same execution id under a new command, and retries with a new execution ("two").
+async function runScenario(options: ScenarioOptions) {
   await resetRuntime();
   const database = postgres.createWorkflowRuntimePostgresDatabase({ connectionString: db.url, maxConnections: 4 });
   const interceptor = live.installQueryInterceptor();
@@ -71,38 +66,48 @@ async function runPostDispatchCasFailureScenario() {
     const store = persistence.stateStore;
     await store.create({ state: fixtures.executableRuntimeState() });
     let dispatched = false;
-    const provider = fixtures.localMockProvider({ beforeRun: () => { dispatched = true; } });
+    let preflights = 0;
+    const provider = fixtures.localMockProvider({
+      beforeRun: () => { dispatched = true; },
+      outcome: () => (provider.dispatches.length === 1 ? options.firstOutcome ?? "succeeded" : "succeeded"),
+      failPreflight: () => { preflights += 1; return options.failFirstPreflight === true && preflights === 1; },
+    });
     const service = fixtures.runtimeService(store, provider);
     assert.equal((await service.start(fixtures.startCommand())).status, "running");
 
     const casFailure = live.rule(
-      "post-dispatch CAS fails definitively (SQLSTATE 40001)",
-      (text) => dispatched && text.includes("/* workflow-runtime:update-run */"),
+      "CAS fails definitively (SQLSTATE 40001)",
+      (text) => text.includes("/* workflow-runtime:update-run */")
+        && ((options.failPostDispatchCas === true && dispatched)
+          || (options.failPreDispatchCas === true && preflights > 0 && !dispatched)),
       (_client, _config, _values, send) => send(
         "do $$ begin raise exception 'live-test serialization failure' using errcode = '40001'; end $$",
       ),
     );
     interceptor.rules.push(casFailure);
     const first = fixtures.responseSummary(await service.advance(fixtures.advanceCommand(1, "advance-one", "one")));
+    const dispatchesAfterFirst = provider.dispatches.length;
     const afterFirst = await fixtures.ledger(db.admin);
     interceptor.restore();
 
-    const retry = fixtures.responseSummary(await service.advance(
-      fixtures.advanceCommand(afterFirst.runs[0].revision, "advance-retry", "two"),
-    ));
-    const final = await fixtures.ledger(db.admin);
-    const [firstDispatch, secondDispatch] = provider.dispatches;
+    const revision = afterFirst.runs[0].revision;
+    const replay = fixtures.responseSummary(await service.advance(fixtures.advanceCommand(1, "advance-one", "one")));
+    const sameExecutionNewCommand = fixtures.responseSummary(
+      await service.advance(fixtures.advanceCommand(revision, "advance-same-execution", "one")),
+    );
+    const dispatchesBeforeRetry = provider.dispatches.length;
+    const retry = fixtures.responseSummary(await service.advance(fixtures.advanceCommand(revision, "advance-retry", "two")));
     return {
       casFailureFired: casFailure.fired,
       first,
+      dispatchesAfterFirst,
       afterFirst,
+      replay,
+      sameExecutionNewCommand,
+      dispatchesBeforeRetry,
       retry,
-      final,
+      final: await fixtures.ledger(db.admin),
       dispatches: provider.dispatches,
-      firstOutputPersistedCount: firstDispatch ? await outputPersistedAnywhere(firstDispatch.outputText) : null,
-      secondOutputPersistedCount: secondDispatch ? await outputPersistedAnywhere(secondDispatch.outputText) : null,
-      invocationColumns: (await db.admin.query(`select column_name from information_schema.columns
-        where table_name = 'workflow_model_invocations'`)).rows.map((row: any) => row.column_name as string),
     };
   } finally {
     interceptor.restore();
@@ -110,63 +115,96 @@ async function runPostDispatchCasFailureScenario() {
   }
 }
 
-test("HD-12 CURRENT BEHAVIOUR (known debt, RED evidence for AI-037.1): a definitive post-dispatch CAS failure lets the same logical Step dispatch the provider twice", async (t) => {
-  const r = await runPostDispatchCasFailureScenario();
+const executionStates = (ledger: any) => ledger.executions.map((row: any) =>
+  [row.execution_id, row.attempt_number, row.expected_revision, row.status]);
+
+test("HD-12: settled provider success + definitive post-dispatch CAS failure never dispatches the Step again", async (t) => {
+  const r = await runScenario({ failPostDispatchCas: true });
   t.diagnostic(`dispatches=${r.dispatches.map((d) => d.invocationId).join(",")} first=${r.first.status} retry=${r.retry.status}`);
 
-  // 1. dispatch #1 happened and succeeded; 2. invocation #1 settled `succeeded`.
-  assert.equal(r.dispatches[0]?.invocationId, "invocation-step-one-one");
+  // Dispatch #1 happened, succeeded and is durably settled; the final CAS failed definitively.
+  assert.equal(r.casFailureFired, 1);
+  assert.equal(r.dispatchesAfterFirst, 1);
+  assert.deepEqual(r.first, { verdict: "deny", status: "denied", revision: 1, reasons: ["state_store_failed"] });
   assert.deepEqual(r.afterFirst.invocations.map((row: any) => [row.invocation_id, row.status, row.total_tokens]),
     [["invocation-step-one-one", "succeeded", fixtures.mockUsage.totalTokens]]);
   assert.deepEqual(r.afterFirst.budgets.map((row: any) => [row.invocation_id, row.status, row.actual_tokens]),
     [["invocation-step-one-one", "settled", fixtures.mockUsage.totalTokens]]);
 
-  // 3. the final CAS failed definitively: nothing advanced the Run.
-  assert.equal(r.casFailureFired, 1);
-  assert.deepEqual(r.first, { verdict: "deny", status: "denied", revision: 1, reasons: ["state_store_failed"] });
+  // The execution stays unresolved instead of becoming a retryable `failed`; the Step is not completed.
+  assert.deepEqual(executionStates(r.afterFirst), [["execution-step-one-one", 1, 1, "outcome_unknown"]]);
   assert.deepEqual(r.afterFirst.runs, [{ runtime_id: fixtures.runId, status: "running", revision: 1 }]);
   assert.deepEqual(r.afterFirst.steps, [{ step_key: fixtures.stepId, status: "pending", attempt_count: 0 }]);
 
-  // 4. the execution was classified `failed` although its provider call succeeded.
-  assert.deepEqual(r.afterFirst.executions.map((row: any) => [row.execution_id, row.status]),
-    [["execution-step-one-one", "failed"]]);
+  // Exact replay returns the stored response; neither the same execution id nor a new execution
+  // can bypass the unresolved Step attempt.
+  assert.deepEqual(r.replay, { ...r.first, verdict: "idempotent" });
+  assert.equal(r.sameExecutionNewCommand.status, "recovery_required");
+  assert.equal(r.retry.status, "recovery_required");
+  assert.ok(r.retry.reasons.includes("execution_recovery_required"));
 
-  // 5. a new execution was admitted at the same attempt and revision; 6. dispatch #2 occurred.
-  assert.equal(r.retry.status, "completed");
-  assert.deepEqual(r.final.executions.map((row: any) => [row.execution_id, row.attempt_number, row.expected_revision, row.status]), [
-    ["execution-step-one-one", 1, 1, "failed"],
-    ["execution-step-one-two", 1, 1, "completed"],
-  ]);
-  assert.deepEqual(r.dispatches.map((d) => [d.stepId, d.invocationId]), [
-    [fixtures.stepId, "invocation-step-one-one"],
-    [fixtures.stepId, "invocation-step-one-two"],
-  ]);
-  assert.equal(r.dispatches.length, 2, "HD-12: the same logical Step reached the provider twice");
-
-  // 7. both usages were accounted.
-  assert.deepEqual(r.final.budgets.map((row: any) => [row.invocation_id, row.status, row.actual_tokens, row.actual_cost]), [
-    ["invocation-step-one-one", "settled", fixtures.mockUsage.totalTokens, fixtures.mockUsage.costUsdMicros],
-    ["invocation-step-one-two", "settled", fixtures.mockUsage.totalTokens, fixtures.mockUsage.costUsdMicros],
-  ]);
+  // Exactly one dispatch, one invocation, one settlement; nothing completed the Step.
+  assert.equal(r.dispatches.length, 1, "exactly one provider dispatch for the logical Step");
+  assert.deepEqual(r.final.invocations.map((row: any) => [row.invocation_id, row.status]),
+    [["invocation-step-one-one", "succeeded"]], "no second invocation was created");
+  assert.deepEqual(r.final.budgets.map((row: any) => [row.invocation_id, row.status, row.actual_tokens, row.actual_cost]),
+    [["invocation-step-one-one", "settled", fixtures.mockUsage.totalTokens, fixtures.mockUsage.costUsdMicros]]);
   const windows = Object.fromEntries(r.final.windows.map((row: any) => [row.window_kind, [row.reserved, row.consumed]]));
   assert.deepEqual(windows, {
-    daily_tokens: ["0", String(2 * fixtures.mockUsage.totalTokens)],
-    monthly_cost: ["0", String(2 * fixtures.mockUsage.costUsdMicros)],
+    daily_tokens: ["0", String(fixtures.mockUsage.totalTokens)],
+    monthly_cost: ["0", String(fixtures.mockUsage.costUsdMicros)],
   });
+  assert.deepEqual(executionStates(r.final), [["execution-step-one-one", 1, 1, "outcome_unknown"]]);
+  assert.deepEqual(r.final.runs, [{ runtime_id: fixtures.runId, status: "running", revision: 1 }]);
+  assert.deepEqual(r.final.steps, [{ step_key: fixtures.stepId, status: "pending", attempt_count: 0 }]);
+});
 
-  // 8. the first output was not recoverable or applied: no output column exists on the invocation
-  //    ledger and the text of dispatch #1 appears nowhere in durable runtime state.
-  assert.equal(r.invocationColumns.some((column: string) => /output_text|result|output$/u.test(column)), false);
-  assert.equal(r.firstOutputPersistedCount, 0);
+test("HD-12 boundary: an ambiguous provider outcome stays unresolved and blocks redispatch", async () => {
+  const r = await runScenario({ firstOutcome: "lost" });
+  assert.equal(r.first.status, "recovery_required");
+  assert.deepEqual(r.afterFirst.invocations.map((row: any) => [row.invocation_id, row.status]),
+    [["invocation-step-one-one", "outcome_unknown"]]);
+  assert.deepEqual(r.afterFirst.budgets.map((row: any) => row.status), ["outcome_unknown"]);
+  assert.deepEqual(executionStates(r.afterFirst), [["execution-step-one-one", 1, 1, "outcome_unknown"]]);
+  assert.equal(r.retry.status, "recovery_required");
+  assert.equal(r.dispatches.length, 1);
+  assert.equal(r.final.invocations.length, 1);
+});
+
+test("HD-12 boundary: a failure before provider dispatch keeps the existing retry semantics", async () => {
+  // The preflight fails before any dispatch and the CAS recording that failure also fails, so the
+  // execution never left `prepared`: it must remain an ordinary retryable `failed`.
+  const r = await runScenario({ failFirstPreflight: true, failPreDispatchCas: true });
+  assert.equal(r.casFailureFired, 1);
+  assert.equal(r.dispatchesAfterFirst, 0, "the provider was never started");
+  // Existing behaviour: the CAS failure and the fail-closed known-outcome record of a still
+  // `prepared` execution each report state_store_failed; the claim release then retires it.
+  assert.deepEqual(r.first, {
+    verdict: "deny", status: "denied", revision: 1, reasons: ["state_store_failed", "state_store_failed"],
+  });
+  assert.deepEqual(executionStates(r.afterFirst), [["execution-step-one-one", 1, 1, "failed"]]);
+  assert.equal(r.afterFirst.budgets.some((row: any) => row.status === "settled"), false);
+  // A new execution is admitted and completes with the only provider dispatch.
+  assert.equal(r.retry.status, "completed");
+  assert.deepEqual(r.dispatches.map((d) => d.invocationId), ["invocation-step-one-two"]);
   assert.deepEqual(r.final.runs, [{ runtime_id: fixtures.runId, status: "completed", revision: 5 }]);
 });
 
-test("HD-12 AI-037.1 TARGET: a definitive post-dispatch CAS failure never dispatches the same logical Step again", {
-  todo: "HD-12 is open until AI-037.1; this target is expected to fail on current code",
-}, async () => {
-  const r = await runPostDispatchCasFailureScenario();
+test("HD-12 boundary: a definitive provider failure + post-dispatch CAS failure keeps the existing retry semantics", async () => {
+  const r = await runScenario({ firstOutcome: "failed", failPostDispatchCas: true });
   assert.equal(r.casFailureFired, 1);
-  assert.equal(r.dispatches.length, 1, "exactly one provider dispatch for the logical Step");
-  assert.notEqual(r.retry.status, "completed", "the retry must not re-execute the Step");
-  assert.equal(r.final.budgets.filter((row: any) => row.status === "settled").length, 1, "exactly one settlement");
+  assert.deepEqual(r.afterFirst.invocations.map((row: any) => [row.invocation_id, row.status, row.cost]),
+    [["invocation-step-one-one", "failed", 0]]);
+  assert.deepEqual(executionStates(r.afterFirst), [["execution-step-one-one", 1, 1, "failed"]]);
+  assert.equal(r.retry.status, "completed");
+  assert.deepEqual(r.dispatches.map((d) => d.invocationId), ["invocation-step-one-one", "invocation-step-one-two"]);
+  assert.equal(r.final.budgets.filter((row: any) => row.status === "settled" && row.actual_tokens > 0).length, 1,
+    "only the successful dispatch consumed usage");
+});
+
+test("HD-12 control: without a CAS failure the Step completes with exactly one dispatch", async () => {
+  const r = await runScenario({});
+  assert.equal(r.first.status, "completed");
+  assert.deepEqual(executionStates(r.afterFirst), [["execution-step-one-one", 1, 1, "completed"]]);
+  assert.equal(r.dispatches.length, 1);
 });
