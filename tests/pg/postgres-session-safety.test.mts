@@ -145,6 +145,54 @@ test("A3: backend terminated while checked out idle in transaction does not cras
   }
 });
 
+// AI-037.4a: the release guard discards a session whose final ReadyForQuery status is not idle,
+// even when the caller (wrongly) asks for normal release.
+async function rawCheckoutScenario(statements: readonly string[], expectDiscard: boolean) {
+  const database = postgres.createWorkflowRuntimePostgresDatabase({ connectionString: db.url, maxConnections: 1 });
+  try {
+    const before = await live.probeSession(database);
+    const client = await database.connect();
+    for (const statement of statements) await client.query(statement).catch(() => {});
+    client.release(); // no destroy flag: only the guard can refuse reuse
+    const next = await live.probeSession(database);
+    const oldGone = expectDiscard
+      ? await live.waitForBackendExit(db.admin, before.pid, 5_000)
+      : !await live.backendAlive(db.admin, before.pid);
+    return { before, next, oldGone };
+  } finally {
+    await database.close();
+  }
+}
+
+test("A5 (AI-037.4a): BEGIN + release without COMMIT/ROLLBACK (status T) discards the session", async () => {
+  const r = await rawCheckoutScenario(["begin", "select 1"], true);
+  assert.notEqual(r.next.pid, r.before.pid, "next borrower received a new backend");
+  assert.equal(r.oldGone, true, "old backend was discarded");
+  assert.equal(r.next.inheritedTransaction, false);
+});
+
+test("A6 (AI-037.4a): failed statement inside a transaction without ROLLBACK (status E) discards the session", async () => {
+  const r = await rawCheckoutScenario(["begin", "select 1/0"], true);
+  assert.notEqual(r.next.pid, r.before.pid);
+  assert.equal(r.oldGone, true);
+  assert.equal(r.next.inheritedTransaction, false);
+});
+
+test("A7 (AI-037.4a): failed statement + successful ROLLBACK (status I) reuses the same clean session", async () => {
+  const r = await rawCheckoutScenario(["begin", "select 1/0", "rollback"], false);
+  assert.equal(r.next.pid, r.before.pid, "same backend reused");
+  assert.equal(r.oldGone, false);
+  assert.equal(r.next.inheritedTransaction, false);
+  assert.equal(r.next.isolation, "read committed");
+});
+
+test("A8 (AI-037.4a): non-fatal ERROR outside a transaction (status I) keeps the session reusable", async () => {
+  const r = await rawCheckoutScenario(["select 1/0"], false);
+  assert.equal(r.next.pid, r.before.pid);
+  assert.equal(r.oldGone, false);
+  assert.equal(r.next.inheritedTransaction, false);
+});
+
 test("A4: every pooled session returned for reuse was idle (transaction status I)", () => {
   assert.deepEqual(monitor.stats.violations, []);
   assert.ok(monitor.stats.reused > 0, "reuse path exercised");

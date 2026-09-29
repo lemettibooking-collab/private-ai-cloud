@@ -29,6 +29,9 @@ import { normalizeWorkflowRuntimeState, workflowRuntimeServiceStatuses, workflow
 // @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
 import { isResolvedWorkflowRuntimeTenant } from "./workflow-runtime-tenant.ts";
 import type { ProviderClaimLeaseTiming } from "../contracts/provider-claim-lease-policy";
+import type { RuntimeOperationalSignalName, RuntimeOperationalSignalSink } from "../contracts/runtime-operational-signals";
+// @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
+import { emitRuntimeOperationalSignal } from "../contracts/runtime-operational-signals.ts";
 // @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
 import { isTrustedProviderClaimLeaseTiming } from "../contracts/provider-claim-lease-policy.ts";
 
@@ -69,6 +72,8 @@ export type PostgresWorkflowRuntimeStoreOptions = Readonly<{
   // validateProviderClaimLeaseTiming / composeProviderWithinClaimLease). It fixes the claim lease
   // and is required for provider start; without it provider start fails closed.
   providerExecutionTiming?: ProviderClaimLeaseTiming;
+  // AI-037.4a: optional operational signal sink (ambiguous_commit, outcome_unknown).
+  signals?: RuntimeOperationalSignalSink;
   commandLeaseDurationMs?: number;
   recoverAbandonedCommands?: boolean;
   recoverStaleCommands?: boolean;
@@ -422,25 +427,35 @@ async function rollback(client: WorkflowRuntimeSqlClient): Promise<boolean> {
 // A session is reused only when every statement succeeded or a failure was followed by a
 // successful ROLLBACK. A failed BEGIN, an attempted COMMIT that did not succeed, or a failed
 // ROLLBACK leaves the transaction state unknown, so the session is destroyed.
+//
+// AI-037.4a signals: `defer` records a signal for a durable state transition made by the operation;
+// it is emitted only after COMMIT is acknowledged, never for a rolled-back or ambiguous commit.
+// An attempted COMMIT without a trusted acknowledgement emits ambiguous_commit exactly here.
 async function transaction<T>(
   database: WorkflowRuntimeDatabase,
-  operation: (client: WorkflowRuntimeSqlClient) => Promise<T>,
+  signals: RuntimeOperationalSignalSink | undefined,
+  operation: (client: WorkflowRuntimeSqlClient, defer: (signal: RuntimeOperationalSignalName) => void) => Promise<T>,
 ): Promise<T> {
   let client: WorkflowRuntimeSqlClient | null = null;
   let begun = false;
   let commitAttempted = false;
   let destroy = false;
+  const deferred: RuntimeOperationalSignalName[] = [];
   try {
     client = await database.connect();
     await client.query("begin");
     begun = true;
-    const result = await operation(client);
+    const result = await operation(client, (signal) => { deferred.push(signal); });
     commitAttempted = true;
     await client.query("commit");
+    for (const signal of deferred) emitRuntimeOperationalSignal(signals, signal);
     return result;
   } catch (error) {
     if (client && (!await rollback(client) || !begun || commitAttempted)) destroy = true;
-    if (commitAttempted) throw new WorkflowRuntimeCommitAmbiguousError();
+    if (commitAttempted) {
+      emitRuntimeOperationalSignal(signals, "ambiguous_commit");
+      throw new WorkflowRuntimeCommitAmbiguousError();
+    }
     if (error instanceof WorkflowRuntimePersistenceError) throw error;
     throw persistenceError("Workflow runtime database operation failed.");
   } finally {
@@ -863,6 +878,7 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
   readonly #workspaceDatabaseId: string;
   readonly #leaseDurationMs: number;
   readonly #providerExecutionTiming: ProviderClaimLeaseTiming | null;
+  readonly #signals: RuntimeOperationalSignalSink | undefined;
   readonly #commandLeaseDurationMs: number;
   readonly #recoverAbandonedCommands: boolean;
   readonly #recoverStaleCommands: boolean;
@@ -887,6 +903,7 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
       throw persistenceError("Workflow runtime provider timing is invalid.");
     }
     this.#providerExecutionTiming = providerTiming ?? null;
+    this.#signals = options.signals;
     this.#leaseDurationMs = leaseDuration(providerTiming ? providerTiming.claimLeaseDurationMs : options.leaseDurationMs);
     this.#commandLeaseDurationMs = commandLeaseDuration(options.commandLeaseDurationMs);
     this.#recoverAbandonedCommands = options.recoverAbandonedCommands ?? false;
@@ -1131,7 +1148,7 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
 
   async create(input: CreateWorkflowRuntimeStateInput): Promise<void> {
     const state = validatedState(input.state, this.#workspaceId);
-    await transaction(this.#database, async (client) => {
+    await transaction(this.#database, this.#signals, async (client) => {
       const inserted = await client.query<{ id: string }>(
         `/* workflow-runtime:create-run */
          insert into workflow_runs (
@@ -1317,7 +1334,7 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
     if (!stableIdPattern.test(input.runId) || !stableIdPattern.test(input.commandId)
       || !fingerprintPattern.test(input.fingerprint)
       || !safeInteger(input.expectedRevision)) return { status: "conflict" };
-    return transaction(this.#database, async (client) => {
+    return transaction(this.#database, this.#signals, async (client) => {
       const now = this.#trustedNow();
       const leaseExpiresAt = new Date(now.getTime() + this.#commandLeaseDurationMs);
       const run = await client.query<{ db_run_id: string }>(
@@ -1430,7 +1447,7 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
       || !uuidPattern.test(input.ownershipToken)) {
       throw persistenceError("Workflow command response is invalid.");
     }
-    await transaction(this.#database, async (client) => {
+    await transaction(this.#database, this.#signals, async (client) => {
       const completed = await client.query(
         `/* workflow-runtime:complete-command */
          update workflow_runtime_commands as command
@@ -1450,7 +1467,7 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
   }
 
   async abandonCommand(input: WorkflowRuntimeCommandOwnershipInput): Promise<void> {
-    await transaction(this.#database, async (client) => {
+    await transaction(this.#database, this.#signals, async (client) => {
       const abandoned = await client.query(
         `/* workflow-runtime:abandon-command */
          update workflow_runtime_commands as command
@@ -1487,7 +1504,7 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
   }
 
   async markCommandEffectful(input: WorkflowRuntimeCommandOwnershipInput): Promise<void> {
-    await transaction(this.#database, async (client) => {
+    await transaction(this.#database, this.#signals, async (client) => {
       const marked = await client.query(
         `/* workflow-runtime:mark-command-effectful */
          update workflow_runtime_commands as command
@@ -1514,7 +1531,7 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
       || !fingerprintPattern.test(input.requestFingerprint)) {
       return { status: "conflict" as const, claimId: null };
     }
-    return transaction(this.#database, async (client) => {
+    return transaction(this.#database, this.#signals, async (client, defer) => {
       const run = await client.query<{
         db_run_id: string;
         revision: string | number;
@@ -1634,6 +1651,7 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
           if (unknown.rowCount !== 1) {
             throw persistenceError("Workflow ambiguous execution recovery failed closed.");
           }
+          defer("outcome_unknown");
           return { status: "recovery_required" as const, claimId: null };
         }
         if (existing.execution_status === "outcome_unknown") {
@@ -1738,7 +1756,7 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
       || reservation.workspaceId !== this.#workspaceId || reservation.runId !== input.runId) {
       return { status: "conflict" };
     }
-    return transaction(this.#database, async (client) => {
+    return transaction(this.#database, this.#signals, async (client) => {
       const authorized = await client.query<ProviderStartInvocationRow>(
         `/* workflow-runtime:provider-preflight-fence */
          select invocation.status
@@ -1800,7 +1818,7 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
         || input.providerStart.runId !== input.runId)) {
       return { status: "conflict" };
     }
-    return transaction(this.#database, async (client) => {
+    return transaction(this.#database, this.#signals, async (client) => {
       const current = await client.query<ExecutionRow>(
         `/* workflow-runtime:read-execution */
          select execution.status, claim.status as claim_status, claim.lease_expires_at,
@@ -1935,6 +1953,33 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
         }
       }
       let startedAt = now;
+      let priorDispatch = false;
+      if (input.providerStart) {
+        // AI-037.4a provider_redispatch evidence: another execution of the same logical Step attempt
+        // (run, step, attempt, expected revision) has a model invocation whose provider outcome was
+        // recorded. `outcome` is written only from a normalized result returned by provider.run, so
+        // it proves that run was reached for that work. Passing the provider-start fence
+        // (execution.started_at) or an outcome_unknown invocation proves no dispatch and is never
+        // counted. A dispatch whose process died before its outcome was recorded leaves no proof:
+        // the signal may under-count, never over-count.
+        const prior = await client.query<{ prior_dispatch: boolean }>(
+          `/* workflow-runtime:provider-start-prior-dispatch */
+           select exists (
+             select 1 from workflow_runtime_executions as prior
+             join workflow_runtime_executions as current
+               on current.workspace_id = prior.workspace_id and current.run_id = prior.run_id
+              and current.step_id = prior.step_id and current.attempt_number = prior.attempt_number
+              and current.expected_revision = prior.expected_revision
+             join workflow_model_invocations as invocation
+               on invocation.workspace_id = prior.workspace_id and invocation.workflow_run_id = prior.run_id
+              and invocation.workflow_execution_id = prior.id
+             where current.workspace_id = $1 and current.claim_id = $2
+               and prior.id <> current.id and invocation.outcome is not null
+           ) as prior_dispatch`,
+          [this.#workspaceDatabaseId, input.claimId],
+        );
+        priorDispatch = prior.rows[0]?.prior_dispatch === true;
+      }
       if (input.providerStart) {
         // AI-037.6a: authoritative provider-start timing check. Every row lock this fence takes is
         // held and the invocation/budget authority is verified, but waiting for those locks used
@@ -1955,7 +2000,7 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
         [this.#workspaceDatabaseId, startedAt, input.claimId],
       );
       if (started.rowCount !== 1) throw persistenceError("Workflow execution start failed closed.");
-      return { status: "started" as const };
+      return input.providerStart ? { status: "started" as const, priorDispatch } : { status: "started" as const };
     });
   }
 
@@ -1966,13 +2011,13 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
     if (!stableIdPattern.test(input.runId) || !uuidPattern.test(input.claimId)) {
       throw persistenceError("Workflow execution outcome identity is invalid.");
     }
-    await transaction(this.#database, async (client) => {
+    await transaction(this.#database, this.#signals, async (client, defer) => {
       const now = this.#trustedNow();
       // A ledger execution reaches `running` only through the provider-start fence, so an
       // invocation that is `running`, `succeeded` or `outcome_unknown` means the provider may
       // already have been dispatched while the Step result was not committed. Such an execution
       // stays unresolved (`outcome_unknown`) so no new execution can dispatch the Step again.
-      const recorded = await client.query(
+      const recorded = await client.query<{ status: string }>(
         `/* workflow-runtime:record-known-execution */
          update workflow_runtime_executions as execution
          set status = case when exists (
@@ -1986,10 +2031,14 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
          where execution.claim_id = claim.id and execution.run_id = run.id
            and execution.workspace_id = $1 and claim.workspace_id = $1
            and run.workspace_id = $1 and run.runtime_id = $2 and claim.id = $3
-           and execution.status = 'running'`,
+           and execution.status = 'running'
+         returning execution.status`,
         [this.#workspaceDatabaseId, input.runId, input.claimId, now],
       );
-      if (recorded.rowCount === 1) return;
+      if (recorded.rowCount === 1) {
+        if (recorded.rows[0]?.status === "outcome_unknown") defer("outcome_unknown");
+        return;
+      }
       const existing = await client.query<{ status: string }>(
         `/* workflow-runtime:read-known-execution */
          select execution.status
@@ -2016,7 +2065,7 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
       return recoveryInspection(null, ["invalid_target"]);
     }
     try {
-      return await transaction(this.#database, async (client) => {
+      return await transaction(this.#database, this.#signals, async (client) => {
         const facts = await this.#executionRecoveryFacts(client, input, false);
         return recoveryInspection(facts, executionRecoveryIneligibility(facts));
       });
@@ -2049,7 +2098,7 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
       return { status: "denied", reasons: preflight.reasons };
     }
     try {
-      return await transaction(this.#database, async (client) => {
+      return await transaction(this.#database, this.#signals, async (client) => {
         const facts = await this.#executionRecoveryFacts(client, input, true);
         if (facts.recovery) {
           return facts.recovery.operatorId === input.operatorId
@@ -2274,7 +2323,7 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
     }
     const reservationToken = randomUUID();
     try {
-      return await transaction(this.#database, async (client) => {
+      return await transaction(this.#database, this.#signals, async (client) => {
         const execution = await client.query<WorkflowExecutionIdentityRow>(
           `/* workflow-runtime:model-invocation-execution */
            select execution.id::text as workflow_execution_id,
@@ -2421,7 +2470,7 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
       return { status: "conflict" };
     }
     try {
-      return await transaction(this.#database, async (client) => {
+      return await transaction(this.#database, this.#signals, async (client) => {
         const invocation = await client.query<ModelInvocationRow & {
           model_invocation_id: string;
           db_run_id: string;
@@ -2603,7 +2652,7 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
       return { status: "conflict" };
     }
     try {
-      return await transaction(this.#database, async (client) => {
+      return await transaction(this.#database, this.#signals, async (client) => {
         const current = await client.query<ModelBudgetReservationRow & { model_invocation_id: string }>(
           `/* workflow-runtime:lock-budget-release */
            select budget.model_invocation_id::text as model_invocation_id,
@@ -2685,7 +2734,7 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
       return { status: "conflict" };
     }
     try {
-      return await transaction(this.#database, async (client) => {
+      return await transaction(this.#database, this.#signals, async (client) => {
         const current = await client.query<ModelInvocationRow & {
           db_run_id: string;
           execution_status: string;
@@ -2961,7 +3010,7 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
     }
     let result: Readonly<{ committed: boolean }>;
     try {
-      result = await transaction(this.#database, async (client) => {
+      result = await transaction(this.#database, this.#signals, async (client) => {
       const run = await client.query<{
         db_run_id: string;
         revision: string | number;
@@ -3266,7 +3315,7 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
   }
 
   async releaseClaim(input: Readonly<{ runId: string; claimId: string }>): Promise<void> {
-    await transaction(this.#database, async (client) => {
+    await transaction(this.#database, this.#signals, async (client, defer) => {
       const claim = await client.query<{ status: string }>(
         `/* workflow-runtime:release-read */
          select claim.status
@@ -3280,14 +3329,16 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
       if (claim.rowCount !== 1) throw persistenceError("Workflow claim release target is invalid.");
       if (claim.rows[0].status !== "active") return;
       const now = this.#trustedNow();
-      await client.query(
+      const retired = await client.query<{ status: string }>(
         `/* workflow-runtime:release-execution */
          update workflow_runtime_executions
          set status = case when status = 'prepared' then 'failed' else 'outcome_unknown' end,
              completed_at = $2
-         where workspace_id = $1 and claim_id = $3 and status in ('prepared', 'running')`,
+         where workspace_id = $1 and claim_id = $3 and status in ('prepared', 'running')
+         returning status`,
         [this.#workspaceDatabaseId, now, input.claimId],
       );
+      if (retired.rows.some((row) => row.status === "outcome_unknown")) defer("outcome_unknown");
       const released = await client.query(
         `/* workflow-runtime:release-claim */
          update workflow_runtime_claims

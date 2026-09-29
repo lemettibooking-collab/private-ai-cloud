@@ -20,6 +20,9 @@ import { cloneModelProviderAdapterData, freezeModelProviderAdapterData, modelPro
 import { evaluateWorkflowRunTransition, validateAndNormalizeWorkflowRunSnapshot } from "../contracts/workflow-run.ts";
 // @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
 import { executeAgentStep } from "./agent-step-runtime.ts";
+import type { RuntimeOperationalSignalSink } from "../contracts/runtime-operational-signals";
+// @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
+import { emitRuntimeOperationalSignal } from "../contracts/runtime-operational-signals.ts";
 
 export const workflowRuntimeServiceStatuses = Object.freeze([
   "running",
@@ -225,6 +228,9 @@ export type WorkflowRuntimeClaimDecision =
 
 export type WorkflowRuntimeExecutionStartDecision = Readonly<{
   status: "started" | "conflict" | "recovery_required";
+  // AI-037.4a: set by provider start when another execution of the same logical Step attempt has a
+  // recorded provider outcome (the PRIOR side of provider_redispatch evidence).
+  priorDispatch?: boolean;
 }>;
 
 export type WorkflowRuntimeCompareAndSwapInput = Readonly<{
@@ -325,6 +331,8 @@ export type WorkflowRuntimeServiceDependencies = Readonly<{
   requirementsResolver: AgentStepCapabilityRequirementsResolver;
   evidenceResolver?: ModelInvocationDataHandlingEvidenceResolver;
   runtimeContext: AgentStepRuntimeContext;
+  // AI-037.4a: optional operational signal sink (recovery_required, provider_redispatch).
+  signals?: RuntimeOperationalSignalSink;
 }>;
 
 export interface WorkflowRuntimeService {
@@ -762,26 +770,46 @@ function approvalStepId(command: WorkflowRuntimeCommand): string | null {
 export function createWorkflowRuntimeService(
   dependencies: WorkflowRuntimeServiceDependencies,
 ): WorkflowRuntimeService {
-  const { store, authorizer, providers, requirementsResolver, evidenceResolver, runtimeContext } = dependencies;
+  const { store, authorizer, providers, requirementsResolver, evidenceResolver, runtimeContext, signals } = dependencies;
   const durableInvocationLedgerAvailable = typeof store.reserveModelInvocation === "function"
     && typeof store.authorizeModelInvocationPreflight === "function"
     && typeof store.reserveModelInvocationBudget === "function"
     && typeof store.releaseModelInvocationBudget === "function"
     && typeof store.recordModelInvocationOutcome === "function";
 
-  function invocationLedgerForClaim(runId: string, claimId: string): AgentStepModelInvocationLedger | undefined {
+  function invocationLedgerForClaim(
+    runId: string,
+    claimId: string,
+    onRepeatedDispatch: (() => void) | null = null,
+  ): AgentStepModelInvocationLedger | undefined {
     if (!durableInvocationLedgerAvailable) return undefined;
+    // AI-037.4a provider_redispatch has two factual sides, both durable:
+    // PRIOR: the provider-start fence found a recorded provider outcome for another execution of the
+    //   same logical Step attempt (`priorDispatch`);
+    // CURRENT: this attempt's own provider outcome was recorded. A non-null `outcome` exists only
+    //   when provider.run returned a result that passed runtime result validation.
+    // Entering run, a throw, a denial or an ambiguous (outcome_unknown) call never counts, so the
+    // signal may under-count ambiguous dispatches and never over-counts.
+    let priorDispatch = false;
     return {
       reserve: (input) => store.reserveModelInvocation!(input),
       authorizePreflight: (input) => input.runId === runId
         ? store.authorizeModelInvocationPreflight!({ runId, claimId, reservation: input })
         : Promise.resolve({ status: "conflict" }),
       reserveBudget: (input) => store.reserveModelInvocationBudget!(input),
-      authorizeProviderStart: (input) => input.runId === runId
-        ? store.startExecution({ runId, claimId, providerStart: input })
-        : Promise.resolve({ status: "conflict" }),
+      authorizeProviderStart: async (input) => {
+        if (input.runId !== runId) return { status: "conflict" };
+        const decision = await store.startExecution({ runId, claimId, providerStart: input });
+        if (decision?.status === "started" && decision.priorDispatch === true) priorDispatch = true;
+        return decision;
+      },
       releaseBudget: (input) => store.releaseModelInvocationBudget!(input),
-      recordOutcome: (input) => store.recordModelInvocationOutcome!(input),
+      recordOutcome: async (input) => {
+        const recorded = await store.recordModelInvocationOutcome!(input);
+        if (onRepeatedDispatch && priorDispatch && recorded?.status === "recorded"
+          && (input.outcome === "succeeded" || input.outcome === "failed")) onRepeatedDispatch();
+        return recorded;
+      },
     };
   }
 
@@ -1307,7 +1335,8 @@ export function createWorkflowRuntimeService(
       let committedAgentResult: WorkflowRuntimeLastStepResult | null = latestResult;
       let executionOutcomeKnown = false;
       try {
-        const invocationLedger = invocationLedgerForClaim(command.runId, claim.claimId);
+        const invocationLedger = invocationLedgerForClaim(command.runId, claim.claimId,
+          signals ? () => emitRuntimeOperationalSignal(signals, "provider_redispatch") : null);
         const executionStart = invocationLedger
           ? { status: "started" as const }
           : await safeStartExecution(command.runId, claim.claimId, step.id, reasons);
@@ -1716,18 +1745,25 @@ export function createWorkflowRuntimeService(
     if (!command || (expectedKind !== null && command.kind !== expectedKind)) {
       return invalidWorkflowRuntimeCommandResponse();
     }
+    let result: WorkflowRuntimeResponse;
     try {
       switch (command.kind) {
-        case "start": return await executeStart(command);
-        case "advance": return await executeAdvance(command);
-        case "approve": return await executeApproval(command);
-        case "reject": return await executeApproval(command);
-        case "cancel": return await executeCancel(command);
-        case "get": return await executeGet(command);
+        case "start": result = await executeStart(command); break;
+        case "advance": result = await executeAdvance(command); break;
+        case "approve": result = await executeApproval(command); break;
+        case "reject": result = await executeApproval(command); break;
+        case "cancel": result = await executeCancel(command); break;
+        case "get": result = await executeGet(command); break;
       }
     } catch {
       return workflowRuntimeInternalFailureResponse(`service.${expectedKind ?? "execute"}`);
     }
+    // AI-037.4a recovery_required: one per fresh runtime decision that requires recovery. Exact
+    // replays of a stored response (verdict "idempotent") are not new decisions and are not counted.
+    if (result.status === "recovery_required" && result.verdict !== "idempotent") {
+      emitRuntimeOperationalSignal(signals, "recovery_required");
+    }
+    return result;
   }
 
   return Object.freeze({

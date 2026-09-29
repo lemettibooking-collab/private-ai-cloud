@@ -201,8 +201,9 @@ export function localMockProvider(options: {
   return { adapter, dispatches };
 }
 
-export function runtimeService(store: any, provider: ReturnType<typeof localMockProvider>) {
+export function runtimeService(store: any, provider: ReturnType<typeof localMockProvider>, signals?: unknown) {
   return serviceContract.createWorkflowRuntimeService({
+    ...(signals === undefined ? {} : { signals }),
     store,
     authorizer: { async authorize(input: any) { return input.actorId === "owner-one"; } },
     providers: [provider.adapter as any],

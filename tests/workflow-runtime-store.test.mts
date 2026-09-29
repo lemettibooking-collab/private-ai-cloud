@@ -1691,13 +1691,14 @@ test("provider-start fence atomically requires the exact running invocation rese
         ]);
       },
     },
+    { tag: "workflow-runtime:provider-start-prior-dispatch", rows: [{ prior_dispatch: false }] },
     { tag: "workflow-runtime:start-execution", rowCount: 1 },
   ]);
   assert.deepEqual(await createStore(database, { providerExecutionTiming: trustedTiming(10_000, 300_000) }).startExecution({
     runId: "run-one",
     claimId,
     providerStart: budgetReservation(),
-  }), { status: "started" });
+  }), { status: "started", priorDispatch: false });
   assert.deepEqual(database.transactions, ["begin", "commit"]);
   database.done();
 });
@@ -3701,6 +3702,7 @@ async function providerStartAt(elapsedMs: number, options: Readonly<Record<strin
   const database = new ScriptedDatabase([
     { tag: "workflow-runtime:read-execution", rows: [leaseRow()] },
     { tag: "workflow-runtime:provider-start-invocation", rows: [{ status: "running", budget_status: "reserved" }] },
+    { tag: "workflow-runtime:provider-start-prior-dispatch", rows: [{ prior_dispatch: false }] },
     { tag: "workflow-runtime:start-execution", rowCount: 1 },
   ]);
   const store = createStore(database, {
@@ -3720,7 +3722,7 @@ test("AI-037.6a: the provider-start fence requires remaining lease >= provider t
   // remaining 30 000 / 20 001 / 20 000 (exact boundary) → allow
   for (const elapsed of [0, 9_999, 10_000]) {
     const result = await providerStartAt(elapsed);
-    assert.deepEqual(result.decision, { status: "started" }, `elapsed ${elapsed}`);
+    assert.deepEqual(result.decision, { status: "started", priorDispatch: false }, `elapsed ${elapsed}`);
     assert.ok(result.tags.includes("workflow-runtime:start-execution"));
   }
   // remaining 19 999 (boundary - 1 ms), a long preflight leaving 5 s, the last live millisecond,
@@ -3778,6 +3780,7 @@ async function providerStartWithLockWait(earlyElapsedMs: number, finalElapsedMs:
       rows: [{ status: "running", budget_status: "reserved" }],
       inspect() { clock.elapsedMs = finalElapsedMs; },
     },
+    { tag: "workflow-runtime:provider-start-prior-dispatch", rows: [{ prior_dispatch: false }] },
     { tag: "workflow-runtime:start-execution", rowCount: 1, inspect(values) { startValues.push([...values]); } },
   ]);
   const store = createStore(database, {
@@ -3797,7 +3800,7 @@ test("AI-037.6a: the authoritative remaining-lease check runs after the invocati
 
   // Final boundary: exactly timeout + margin remaining → allowed; one millisecond less → denied.
   const boundary = await providerStartWithLockWait(0, 10_000);
-  assert.deepEqual(boundary.decision, { status: "started" });
+  assert.deepEqual(boundary.decision, { status: "started", priorDispatch: false });
   // started_at is the fresh time of the final authorization, not the early read.
   assert.deepEqual(boundary.startValues, [[workspaceDatabaseId, new Date(claimAcquiredAt + 10_000), claimId]]);
   boundary.database.done();
@@ -3805,4 +3808,88 @@ test("AI-037.6a: the authoritative remaining-lease check runs after the invocati
   const short = await providerStartWithLockWait(0, 10_001);
   assert.deepEqual(short.decision, { status: "conflict" });
   assert.equal(short.tags.includes("workflow-runtime:start-execution"), false);
+});
+
+// ---------------------------------------------------------------------------------------------
+// AI-037.4a: store-owned operational signals (ambiguous_commit, outcome_unknown).
+// ---------------------------------------------------------------------------------------------
+
+const runtimeSignals = (await import(
+  new URL("../lib/contracts/runtime-operational-signals.ts", import.meta.url).href
+)) as typeof import("../lib/contracts/runtime-operational-signals");
+
+function signalStore(steps: ScriptStep[], commitErrors = 0) {
+  const collector = runtimeSignals.createRuntimeOperationalSignalCollector();
+  const database = new ScriptedDatabase(steps);
+  database.commitErrors = commitErrors;
+  return { database, collector, store: createStore(database, { signals: collector.sink }) };
+}
+
+const releaseSteps = (retired: string | null, claimReleased = 1): ScriptStep[] => [
+  { tag: "workflow-runtime:release-read", rows: [{ status: "active" }] },
+  { tag: "workflow-runtime:release-execution", rows: retired ? [{ status: retired }] : [] },
+  { tag: "workflow-runtime:release-claim", rowCount: claimReleased },
+];
+
+test("AI-037.4a: outcome_unknown is emitted once per durable execution transition, only after COMMIT", async () => {
+  const running = signalStore(releaseSteps("outcome_unknown"));
+  await running.store.releaseClaim({ runId: "run-one", claimId });
+  assert.equal(running.collector.snapshot().outcome_unknown, 1);
+
+  const prepared = signalStore(releaseSteps("failed"));
+  await prepared.store.releaseClaim({ runId: "run-one", claimId });
+  assert.equal(prepared.collector.snapshot().outcome_unknown, 0, "prepared → failed is not an unknown outcome");
+
+  const alreadyTerminal = signalStore(releaseSteps(null));
+  await alreadyTerminal.store.releaseClaim({ runId: "run-one", claimId });
+  assert.equal(alreadyTerminal.collector.snapshot().outcome_unknown, 0, "no transition, no signal");
+
+  // The transition is rolled back when a later statement fails: nothing durable, no signal.
+  const rolledBack = signalStore(releaseSteps("outcome_unknown", 0));
+  await assert.rejects(rolledBack.store.releaseClaim({ runId: "run-one", claimId }));
+  assert.deepEqual(rolledBack.database.transactions, ["begin", "rollback"]);
+  assert.equal(rolledBack.collector.snapshot().outcome_unknown, 0);
+
+  for (const [status, expected] of [["outcome_unknown", 1], ["failed", 0]] as const) {
+    const known = signalStore([{ tag: "workflow-runtime:record-known-execution", rows: [{ status }] }]);
+    await known.store.recordKnownExecutionOutcome({ runId: "run-one", claimId });
+    assert.equal(known.collector.snapshot().outcome_unknown, expected, `record-known → ${status}`);
+  }
+
+  const expired = signalStore([
+    { tag: "workflow-runtime:claim-run", rows: [{ db_run_id: dbRunId, revision: "1", runtime_pause: null }] },
+    {
+      tag: "workflow-runtime:read-active-claim",
+      rows: [{
+        claim_id: claimId, execution_id: "execution-old", request_fingerprint: fingerprint,
+        lease_expires_at: "2026-09-01T09:59:00.000Z", execution_status: "running",
+      }],
+    },
+    { tag: "workflow-runtime:expire-claim", rowCount: 1 },
+    { tag: "workflow-runtime:unknown-execution", rowCount: 1 },
+  ]);
+  assert.equal((await expired.store.claim(claimInput())).status, "recovery_required");
+  assert.equal(expired.collector.snapshot().outcome_unknown, 1, "expired running claim");
+});
+
+test("AI-037.4a: an unacknowledged COMMIT emits ambiguous_commit once and no transition signal", async () => {
+  const ambiguous = signalStore(releaseSteps("outcome_unknown"), 1);
+  await assert.rejects(ambiguous.store.releaseClaim({ runId: "run-one", claimId }), {
+    name: "WorkflowRuntimeCommitAmbiguousError",
+  });
+  assert.deepEqual(ambiguous.collector.snapshot(), {
+    db_failure: 0, db_session_destroyed: 0, recovery_required: 0,
+    outcome_unknown: 0, ambiguous_commit: 1, provider_redispatch: 0,
+  });
+  // A failure before COMMIT is not an ambiguous commit.
+  const early = signalStore(releaseSteps("outcome_unknown", 0));
+  await assert.rejects(early.store.releaseClaim({ runId: "run-one", claimId }));
+  assert.equal(early.collector.snapshot().ambiguous_commit, 0);
+});
+
+test("AI-037.4a: a throwing signal sink never changes a store result", async () => {
+  const database = new ScriptedDatabase(releaseSteps("outcome_unknown"));
+  const store = createStore(database, { signals: { emit() { throw new Error("sink down"); } } });
+  await store.releaseClaim({ runId: "run-one", claimId });
+  assert.deepEqual(database.transactions, ["begin", "commit"]);
 });
