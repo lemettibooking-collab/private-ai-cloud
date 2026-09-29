@@ -259,6 +259,27 @@ export class PostgresWorkflowRuntimeReadModel {
     try { return await operation(client); } finally { client.release(); }
   }
 
+  // A multi-statement Owner read must observe one MVCC snapshot; READ COMMITTED
+  // would give each statement its own. Read-only, no locks, no retry.
+  async #withReadOnlySnapshot<T>(operation: (client: WorkflowRuntimeSqlClient) => Promise<T>): Promise<T> {
+    return this.#withClient(async (client) => {
+      try {
+        await client.query(`/* workflow-runtime-read:snapshot-begin */
+          begin transaction isolation level repeatable read read only`);
+        const result = await operation(client);
+        await client.query("/* workflow-runtime-read:snapshot-commit */ commit");
+        return result;
+      } catch (error) {
+        try {
+          await client.query("/* workflow-runtime-read:snapshot-rollback */ rollback");
+        } catch {
+          // The original failure remains authoritative and is sanitized by the caller.
+        }
+        throw error;
+      }
+    });
+  }
+
   async #usage(client: WorkflowRuntimeSqlClient, runId: string): Promise<WorkflowRuntimeModelUsage | null> {
     const result = await client.query<Row>(
       `/* workflow-runtime-read:model-usage */
@@ -295,7 +316,7 @@ export class PostgresWorkflowRuntimeReadModel {
   async getRunOverview(runId: string): Promise<WorkflowRuntimeReadDecision<WorkflowRuntimeRunOverview>> {
     if (!stableIdPattern.test(runId)) return deny("invalid_input");
     try {
-      return await this.#withClient(async (client) => {
+      return await this.#withReadOnlySnapshot(async (client) => {
         const runResult = await client.query<Row>(
           `/* workflow-runtime-read:run-overview */
            select run.project_id, run.workflow_id, run.status, run.revision::text as revision,
@@ -382,6 +403,7 @@ export class PostgresWorkflowRuntimeReadModel {
     } catch { return deny("read_failed"); }
   }
 
+  // One SELECT already executes against one PostgreSQL MVCC snapshot.
   async listApprovalQueue(limit?: number): Promise<WorkflowRuntimeReadDecision<readonly WorkflowRuntimeApprovalSummary[]>> {
     const bounded = boundedLimit(limit);
     if (bounded === null) return deny("invalid_input");
@@ -417,7 +439,14 @@ export class PostgresWorkflowRuntimeReadModel {
     const bounded = boundedLimit(limit);
     if (!stableIdPattern.test(runId) || bounded === null) return deny("invalid_input");
     try {
-      return await this.#withClient(async (client) => {
+      return await this.#withReadOnlySnapshot(async (client) => {
+        const run = await client.query<Row>(
+          `/* workflow-runtime-read:audit-run */
+           select id from workflow_runs where workspace_id = $1 and runtime_id = $2`,
+          [this.#workspaceDatabaseId, runId],
+        );
+        if (run.rowCount === 0) return deny<readonly WorkflowRuntimeAuditTimelineItem[]>("not_found");
+        if (run.rowCount !== 1) return deny<readonly WorkflowRuntimeAuditTimelineItem[]>("inconsistent_state");
         const result = await client.query<Row>(
           `/* workflow-runtime-read:audit-timeline */
            select audit.event_type, audit.actor_kind, audit.actor_id,
@@ -450,7 +479,7 @@ export class PostgresWorkflowRuntimeReadModel {
   async getRunModelUsage(runId: string): Promise<WorkflowRuntimeReadDecision<WorkflowRuntimeModelUsage>> {
     if (!stableIdPattern.test(runId)) return deny("invalid_input");
     try {
-      return await this.#withClient(async (client) => {
+      return await this.#withReadOnlySnapshot(async (client) => {
         const run = await client.query<Row>(
           `/* workflow-runtime-read:usage-run */
            select id from workflow_runs where workspace_id = $1 and runtime_id = $2`,

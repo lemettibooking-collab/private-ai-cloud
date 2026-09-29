@@ -595,8 +595,7 @@ export function createAuthorizedWorkflowRuntimeAccess(
       return unavailable();
     }
     try {
-      const existence = await dependencies.readModel.getRunOverview(targetRunId);
-      if (!rawAllowed(existence)) return unavailable();
+      // The read model proves Run existence and reads the timeline in one snapshot.
       const result = await dependencies.readModel.getRunAuditTimeline(targetRunId, limit);
       return rawAllowed(result)
         ? availableProjected(result.data.map(projectAuditTimelineItem))

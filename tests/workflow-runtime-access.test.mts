@@ -497,7 +497,7 @@ test("approval queue projection drops future internal fields", async () => {
   assert.deepEqual(internalApprovals, original);
 });
 
-test("authorized reads preserve public factual fields and audit proves Run existence first", async () => {
+test("authorized reads preserve public factual fields and audit reads one read-model snapshot", async () => {
   const expectedOverview = overview();
   const internalAudit = [{ eventType: "workflow.run_started", actorKind: "workflow_runtime",
     actorId: "workflow-runtime", runId: "run-secret", metadata: { runId: "run-secret", revision: 1 },
@@ -531,7 +531,33 @@ test("authorized reads preserve public factual fields and audit proves Run exist
     verdict: "allow", status: "available", data: expectedApprovals,
   });
   assert.deepEqual(calls.audit, [["run-secret", 10]]);
-  assert.equal(calls.overview.length, 2);
+  assert.equal(calls.overview.length, 1);
+});
+
+test("audit timeline authorizes first then makes exactly one read-model call and never reads overview", async () => {
+  const order: string[] = [];
+  const cases = [
+    { audit: { verdict: "allow", reason: null, data: [] }, expected: { verdict: "allow", status: "available", data: [] } },
+    { audit: { verdict: "deny", reason: "not_found", data: null }, expected: { verdict: "deny", status: "unavailable", data: null } },
+    { audit: { verdict: "deny", reason: "read_failed", data: null }, expected: { verdict: "deny", status: "unavailable", data: null } },
+  ];
+  for (const item of cases) {
+    order.length = 0;
+    const { access, calls } = fixture({
+      authorize: () => { order.push("authorize"); return { verdict: "allow" }; },
+      overview: () => { throw new Error("audit must not read overview"); },
+      audit: () => { order.push("audit"); return item.audit; },
+    });
+    assert.deepEqual(await access.getRunAuditTimeline(context, "run-secret", 10), item.expected);
+    assert.deepEqual(order, ["authorize", "audit"]);
+    assert.deepEqual(calls.audit, [["run-secret", 10]]);
+    assert.deepEqual(calls.overview, []);
+  }
+  const denied = fixture({ authorize: () => ({ verdict: "deny" }) });
+  const missing = fixture({ audit: () => ({ verdict: "deny", reason: "not_found", data: null }) });
+  const deniedResult = await denied.access.getRunAuditTimeline(context, "run-secret", 10);
+  assert.deepEqual(deniedResult, await missing.access.getRunAuditTimeline(context, "run-missing", 10));
+  assert.equal(denied.calls.audit.length + denied.calls.overview.length, 0);
 });
 
 test("missing or malformed authorizer cannot construct the protected boundary", () => {

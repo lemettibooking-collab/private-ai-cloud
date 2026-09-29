@@ -18,16 +18,23 @@ const { createPostgresWorkflowRuntimeTenantResolver } = tenantContract;
 const workspaceDatabaseId = "00000000-0000-4000-8000-000000000001";
 
 type SqlClient = import("../lib/db/workflow-runtime-store").WorkflowRuntimeSqlClient;
-type Step = Readonly<{ tag: string; rows?: readonly Record<string, unknown>[] }>;
+type Step = Readonly<{ tag: string; rows?: readonly Record<string, unknown>[]; fail?: boolean }>;
+
+const begin = { tag: "workflow-runtime-read:snapshot-begin" } as const;
+const commit = { tag: "workflow-runtime-read:snapshot-commit" } as const;
+const rollback = { tag: "workflow-runtime-read:snapshot-rollback" } as const;
+const driverSecret = "postgres://owner:driver-secret@db.internal:5432/runtime relation audit_events";
 
 class ReadDatabase {
   readonly steps: Step[];
-  readonly queries: Array<{ tag: string; values: readonly unknown[] }> = [];
+  readonly queries: Array<{ tag: string; text: string; values: readonly unknown[] }> = [];
   releases = 0;
+  connections = 0;
 
   constructor(steps: readonly Step[]) { this.steps = [...steps]; }
 
   async connect(): Promise<SqlClient> {
+    this.connections += 1;
     return {
       query: async <Row extends Record<string, unknown>>(
         text: string,
@@ -38,14 +45,43 @@ class ReadDatabase {
         const step = this.steps.shift();
         assert.ok(step, `Unexpected SQL operation ${match[1]}`);
         assert.equal(match[1], step.tag);
-        this.queries.push({ tag: match[1], values });
+        this.queries.push({ tag: match[1], text, values });
+        if (step.fail) throw new Error(driverSecret);
         return { rows: (step.rows ?? []) as readonly Row[], rowCount: step.rows?.length ?? 0 };
       },
       release: () => { this.releases += 1; },
     };
   }
 
+  tags() { return this.queries.map((query) => query.tag.replace("workflow-runtime-read:", "")); }
+
   done() { assert.deepEqual(this.steps, []); }
+}
+
+function runRow() {
+  const state = fixtureContract.createWorkflowRuntimeStateFixture();
+  return {
+    project_id: state.snapshot.projectId,
+    workflow_id: state.snapshot.workflowId,
+    status: state.snapshot.status,
+    revision: String(state.snapshot.revision),
+    runtime_snapshot: structuredClone(state.snapshot),
+    created_at: "2026-09-02T08:00:00.000Z",
+    started_at: null,
+    completed_at: null,
+  };
+}
+
+function auditRow(overrides: Record<string, unknown> = {}) {
+  return {
+    event_type: "workflow.run_started",
+    actor_kind: "workflow_runtime",
+    actor_id: "workflow-runtime",
+    runtime_run_id: "run-one",
+    metadata: { runId: "run-one", revision: 1 },
+    created_at: "2026-09-02T08:00:01.000Z",
+    ...overrides,
+  };
 }
 
 const tenant = await createPostgresWorkflowRuntimeTenantResolver({
@@ -94,6 +130,7 @@ function model(database: ReadDatabase) {
 test("Run overview is workspace scoped and exposes rejected approval without calling a provider", async () => {
   const state = fixtureContract.createWorkflowRuntimeStateFixture();
   const database = new ReadDatabase([
+    begin,
     { tag: "workflow-runtime-read:run-overview", rows: [{
       project_id: state.snapshot.projectId,
       workflow_id: state.snapshot.workflowId,
@@ -132,6 +169,7 @@ test("Run overview is workspace scoped and exposes rejected approval without cal
       execution_status: "completed",
     }] },
     { tag: "workflow-runtime-read:model-usage", rows: [usageRow()] },
+    commit,
   ]);
   const decision = await model(database).getRunOverview("run-one");
   assert.equal(decision.verdict, "allow");
@@ -140,13 +178,14 @@ test("Run overview is workspace scoped and exposes rejected approval without cal
   assert.equal(decision.data?.latestModelInvocation?.requestFingerprint, `sha256:${"a".repeat(64)}`);
   assert.equal(JSON.stringify(decision).includes("messages"), false);
   assert.equal(Object.isFrozen(decision), true);
-  assert.deepEqual(database.queries[0]?.values, [workspaceDatabaseId, "run-one"]);
+  assert.deepEqual(database.queries[1]?.values, [workspaceDatabaseId, "run-one"]);
   database.done();
 });
 
 test("legacy terminal invocation remains auditable without fabricating pinned identity", async () => {
   const state = fixtureContract.createWorkflowRuntimeStateFixture();
   const database = new ReadDatabase([
+    begin,
     { tag: "workflow-runtime-read:run-overview", rows: [{
       project_id: state.snapshot.projectId,
       workflow_id: state.snapshot.workflowId,
@@ -177,6 +216,7 @@ test("legacy terminal invocation remains auditable without fabricating pinned id
     { tag: "workflow-runtime-read:model-usage", rows: [usageRow({
       last_provider_request_model_id: null,
     })] },
+    commit,
   ]);
   const decision = await model(database).getRunOverview("run-one");
   assert.equal(decision.verdict, "allow");
@@ -211,13 +251,17 @@ test("approval queue returns pending factual approvals only and enforces the max
 
 test("model usage is summed once and cross-workspace Run identifiers expose no data", async () => {
   const database = new ReadDatabase([
+    begin,
     { tag: "workflow-runtime-read:usage-run", rows: [{ id: "db-run-one" }] },
     { tag: "workflow-runtime-read:model-usage", rows: [usageRow({
       invocation_count: "2", succeeded_count: "1", failed_count: "1",
       input_tokens: "20", output_tokens: "8", total_tokens: "28",
       total_cost_usd_micros: "19",
     })] },
+    commit,
+    begin,
     { tag: "workflow-runtime-read:usage-run", rows: [] },
+    commit,
   ]);
   const readModel = model(database);
   const usage = await readModel.getRunModelUsage("run-one");
@@ -228,7 +272,7 @@ test("model usage is summed once and cross-workspace Run identifiers expose no d
   }, { count: 2, total: 28, cost: 19 });
   const hidden = await readModel.getRunModelUsage("run-other");
   assert.deepEqual(hidden, { verdict: "deny", reason: "not_found", data: null });
-  assert.deepEqual(database.queries.at(-1)?.values, [workspaceDatabaseId, "run-other"]);
+  assert.deepEqual(database.queries.at(-2)?.values, [workspaceDatabaseId, "run-other"]);
   database.done();
 });
 
@@ -249,10 +293,16 @@ test("audit timeline is newest-first, bounded, tenant-scoped, and rejects unsafe
     created_at: "2026-09-02T08:00:00.000Z",
   }];
   const database = new ReadDatabase([
+    begin,
+    { tag: "workflow-runtime-read:audit-run", rows: [{ id: "db-run-one" }] },
     { tag: "workflow-runtime-read:audit-timeline", rows },
+    commit,
+    begin,
+    { tag: "workflow-runtime-read:audit-run", rows: [{ id: "db-run-one" }] },
     { tag: "workflow-runtime-read:audit-timeline", rows: [{
       ...rows[0], metadata: { prompt: "sensitive prompt sentinel" },
     }] },
+    commit,
   ]);
   const readModel = model(database);
   const timeline = await readModel.getRunAuditTimeline("run-one", 2);
@@ -260,7 +310,8 @@ test("audit timeline is newest-first, bounded, tenant-scoped, and rejects unsafe
   assert.deepEqual(timeline.data?.map((item) => item.eventType), [
     "workflow.run_started", "workflow.run_created",
   ]);
-  assert.deepEqual(database.queries[0]?.values, [workspaceDatabaseId, "run-one", 2]);
+  assert.deepEqual(database.queries[1]?.values, [workspaceDatabaseId, "run-one"]);
+  assert.deepEqual(database.queries[2]?.values, [workspaceDatabaseId, "run-one", 2]);
   const unsafe = await readModel.getRunAuditTimeline("run-one", 1);
   assert.deepEqual(unsafe, { verdict: "deny", reason: "inconsistent_state", data: null });
   assert.equal((await readModel.getRunAuditTimeline("run-one", 101)).reason, "invalid_input");
@@ -270,6 +321,7 @@ test("audit timeline is newest-first, bounded, tenant-scoped, and rejects unsafe
 test("succeeded model ledger cannot override an outcome_unknown outer execution", async () => {
   const state = fixtureContract.createWorkflowRuntimeStateFixture();
   const database = new ReadDatabase([
+    begin,
     { tag: "workflow-runtime-read:run-overview", rows: [{
       project_id: state.snapshot.projectId,
       workflow_id: state.snapshot.workflowId,
@@ -289,6 +341,7 @@ test("succeeded model ledger cannot override an outcome_unknown outer execution"
       created_at: "2026-09-02T08:03:00.000Z", completed_at: "2026-09-02T08:03:01.000Z",
       execution_status: "outcome_unknown",
     }] },
+    commit,
   ]);
   assert.deepEqual(await model(database).getRunOverview("run-one"), {
     verdict: "deny", reason: "inconsistent_state", data: null,
@@ -300,6 +353,7 @@ test("an older succeeded invocation with an ambiguous outer execution denies ove
   const state = fixtureContract.createWorkflowRuntimeStateFixture();
   const snapshotBefore = structuredClone(state.snapshot);
   const database = new ReadDatabase([
+    begin,
     { tag: "workflow-runtime-read:run-overview", rows: [{
       project_id: state.snapshot.projectId,
       workflow_id: state.snapshot.workflowId,
@@ -328,12 +382,15 @@ test("an older succeeded invocation with an ambiguous outer execution denies ove
       total_cost_usd_micros: "22",
       inconsistent_execution_count: "1",
     })] },
+    commit,
+    begin,
     { tag: "workflow-runtime-read:usage-run", rows: [{ id: "db-run-one" }] },
     { tag: "workflow-runtime-read:model-usage", rows: [usageRow({
       invocation_count: "2",
       succeeded_count: "2",
       inconsistent_execution_count: "1",
     })] },
+    commit,
   ]);
   const readModel = model(database);
   assert.deepEqual(await readModel.getRunOverview("run-one"), {
@@ -344,5 +401,176 @@ test("an older succeeded invocation with an ambiguous outer execution denies ove
   });
   assert.deepEqual(state.snapshot, snapshotBefore);
   assert.equal(database.queries.every((query) => query.tag.startsWith("workflow-runtime-read:")), true);
+  database.done();
+});
+
+const invocationRowOne = {
+  invocation_id: "invocation-one", step_id: "step-one", attempt_number: 1,
+  status: "succeeded", provider_id: "provider-one", deployment_id: "deployment-one",
+  provider_model_id: "provider/model:alias", provider_request_model_id: "provider/model:v1",
+  provider_model_version: "version-1", provider_identity_version: 2,
+  request_fingerprint: `sha256:${"a".repeat(64)}`,
+  created_at: "2026-09-02T08:03:00.000Z", completed_at: "2026-09-02T08:03:01.000Z",
+  execution_status: "completed",
+};
+
+const readFailed = { verdict: "deny", reason: "read_failed", data: null };
+
+test("run overview reads every factual SELECT inside one read-only repeatable-read snapshot", async () => {
+  const database = new ReadDatabase([
+    begin,
+    { tag: "workflow-runtime-read:run-overview", rows: [runRow()] },
+    { tag: "workflow-runtime-read:run-approval", rows: [] },
+    { tag: "workflow-runtime-read:latest-model-invocation", rows: [invocationRowOne] },
+    { tag: "workflow-runtime-read:model-usage", rows: [usageRow()] },
+    commit,
+  ]);
+  const decision = await model(database).getRunOverview("run-one");
+  assert.equal(decision.verdict, "allow");
+  assert.deepEqual(database.tags(), [
+    "snapshot-begin", "run-overview", "run-approval", "latest-model-invocation", "model-usage", "snapshot-commit",
+  ]);
+  const beginSql = database.queries[0].text.toLowerCase().replace(/\s+/gu, " ");
+  assert.match(beginSql, /\bbegin\b.*\bisolation level repeatable read\b/u);
+  assert.match(beginSql, /\bread only\b/u);
+  assert.equal(database.queries.some((query) => /for update|for share|advisory|lock table/iu.test(query.text)), false);
+  assert.equal(database.connections, 1);
+  assert.equal(database.releases, 1);
+  database.done();
+});
+
+test("run overview data failure at any later SELECT rolls back, never commits, and releases once", async () => {
+  const later = [
+    { tag: "workflow-runtime-read:run-approval", rows: [] },
+    { tag: "workflow-runtime-read:latest-model-invocation", rows: [invocationRowOne] },
+    { tag: "workflow-runtime-read:model-usage", rows: [usageRow()] },
+  ];
+  for (let failing = 0; failing < later.length; failing += 1) {
+    const database = new ReadDatabase([
+      begin,
+      { tag: "workflow-runtime-read:run-overview", rows: [runRow()] },
+      ...later.slice(0, failing),
+      { ...later[failing], fail: true },
+      rollback,
+    ]);
+    const decision = await model(database).getRunOverview("run-one");
+    assert.deepEqual(decision, readFailed);
+    assert.equal(database.tags().includes("snapshot-commit"), false);
+    assert.equal(database.tags().at(-1), "snapshot-rollback");
+    assert.equal(JSON.stringify(decision).includes("driver-secret"), false);
+    assert.equal(database.releases, 1);
+    database.done();
+  }
+});
+
+test("snapshot begin, commit, and rollback failures fail closed and release exactly once", async () => {
+  const beginFailure = new ReadDatabase([{ ...begin, fail: true }, rollback]);
+  assert.deepEqual(await model(beginFailure).getRunOverview("run-one"), readFailed);
+  assert.deepEqual(beginFailure.tags(), ["snapshot-begin", "snapshot-rollback"]);
+  assert.equal(beginFailure.releases, 1);
+  beginFailure.done();
+
+  const commitFailure = new ReadDatabase([
+    begin,
+    { tag: "workflow-runtime-read:run-overview", rows: [runRow()] },
+    { tag: "workflow-runtime-read:run-approval", rows: [] },
+    { tag: "workflow-runtime-read:latest-model-invocation", rows: [invocationRowOne] },
+    { tag: "workflow-runtime-read:model-usage", rows: [usageRow()] },
+    { ...commit, fail: true },
+    rollback,
+  ]);
+  const committed = await model(commitFailure).getRunOverview("run-one");
+  assert.deepEqual(committed, readFailed);
+  assert.equal(JSON.stringify(committed).includes("invocation-one"), false);
+  assert.equal(commitFailure.releases, 1);
+  commitFailure.done();
+
+  const rollbackFailure = new ReadDatabase([
+    begin,
+    { tag: "workflow-runtime-read:usage-run", rows: [{ id: "db-run-one" }] },
+    { tag: "workflow-runtime-read:model-usage", fail: true },
+    { ...rollback, fail: true },
+  ]);
+  const rolledBack = await model(rollbackFailure).getRunModelUsage("run-one");
+  assert.deepEqual(rolledBack, readFailed);
+  assert.equal(JSON.stringify(rolledBack).includes("driver-secret"), false);
+  assert.equal(rollbackFailure.releases, 1);
+  rollbackFailure.done();
+
+  const auditCommitFailure = new ReadDatabase([
+    begin,
+    { tag: "workflow-runtime-read:audit-run", rows: [{ id: "db-run-one" }] },
+    { tag: "workflow-runtime-read:audit-timeline", rows: [auditRow()] },
+    { ...commit, fail: true },
+    { ...rollback, fail: true },
+  ]);
+  assert.deepEqual(await model(auditCommitFailure).getRunAuditTimeline("run-one"), readFailed);
+  assert.equal(auditCommitFailure.releases, 1);
+  auditCommitFailure.done();
+});
+
+test("model usage reads Run existence and aggregate in one read-only repeatable-read snapshot", async () => {
+  const database = new ReadDatabase([
+    begin,
+    { tag: "workflow-runtime-read:usage-run", rows: [{ id: "db-run-one" }] },
+    { tag: "workflow-runtime-read:model-usage", rows: [usageRow()] },
+    commit,
+  ]);
+  const decision = await model(database).getRunModelUsage("run-one");
+  assert.equal(decision.verdict, "allow");
+  assert.deepEqual(database.tags(), ["snapshot-begin", "usage-run", "model-usage", "snapshot-commit"]);
+  assert.match(database.queries[0].text.toLowerCase(), /repeatable read[\s\S]*read only/u);
+  assert.equal(database.connections, 1);
+  assert.equal(database.releases, 1);
+  database.done();
+});
+
+test("audit timeline itself distinguishes missing Run from an existing Run with no events in one snapshot", async () => {
+  const missing = new ReadDatabase([
+    begin,
+    { tag: "workflow-runtime-read:audit-run", rows: [] },
+    commit,
+  ]);
+  assert.deepEqual(await model(missing).getRunAuditTimeline("run-missing", 10), {
+    verdict: "deny", reason: "not_found", data: null,
+  });
+  assert.deepEqual(missing.queries[1]?.values, [workspaceDatabaseId, "run-missing"]);
+  assert.equal(missing.releases, 1);
+  missing.done();
+
+  const empty = new ReadDatabase([
+    begin,
+    { tag: "workflow-runtime-read:audit-run", rows: [{ id: "db-run-one" }] },
+    { tag: "workflow-runtime-read:audit-timeline", rows: [] },
+    commit,
+  ]);
+  const emptyDecision = await model(empty).getRunAuditTimeline("run-one", 10);
+  assert.equal(emptyDecision.verdict, "allow");
+  assert.deepEqual(emptyDecision.data, []);
+  assert.deepEqual(empty.tags(), ["snapshot-begin", "audit-run", "audit-timeline", "snapshot-commit"]);
+  assert.match(empty.queries[0].text.toLowerCase(), /repeatable read[\s\S]*read only/u);
+  assert.equal(empty.connections, 1);
+  assert.equal(empty.releases, 1);
+  empty.done();
+
+  const duplicate = new ReadDatabase([
+    begin,
+    { tag: "workflow-runtime-read:audit-run", rows: [{ id: "db-run-one" }, { id: "db-run-two" }] },
+    commit,
+  ]);
+  assert.deepEqual(await model(duplicate).getRunAuditTimeline("run-one", 10), {
+    verdict: "deny", reason: "inconsistent_state", data: null,
+  });
+  duplicate.done();
+});
+
+test("approval queue remains exactly one factual SELECT without transaction control", async () => {
+  const database = new ReadDatabase([{ tag: "workflow-runtime-read:approval-queue", rows: [] }]);
+  const decision = await model(database).listApprovalQueue();
+  assert.equal(decision.verdict, "allow");
+  assert.deepEqual(database.tags(), ["approval-queue"]);
+  assert.deepEqual(database.queries[0]?.values, [workspaceDatabaseId, workflowRuntimeReadModelLimits.defaultLimit]);
+  assert.equal(database.connections, 1);
+  assert.equal(database.releases, 1);
   database.done();
 });
