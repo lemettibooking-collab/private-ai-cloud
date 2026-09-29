@@ -118,11 +118,13 @@ The census recorded the current hardening debt and moved development to mileston
 - **AI-037.1.1 Minimal Owner Recovery — DONE**
 - **AI-037.6a Provider timeout ≤ claim lease — DONE**
 - **AI-037.4a Pool release guard + minimum metrics — DONE**
-- **AI-037.1.2 Paid definitive failure fail-safe — IN REVIEW**
-- **M1 Roadmap Review Gate — BLOCKED** pending independent re-gate (see §6)
-- **Real Provider Gate — after M1 safety criteria pass**
+- **AI-037.1.2 Paid definitive failure fail-safe — DONE**
+- **M1 Roadmap Review Gate — DONE**
+- **Real Provider Gate — NEXT**
 
 AI-037.1.1 passed independent re-gate and was committed/pushed through the Owner-approved repository workflow.
+
+M1 Real Money Safety is DONE. The M1 Roadmap Review Gate first found one blocker (F-1: a paid definitive provider failure plus lost final persistence could be dispatched again without Owner action). The Owner approved the corrective (RCR-1 / AI-037.1.2), implemented in commit `27a1f6d`, which passed independent re-gate.
 
 ## 5. Milestone map
 
@@ -137,7 +139,7 @@ AI-037.1.1 passed independent re-gate and was committed/pushed through the Owner
 | M7. Staging / Hardening | Production-like infrastructure | CI/CD, observability, TLS, backups, security and deployment gates |
 | M8. Telegram Owner Control | Secure remote control | Roadmap/runs/approvals/commit/push controlled through the same Owner Control API |
 
-## 6. M1 — Real Money Safety
+## 6. M1 — Real Money Safety — DONE
 
 Before autonomous development, a real model call must be payable, observable, and safe under database/connection failures.
 
@@ -180,21 +182,23 @@ Heartbeat/lease renewal remains deferred until there is evidence that a fixed le
 - reusable release only when transaction status is safe
 - minimum counters/signals: DB failures, destroyed sessions, `recovery_required`, `outcome_unknown`, ambiguous commit, provider redispatch
 
-### AI-037.1.2 — Paid definitive failure fail-safe — IN REVIEW
+### AI-037.1.2 — Paid definitive failure fail-safe — DONE
 
-Owner-approved corrective (RCR-1) for the M1 blocker found by the M1 Roadmap Review Gate.
+Owner-approved corrective (RCR-1) for the M1 blocker F-1; commit `27a1f6d`.
 
-- a definitive failed provider result that may have cost money (not exactly 0 tokens and 0 cost), followed by lost final Step persistence, keeps the execution `outcome_unknown`; the next ordinary advance returns `recovery_required`
-- free definitive failures (0 tokens, 0 cost) keep ordinary retry semantics
-- the existing explicit Owner recovery also covers this state, with the same duplicate-cost acknowledgement; recovery never calls the provider
-- direct reconstruction of the failed Step remains deferred to durable Step result recovery
+- potentially billable failed provider result + lost final persistence → `outcome_unknown` → ordinary redispatch blocked
+- retry requires explicit Owner duplicate-cost acknowledgement
+- exact free (0 tokens, 0 cost) definitive failures keep ordinary retry behavior
 
-### M1 Roadmap Review Gate — BLOCKED
+### M1 Roadmap Review Gate — DONE
 
-Status: the author review found one M1 blocker. A **paid** definitive provider failure (for example an OpenAI `content_filter` result, which is billed) followed by lost final Step persistence left the execution `failed`, not `outcome_unknown`, so the next ordinary advance paid again for the same Step attempt without Owner action. The Owner approved the corrective as AI-037.1.2 (IN REVIEW). The gate stays BLOCKED until AI-037.1.2 passes independent re-gate; the independent reviewer decides the gate verdict.
+Outcome:
 
+- the original F-1 blocker is resolved by AI-037.1.2, which passed independent re-gate
+- AI-037.2 / .3 / .5 / .6b / .8 remain deferred (§12); none is required before the first controlled M2 real-provider call
+- AI-037.5 becomes mandatory earlier only if PostgreSQL for M2 is non-loopback
 
-After M1 passes, stop implementation briefly and review:
+The gate reviewed:
 
 - whether the M2 scope is still the minimum required for a real paid provider
 - whether newly discovered debt changes the Real Provider gate
@@ -672,7 +676,7 @@ Roadmap does not imply strictly serial development. Parallel work is allowed onl
 
 ### Current critical line
 
-`AI-037.0 DONE → AI-037.1 DONE → AI-037.1.1 DONE → AI-037.6a DONE → AI-037.4a DONE → AI-037.1.2 IN REVIEW → M1 Review Gate BLOCKED → Real Provider Gate → M2 Review Gate`
+`AI-037.0 DONE → AI-037.1 DONE → AI-037.1.1 DONE → AI-037.6a DONE → AI-037.4a DONE → AI-037.1.2 DONE → M1 Review Gate DONE → Real Provider Gate NEXT → M2 Review Gate`
 
 ### Early development automation
 
