@@ -118,7 +118,8 @@ The census recorded the current hardening debt and moved development to mileston
 - **AI-037.1.1 Minimal Owner Recovery — DONE**
 - **AI-037.6a Provider timeout ≤ claim lease — DONE**
 - **AI-037.4a Pool release guard + minimum metrics — DONE**
-- **M1 Roadmap Review Gate — IN REVIEW / BLOCKED** (see §6)
+- **AI-037.1.2 Paid definitive failure fail-safe — IN REVIEW**
+- **M1 Roadmap Review Gate — BLOCKED** pending independent re-gate (see §6)
 - **Real Provider Gate — after M1 safety criteria pass**
 
 AI-037.1.1 passed independent re-gate and was committed/pushed through the Owner-approved repository workflow.
@@ -179,9 +180,18 @@ Heartbeat/lease renewal remains deferred until there is evidence that a fixed le
 - reusable release only when transaction status is safe
 - minimum counters/signals: DB failures, destroyed sessions, `recovery_required`, `outcome_unknown`, ambiguous commit, provider redispatch
 
-### M1 Roadmap Review Gate — IN REVIEW / BLOCKED
+### AI-037.1.2 — Paid definitive failure fail-safe — IN REVIEW
 
-Status: the author review found one M1 blocker. A **paid** definitive provider failure (for example an OpenAI `content_filter` result, which is billed) followed by lost final Step persistence leaves the execution `failed`, not `outcome_unknown`. The next ordinary advance then pays again for the same Step attempt without Owner action. The proposed corrective is a Roadmap Change Request pending Owner approval. The independent reviewer decides the gate verdict.
+Owner-approved corrective (RCR-1) for the M1 blocker found by the M1 Roadmap Review Gate.
+
+- a definitive failed provider result that may have cost money (not exactly 0 tokens and 0 cost), followed by lost final Step persistence, keeps the execution `outcome_unknown`; the next ordinary advance returns `recovery_required`
+- free definitive failures (0 tokens, 0 cost) keep ordinary retry semantics
+- the existing explicit Owner recovery also covers this state, with the same duplicate-cost acknowledgement; recovery never calls the provider
+- direct reconstruction of the failed Step remains deferred to durable Step result recovery
+
+### M1 Roadmap Review Gate — BLOCKED
+
+Status: the author review found one M1 blocker. A **paid** definitive provider failure (for example an OpenAI `content_filter` result, which is billed) followed by lost final Step persistence left the execution `failed`, not `outcome_unknown`, so the next ordinary advance paid again for the same Step attempt without Owner action. The Owner approved the corrective as AI-037.1.2 (IN REVIEW). The gate stays BLOCKED until AI-037.1.2 passes independent re-gate; the independent reviewer decides the gate verdict.
 
 
 After M1 passes, stop implementation briefly and review:
@@ -662,7 +672,7 @@ Roadmap does not imply strictly serial development. Parallel work is allowed onl
 
 ### Current critical line
 
-`AI-037.0 DONE → AI-037.1 DONE → AI-037.1.1 DONE → AI-037.6a DONE → AI-037.4a DONE → M1 Review Gate IN REVIEW / BLOCKED → Real Provider Gate → M2 Review Gate`
+`AI-037.0 DONE → AI-037.1 DONE → AI-037.1.1 DONE → AI-037.6a DONE → AI-037.4a DONE → AI-037.1.2 IN REVIEW → M1 Review Gate BLOCKED → Real Provider Gate → M2 Review Gate`
 
 ### Early development automation
 

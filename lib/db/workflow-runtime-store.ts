@@ -469,7 +469,8 @@ function terminalExecutionStatus(state: WorkflowRuntimeState, stepId: string): "
 }
 
 // ---------------------------------------------------------------------------------------------
-// AI-037.1.1 execution recovery (narrow HD-12 case only).
+// AI-037.1.1 / AI-037.1.2 execution recovery: a paid provider result (succeeded, or a billable
+// definitive failure) whose Step result was never committed.
 // ---------------------------------------------------------------------------------------------
 
 export const workflowRuntimeExecutionRecoveryAction = "authorize_retry_after_lost_provider_result";
@@ -491,7 +492,8 @@ export type WorkflowRuntimeExecutionRecoveryReason =
   | "invalid_target" | "acknowledgement_required" | "run_not_found" | "run_not_running" | "run_paused"
   | "step_not_found" | "step_not_pending" | "execution_not_found" | "execution_identity_ambiguous"
   | "execution_not_outcome_unknown" | "claim_active" | "revision_changed" | "invocation_missing"
-  | "invocation_not_succeeded" | "budget_missing" | "budget_not_settled" | "budget_inconsistent"
+  | "invocation_result_not_recorded" | "invocation_failure_not_billable"
+  | "budget_missing" | "budget_not_settled" | "budget_inconsistent"
   | "newer_execution_exists" | "already_authorized" | "already_authorized_by_another_operator"
   | "commit_outcome_unknown" | "recovery_lock_unavailable";
 
@@ -505,7 +507,7 @@ export type WorkflowRuntimeExecutionRecoveryInspection = Readonly<{
     executionId: string; status: string; attemptNumber: number; expectedRevision: number; claimStatus: string;
   }> | null;
   invocation: Readonly<{
-    invocationId: string; status: string; totalTokens: number | null; costUsdMicros: number | null;
+    invocationId: string; status: string; outcome: string | null; totalTokens: number | null; costUsdMicros: number | null;
   }> | null;
   budget: Readonly<{ status: string; actualTotalTokens: number | null; actualCostUsdMicros: number | null }> | null;
 }>;
@@ -520,7 +522,9 @@ type ExecutionRecoveryFacts = {
   run: { status: string; revision: number | null; paused: boolean } | null;
   step: { status: string; attemptCount: number } | null;
   execution: { id: string; status: string; attemptNumber: number; expectedRevision: number; claimStatus: string } | null;
-  invocation: { invocationId: string; status: string; totalTokens: number | null; costUsdMicros: number | null } | null;
+  invocation: {
+    invocationId: string; status: string; outcome: string | null; totalTokens: number | null; costUsdMicros: number | null;
+  } | null;
   budget: { status: string; actualTotalTokens: number | null; actualCostUsdMicros: number | null } | null;
   siblingExecutions: number;
   activeClaims: number;
@@ -536,7 +540,18 @@ function validRecoveryTarget(input: unknown): input is WorkflowRuntimeExecutionR
     && typeof input.executionId === "string" && stableIdPattern.test(input.executionId);
 }
 
-// Every precondition of the narrow HD-12 recovery; an empty list means eligible.
+// A recorded provider result that may have cost money: a succeeded result (HD-12), or (AI-037.1.2)
+// a definitive failed result unless it provably consumed nothing (exactly 0 tokens and 0 cost).
+// Mirrors the paid-outcome predicate of record-known-execution.
+function recoverableProviderResult(
+  invocation: NonNullable<ExecutionRecoveryFacts["invocation"]>,
+): WorkflowRuntimeExecutionRecoveryReason | null {
+  if (invocation.status === "succeeded") return null;
+  if (invocation.status !== "failed" || invocation.outcome !== "failed") return "invocation_result_not_recorded";
+  return invocation.totalTokens === 0 && invocation.costUsdMicros === 0 ? "invocation_failure_not_billable" : null;
+}
+
+// Every precondition of the narrow lost-provider-result recovery; an empty list means eligible.
 function executionRecoveryIneligibility(facts: ExecutionRecoveryFacts): WorkflowRuntimeExecutionRecoveryReason[] {
   const reasons: WorkflowRuntimeExecutionRecoveryReason[] = [];
   if (!facts.run) return ["run_not_found"];
@@ -551,7 +566,10 @@ function executionRecoveryIneligibility(facts: ExecutionRecoveryFacts): Workflow
   if (facts.execution.claimStatus === "active" || facts.activeClaims > 0) reasons.push("claim_active");
   if (facts.run.revision !== facts.execution.expectedRevision) reasons.push("revision_changed");
   if (!facts.invocation) reasons.push("invocation_missing");
-  else if (facts.invocation.status !== "succeeded") reasons.push("invocation_not_succeeded");
+  else {
+    const invocationReason = recoverableProviderResult(facts.invocation);
+    if (invocationReason) reasons.push(invocationReason);
+  }
   if (facts.invocation) {
     if (!facts.budget) reasons.push("budget_missing");
     else if (facts.budget.status !== "settled") reasons.push("budget_not_settled");
@@ -2017,6 +2035,10 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
       // invocation that is `running`, `succeeded` or `outcome_unknown` means the provider may
       // already have been dispatched while the Step result was not committed. Such an execution
       // stays unresolved (`outcome_unknown`) so no new execution can dispatch the Step again.
+      // AI-037.1.2: a definitive `failed` provider result is also a paid outcome unless it
+      // provably consumed nothing (exactly 0 tokens and 0 cost; NULL counts as possibly paid).
+      // Only such a free failure, or a failure without any provider result (outcome NULL), keeps
+      // the ordinary retryable `failed`.
       const recorded = await client.query<{ status: string }>(
         `/* workflow-runtime:record-known-execution */
          update workflow_runtime_executions as execution
@@ -2024,7 +2046,10 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
                select 1 from workflow_model_invocations as invocation
                where invocation.workspace_id = $1
                  and invocation.workflow_execution_id = execution.id
-                 and invocation.status in ('running', 'succeeded', 'outcome_unknown')
+                 and (invocation.status in ('running', 'succeeded', 'outcome_unknown')
+                   or (invocation.status = 'failed' and invocation.outcome = 'failed'
+                     and not (invocation.total_tokens is not distinct from 0
+                       and invocation.cost_usd_micros is not distinct from 0)))
              ) then 'outcome_unknown' else 'failed' end,
              completed_at = $4
          from workflow_runtime_claims as claim, workflow_runs as run
@@ -2055,8 +2080,8 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
     });
   }
 
-  // AI-037.1.1: read-only view of whether one execution is in the narrow HD-12 state that an
-  // Owner may explicitly recover. Advisory only; authorizeRetryAfterLostProviderResult re-checks
+  // AI-037.1.1 / AI-037.1.2: read-only view of whether one execution is in the narrow
+  // lost-paid-result state that an Owner may explicitly recover. Advisory only; authorizeRetryAfterLostProviderResult re-checks
   // every fact under row locks.
   async inspectExecutionRecovery(
     input: WorkflowRuntimeExecutionRecoveryTarget,
@@ -2135,6 +2160,7 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
             newExecutionStatus: "failed",
             invocationId: facts.invocation.invocationId,
             invocationStatus: facts.invocation.status,
+            invocationOutcome: facts.invocation.outcome,
             invocationTotalTokens: facts.invocation.totalTokens,
             invocationCostUsdMicros: facts.invocation.costUsdMicros,
             budgetStatus: facts.budget.status,
@@ -2240,12 +2266,12 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
     facts.eventKey = `${input.runId}:execution-recovery:${input.stepId}:${facts.execution.attemptNumber}:`
       + `${expectedRevision}:${input.executionId}`;
     const invocation = await client.query<{
-      model_invocation_id: string; invocation_id: string; status: string;
+      model_invocation_id: string; invocation_id: string; status: string; outcome: string | null;
       total_tokens: string | null; cost_usd_micros: string | null;
     }>(
       `/* workflow-runtime:recovery-invocation */
        select invocation.id::text as model_invocation_id, invocation.invocation_id, invocation.status,
-              invocation.total_tokens::text as total_tokens,
+              invocation.outcome, invocation.total_tokens::text as total_tokens,
               invocation.cost_usd_micros::text as cost_usd_micros
        from workflow_model_invocations as invocation
        where invocation.workspace_id = $1 and invocation.workflow_run_id = $2
@@ -2257,6 +2283,7 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
       facts.invocation = {
         invocationId: row.invocation_id,
         status: row.status,
+        outcome: typeof row.outcome === "string" ? row.outcome : null,
         totalTokens: nullableInteger(row.total_tokens),
         costUsdMicros: nullableInteger(row.cost_usd_micros),
       };

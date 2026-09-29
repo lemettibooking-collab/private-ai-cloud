@@ -75,7 +75,7 @@ async function executionStatus(): Promise<string | null> {
 }
 
 // Runtime with a store proxy that captures the outcome input, so a real writer can replay it.
-async function runtime() {
+async function runtime(outcome: import("./helpers/runtime-fixtures").MockProviderOutcome = "succeeded") {
   await resetRuntime();
   const database = postgres.createWorkflowRuntimePostgresDatabase({ connectionString: db.url, maxConnections: 6 });
   const persistence = await persistenceContract.createPostgresWorkflowRuntimePersistence({
@@ -95,15 +95,16 @@ async function runtime() {
     },
   });
   let dispatched = false;
-  const provider = fixtures.localMockProvider({ beforeRun: () => { dispatched = true; } });
+  const provider = fixtures.localMockProvider({ beforeRun: () => { dispatched = true; }, outcome: () => outcome });
   const service = fixtures.runtimeService(capturing, provider);
   assert.equal((await service.start(fixtures.startCommand())).status, "running");
   return { database, store, service, provider, captured, dispatched: () => dispatched };
 }
 
-// The HD-12 state (settled success, lost post-dispatch CAS → execution outcome_unknown).
-async function lostResultState() {
-  const context = await runtime();
+// The HD-12 state (settled success, lost post-dispatch CAS → execution outcome_unknown), or with
+// `failed_paid` the AI-037.1.2 state (settled billable definitive failure, lost CAS).
+async function lostResultState(outcome: import("./helpers/runtime-fixtures").MockProviderOutcome = "succeeded") {
+  const context = await runtime(outcome);
   const interceptor = live.installQueryInterceptor();
   try {
     interceptor.rules.push(live.rule("post-dispatch CAS fails definitively (SQLSTATE 40001)",
@@ -210,7 +211,7 @@ test("ineligible: recovery beside in-flight outcome recording is denied without 
     const settled = await advance;
     assert.ok(recovery.decision, `recovery must not wait on the writer (${recovery.ms} ms)`);
     assert.equal(recovery.decision.status, "denied");
-    assert.ok(recovery.decision.reasons.includes("invocation_not_succeeded"), JSON.stringify(recovery.decision));
+    assert.ok(recovery.decision.reasons.includes("invocation_result_not_recorded"), JSON.stringify(recovery.decision));
     assert.deepEqual(recorded.locking(), [], "recovery requested no row locks");
     assert.equal(settled.status, "completed", "the live writer committed");
     const ledger = await fixtures.ledger(db.admin);
@@ -227,14 +228,17 @@ test("ineligible: recovery beside in-flight outcome recording is denied without 
   }
 });
 
-for (const [name, tag, writer] of [
+for (const [name, tag, writer, outcome] of [
   ["claim", "workflow-runtime:release-read",
-    (context: any) => context.store.releaseClaim({ runId: fixtures.runId, claimId: context.claimId })],
+    (context: any) => context.store.releaseClaim({ runId: fixtures.runId, claimId: context.claimId }), "succeeded"],
   ["invocation", "workflow-runtime:lock-model-invocation",
-    (context: any) => context.store.recordModelInvocationOutcome(context.captured.outcome)],
+    (context: any) => context.store.recordModelInvocationOutcome(context.captured.outcome), "succeeded"],
+  // AI-037.1.2: the new eligible state (billable definitive failure) uses the same NOWAIT locking.
+  ["invocation (paid failed result)", "workflow-runtime:lock-model-invocation",
+    (context: any) => context.store.recordModelInvocationOutcome(context.captured.outcome), "failed_paid"],
 ] as const) {
   test(`potentially eligible: a live writer holding the ${name} row lock makes recovery fail fast with 55P03 (denied, retryable); the writer commits`, async (t) => {
-    const context: any = await lostResultState();
+    const context: any = await lostResultState(outcome);
     context.claimId = (await db.admin.query(`select claim.id::text as id from workflow_runtime_claims as claim
       where claim.execution_id = $1`, [target.executionId])).rows[0].id;
     assert.ok(context.captured.outcome, "outcome input captured for the replay writer");
@@ -242,7 +246,7 @@ for (const [name, tag, writer] of [
     const deadlocksBefore = await deadlockCount();
     try {
       const preflight = await context.store.inspectExecutionRecovery(target);
-      assert.equal(preflight.eligible, true, "preflight sees an eligible HD-12 state");
+      assert.equal(preflight.eligible, true, "preflight sees an eligible lost-paid-result state");
       const recorded = recoveryStatements(interceptor);
       const writerPause = pauseWriterAfter(interceptor, tag);
       const writerResult = Promise.resolve(writer(context))

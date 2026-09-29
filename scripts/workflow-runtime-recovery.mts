@@ -5,8 +5,9 @@
 //     --execution <executionId> --operator <operatorId> \
 //     --acknowledge-lost-provider-result-and-duplicate-cost-risk
 //
-// Only the narrow HD-12 state is recoverable: a settled, succeeded provider call whose Step result
-// was never committed (execution outcome_unknown). `authorize-retry` never calls a provider. It
+// Only a lost paid provider result is recoverable: a settled provider call that succeeded (HD-12)
+// or failed definitively with usage or cost (AI-037.1.2), whose Step result was never committed
+// (execution outcome_unknown). `authorize-retry` never calls a provider. It
 // lets the next ordinary advance claim the Step again, which may pay for a new provider call.
 // Every precondition, the state change and its audit event live in the store
 // (PostgresWorkflowRuntimeStateStore.authorizeRetryAfterLostProviderResult), in one transaction.

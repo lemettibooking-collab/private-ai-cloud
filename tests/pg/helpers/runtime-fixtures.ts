@@ -86,12 +86,15 @@ export const mockUsage = Object.freeze({ inputTokens: 100, outputTokens: 5, tota
 
 // Local deterministic provider following the adapter contract used by the durable ledger
 // (preflight + run). The output text embeds the invocation id so each dispatch is distinguishable.
-// `outcome` selects what a dispatched call returns: `succeeded` (default), a definitive provider
-// `failed` result, or `lost` (the outcome is unknown after dispatch). `failPreflight` rejects before
-// any dispatch.
+// `outcome` selects what a dispatched call returns: `succeeded` (default), a definitive FREE provider
+// `failed` result (0 tokens, 0 cost, like a normalized 429/400), `failed_paid` (a definitive failed
+// result that consumed usage and cost, shaped like the OpenAI adapter's content_filter result), or
+// `lost` (the outcome is unknown after dispatch). `failPreflight` rejects before any dispatch.
+export type MockProviderOutcome = "succeeded" | "failed" | "failed_paid" | "lost";
+
 export function localMockProvider(options: {
   beforeRun?: (invocationId: string) => void | Promise<void>;
-  outcome?: () => "succeeded" | "failed" | "lost";
+  outcome?: () => MockProviderOutcome;
   failPreflight?: () => boolean;
 } = {}) {
   const dispatches: MockDispatch[] = [];
@@ -169,11 +172,13 @@ export function localMockProvider(options: {
           normalizedResult: null,
         };
       }
-      const failed = outcome === "failed";
+      const paidFailure = outcome === "failed_paid";
+      const failed = outcome === "failed" || paidFailure;
+      const free = outcome === "failed";
       const normalizedResult = {
         invocationId: request.invocationId,
         outcome: failed ? "failed" : "succeeded",
-        finishReason: failed ? "error" : "stop",
+        finishReason: paidFailure ? "content_filter" : failed ? "error" : "stop",
         providerId: "provider-mock",
         providerModelId: "mock/model:alias",
         providerRequestModelId: "mock/model:v1",
@@ -181,7 +186,7 @@ export function localMockProvider(options: {
         outputText: failed ? null : outputText,
         structuredOutput: null,
         toolCallProposals: [],
-        usage: failed
+        usage: free
           ? { inputTokens: 0, outputTokens: 0, totalTokens: 0 }
           : {
             inputTokens: mockUsage.inputTokens,
@@ -189,10 +194,12 @@ export function localMockProvider(options: {
             totalTokens: mockUsage.totalTokens,
           },
         latencyMs: 5,
-        costUsdMicros: failed ? 0 : mockUsage.costUsdMicros,
-        error: failed
-          ? { category: "rate_limited", code: "rate_limited", message: "Rate limited.", retryable: true }
-          : null,
+        costUsdMicros: free ? 0 : mockUsage.costUsdMicros,
+        error: paidFailure
+          ? { category: "content_filtered", code: "content_filtered", message: "Response was filtered.", retryable: false }
+          : failed
+            ? { category: "rate_limited", code: "rate_limited", message: "Rate limited.", retryable: true }
+            : null,
       };
       const resultDecision = invocationContract.validateAndNormalizeModelInvocationResult(normalizedResult);
       return { verdict: "allow" as const, reasons: [], requestDecision, resultDecision, normalizedResult };

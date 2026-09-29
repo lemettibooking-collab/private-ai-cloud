@@ -1842,9 +1842,15 @@ test("HD-12: a known outcome never turns a possibly dispatched execution into a 
   assert.match(known, /invocation\.workflow_execution_id = execution\.id/u);
   // provider started (running), settled success, or ambiguous outcome → unresolved.
   assert.match(known, /invocation\.status in \('running', 'succeeded', 'outcome_unknown'\)/u);
+  // AI-037.1.2: a definitive failed result is unresolved too, unless exactly 0 tokens and 0 cost
+  // (NULL is treated as possibly paid).
+  assert.match(known, /or \(invocation\.status = 'failed' and invocation\.outcome = 'failed'\s+and not \(invocation\.total_tokens is not distinct from 0\s+and invocation\.cost_usd_micros is not distinct from 0\)\)\)/u);
   assert.match(known, /then 'outcome_unknown' else 'failed' end/u);
-  // No other path may write a plain `failed` for a running execution.
-  assert.equal(known.match(/'failed'/gu)?.length, 1);
+  // No other path may write a plain `failed` for a running execution: the `else` branch is the
+  // only write of that status; the other two literals are predicates on the invocation.
+  assert.equal(known.match(/'failed'/gu)?.length, 3);
+  assert.equal(known.match(/else 'failed'/gu)?.length, 1);
+  assert.equal(known.match(/set status = 'failed'/gu), null);
 
   // The unresolved state is what blocks every later claim of the same Step attempt.
   const unresolved = source.slice(
@@ -3250,7 +3256,7 @@ function recoveryInvocationSteps(invocation: Record<string, unknown> | null | un
     return [{ tag: "workflow-runtime:recovery-invocation", rows: [] }];
   }
   const merged: Record<string, unknown> = {
-    status: "succeeded", total_tokens: "105", cost_usd_micros: "200",
+    status: "succeeded", outcome: "succeeded", total_tokens: "105", cost_usd_micros: "200",
     budget_status: "settled", actual_total_tokens: "105", actual_cost_usd_micros: "200", ...invocation,
   };
   return [
@@ -3258,7 +3264,8 @@ function recoveryInvocationSteps(invocation: Record<string, unknown> | null | un
       tag: "workflow-runtime:recovery-invocation",
       rows: [{
         model_invocation_id: recoveryInvocationDbId, invocation_id: "invocation-step-one-one",
-        status: merged.status, total_tokens: merged.total_tokens, cost_usd_micros: merged.cost_usd_micros,
+        status: merged.status, outcome: merged.outcome,
+        total_tokens: merged.total_tokens, cost_usd_micros: merged.cost_usd_micros,
       }],
       inspect(values) { assert.deepEqual(values, [workspaceDatabaseId, dbRunId, recoveryExecutionDbId]); },
     },
@@ -3358,6 +3365,7 @@ test("AI-037.1.1: the exact HD-12 state is recovered once, with the state change
           newExecutionStatus: "failed",
           invocationId: "invocation-step-one-one",
           invocationStatus: "succeeded",
+          invocationOutcome: "succeeded",
           invocationTotalTokens: 105,
           invocationCostUsdMicros: 200,
           budgetStatus: "settled",
@@ -3376,6 +3384,46 @@ test("AI-037.1.1: the exact HD-12 state is recovered once, with the state change
   assert.ok(tags.indexOf("workflow-runtime:recovery-authorize-execution") < tags.indexOf("workflow-runtime:audit-event"));
 });
 
+test("AI-037.1.2: a billable definitive failed result (settled, consistent) is recovered with a truthful audit", async () => {
+  const paidFailure = { status: "failed", outcome: "failed", total_tokens: "105", cost_usd_micros: "200" };
+  const inspection = await createStore(new ScriptedDatabase(recoveryFactSteps({ invocation: paidFailure })))
+    .inspectExecutionRecovery(recoveryTarget);
+  assert.equal(inspection.eligible, true);
+  assert.deepEqual(inspection.invocation, {
+    invocationId: "invocation-step-one-one", status: "failed", outcome: "failed", totalTokens: 105, costUsdMicros: 200,
+  });
+  const database = new ScriptedDatabase([
+    ...recoveryFactSteps({ invocation: paidFailure }),
+    ...recoveryFactSteps({ invocation: paidFailure }),
+    {
+      tag: "workflow-runtime:recovery-authorize-execution",
+      rowCount: 1,
+      inspect(values) { assert.deepEqual(values, [workspaceDatabaseId, recoveryExecutionDbId]); },
+    },
+    {
+      tag: "workflow-runtime:audit-event",
+      rowCount: 1,
+      inspect(values) {
+        const metadata = values[6] as Record<string, unknown>;
+        assert.equal(values[3], "workflow.execution_recovery_authorized");
+        assert.equal(metadata.duplicateCostRiskAcknowledged, "yes");
+        assert.equal(metadata.invocationStatus, "failed");
+        assert.equal(metadata.invocationOutcome, "failed");
+        assert.equal(metadata.invocationTotalTokens, 105);
+        assert.equal(metadata.invocationCostUsdMicros, 200);
+        assert.equal(metadata.budgetStatus, "settled");
+        assert.equal(metadata.newExecutionStatus, "failed");
+      },
+    },
+  ]);
+  const decision = await createStore(database).authorizeRetryAfterLostProviderResult({
+    ...recoveryTarget, operatorId: "owner-one", ...recoveryAcknowledged,
+  });
+  assert.deepEqual(decision, { status: "authorized", reasons: [] });
+  assert.deepEqual(database.transactions, ["begin", "commit", "begin", "commit"]);
+  database.done();
+});
+
 test("AI-037.1.1: recovery without the explicit literal acknowledgement never touches the database", async () => {
   for (const acknowledgement of [undefined, false, "true", 1, {}]) {
     const database = new ScriptedDatabase([]);
@@ -3388,13 +3436,24 @@ test("AI-037.1.1: recovery without the explicit literal acknowledgement never to
   }
 });
 
-test("AI-037.1.1: only a succeeded invocation with a consistent settled budget is recoverable", async () => {
+test("AI-037.1.1 / AI-037.1.2: only a paid provider result (succeeded or billable failed) with a consistent settled budget is recoverable", async () => {
   const cases: Array<[Record<string, unknown> | null, string]> = [
-    [{ status: "running", total_tokens: null, cost_usd_micros: null, budget_status: "reserved",
-      actual_total_tokens: null, actual_cost_usd_micros: null }, "invocation_not_succeeded"],
-    [{ status: "outcome_unknown", total_tokens: null, cost_usd_micros: null, budget_status: "outcome_unknown",
-      actual_total_tokens: null, actual_cost_usd_micros: null }, "invocation_not_succeeded"],
-    [{ status: "failed", total_tokens: "0", cost_usd_micros: "0" }, "invocation_not_succeeded"],
+    [{ status: "running", outcome: null, total_tokens: null, cost_usd_micros: null, budget_status: "reserved",
+      actual_total_tokens: null, actual_cost_usd_micros: null }, "invocation_result_not_recorded"],
+    [{ status: "outcome_unknown", outcome: null, total_tokens: null, cost_usd_micros: null, budget_status: "outcome_unknown",
+      actual_total_tokens: null, actual_cost_usd_micros: null }, "invocation_result_not_recorded"],
+    // A failure without any provider result (pre-dispatch denial) is not a paid outcome.
+    [{ status: "failed", outcome: null, total_tokens: null, cost_usd_micros: null, budget_status: "released",
+      actual_total_tokens: null, actual_cost_usd_micros: null }, "invocation_result_not_recorded"],
+    // An exactly free definitive failure keeps its ordinary retry semantics and is never recovered.
+    [{ status: "failed", outcome: "failed", total_tokens: "0", cost_usd_micros: "0", budget_status: "released",
+      actual_total_tokens: null, actual_cost_usd_micros: null }, "invocation_failure_not_billable"],
+    [{ status: "failed", outcome: "failed", total_tokens: "0", cost_usd_micros: "0",
+      actual_total_tokens: "0", actual_cost_usd_micros: "0" }, "invocation_failure_not_billable"],
+    // A billable failure still needs a settled budget that matches it exactly.
+    [{ status: "failed", outcome: "failed", budget_status: "released", actual_total_tokens: null,
+      actual_cost_usd_micros: null }, "budget_not_settled"],
+    [{ status: "failed", outcome: "failed", actual_cost_usd_micros: "199" }, "budget_inconsistent"],
     [null, "invocation_missing"],
     [{ budget_status: null, actual_total_tokens: null, actual_cost_usd_micros: null }, "budget_missing"],
     [{ budget_status: "released" }, "budget_not_settled"],
@@ -3615,7 +3674,7 @@ test("AI-037.1.1: a clearly ineligible state is denied by the read-only prefligh
     .authorizeRetryAfterLostProviderResult({ ...recoveryTarget, operatorId: "owner-one", ...recoveryAcknowledged });
   assert.equal(decision.status, "denied");
   assert.ok(decision.reasons.includes("claim_active"));
-  assert.ok(decision.reasons.includes("invocation_not_succeeded"));
+  assert.ok(decision.reasons.includes("invocation_result_not_recorded"));
   assert.deepEqual(recorded.statements.filter((statement) => / for (update|share)/u.test(statement.text)), [],
     "no row lock was requested");
   assert.equal(recorded.statements.some((statement) => statement.tag === "workflow-runtime:recovery-authorize-execution"), false);

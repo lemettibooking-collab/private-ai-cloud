@@ -1,10 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- live driver instrumentation crosses untyped pg boundaries */
-// Live PostgreSQL: AI-037.1.1 minimal Owner recovery for the HD-12 state.
+// Live PostgreSQL: AI-037.1.1 / AI-037.1.2 minimal Owner recovery for a lost paid provider result.
 //
-// AI-037.1 blocks automatic retry after a lost post-dispatch result (execution outcome_unknown).
-// AI-037.1.1 lets the Owner explicitly abandon that unrecoverable result and permit a later,
-// ordinary, paid retry. The recovery itself never calls the provider. AI-037.2 (durable result
-// storage) is meant to remove the need to pay again in this case.
+// AI-037.1 / AI-037.1.2 block automatic retry after a lost post-dispatch result that may have cost
+// money (a succeeded result, or a definitive failed result with usage or cost): the execution stays
+// outcome_unknown. Owner recovery lets the Owner explicitly abandon that unrecoverable result and
+// permit a later, ordinary, paid retry. The recovery itself never calls the provider. AI-037.2
+// (durable result storage) is meant to remove the need to pay again in the succeeded case.
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { test } from "node:test";
@@ -23,6 +24,9 @@ const postgres = (await import(
 const persistenceContract = (await import(
   new URL("../../lib/db/workflow-runtime-persistence.ts", import.meta.url).href
 )) as typeof import("../../lib/db/workflow-runtime-persistence");
+const signalsContract = (await import(
+  new URL("../../lib/contracts/runtime-operational-signals.ts", import.meta.url).href
+)) as typeof import("../../lib/contracts/runtime-operational-signals");
 
 const db = await live.useLiveDatabase("recovery");
 await live.insertWorkspace(db.admin, live.primaryWorkspace);
@@ -46,9 +50,10 @@ async function resetRuntime() {
   ]) await db.admin.query(sql);
 }
 
-async function persistenceFor(database: any, domain: string) {
+async function persistenceFor(database: any, domain: string, signals?: unknown) {
   const persistence = await persistenceContract.createPostgresWorkflowRuntimePersistence({
     database, domainWorkspaceId: domain, providerExecutionTiming: fixtures.providerExecutionTiming(),
+    ...(signals === undefined ? {} : { signals }),
   });
   assert.ok(persistence);
   return persistence;
@@ -56,10 +61,16 @@ async function persistenceFor(database: any, domain: string) {
 
 // Builds the state left by AI-037.1 after a lost post-dispatch result (or a variant of it) and
 // returns a live runtime (store, service, provider) to keep working with. Close `database` after.
-async function lostResultState(options: Readonly<{ outcome?: "succeeded" | "failed" | "lost"; failCas?: boolean }> = {}) {
+async function lostResultState(options: Readonly<{
+  outcome?: import("./helpers/runtime-fixtures").MockProviderOutcome;
+  failCas?: boolean;
+}> = {}) {
   await resetRuntime();
-  const database = postgres.createWorkflowRuntimePostgresDatabase({ connectionString: db.url, maxConnections: 4 });
-  const persistence = await persistenceFor(database, live.primaryWorkspace.domain);
+  const collector = signalsContract.createRuntimeOperationalSignalCollector();
+  const database = postgres.createWorkflowRuntimePostgresDatabase({
+    connectionString: db.url, maxConnections: 4, signals: collector.sink,
+  });
+  const persistence = await persistenceFor(database, live.primaryWorkspace.domain, collector.sink);
   const store = persistence.stateStore;
   await store.create({ state: fixtures.executableRuntimeState() });
   let dispatched = false;
@@ -67,7 +78,7 @@ async function lostResultState(options: Readonly<{ outcome?: "succeeded" | "fail
     beforeRun: () => { dispatched = true; },
     outcome: () => (provider.dispatches.length === 1 ? options.outcome ?? "succeeded" : "succeeded"),
   });
-  const service = fixtures.runtimeService(store, provider);
+  const service = fixtures.runtimeService(store, provider, collector.sink);
   assert.equal((await service.start(fixtures.startCommand())).status, "running");
   const interceptor = live.installQueryInterceptor();
   try {
@@ -82,7 +93,7 @@ async function lostResultState(options: Readonly<{ outcome?: "succeeded" | "fail
   } finally {
     interceptor.restore();
   }
-  return { database, store, service, provider };
+  return { database, store, service, provider, collector };
 }
 
 async function recoveryAuditCount(): Promise<number> {
@@ -133,7 +144,7 @@ test("Owner recovery: inspect, refuse without acknowledgement, authorize once, i
       executionId: target.executionId, status: "outcome_unknown", attemptNumber: 1, expectedRevision: 1, claimStatus: "released",
     });
     assert.deepEqual(inspection.invocation, {
-      invocationId: "invocation-step-one-one", status: "succeeded",
+      invocationId: "invocation-step-one-one", status: "succeeded", outcome: "succeeded",
       totalTokens: fixtures.mockUsage.totalTokens, costUsdMicros: fixtures.mockUsage.costUsdMicros,
     });
     assert.deepEqual(inspection.budget, {
@@ -185,6 +196,7 @@ test("Owner recovery: inspect, refuse without acknowledgement, authorize once, i
       newExecutionStatus: "failed",
       invocationId: "invocation-step-one-one",
       invocationStatus: "succeeded",
+      invocationOutcome: "succeeded",
       invocationTotalTokens: fixtures.mockUsage.totalTokens,
       invocationCostUsdMicros: fixtures.mockUsage.costUsdMicros,
       budgetStatus: "settled",
@@ -233,7 +245,7 @@ async function assertDenied(store: any, input: any, expectedReasons: readonly st
   assert.equal(await recoveryAuditCount(), 0);
 }
 
-test("Owner recovery is denied outside the narrow HD-12 state and never mutates", async () => {
+test("Owner recovery is denied outside the narrow lost-paid-result states and never mutates", async () => {
   // Acknowledgement missing (API): false / absent are both refused before any database access.
   {
     const { database, store } = await lostResultState();
@@ -256,7 +268,7 @@ test("Owner recovery is denied outside the narrow HD-12 state and never mutates"
       await db.admin.query(`update workflow_model_invocations set status = 'running', completed_at = null, outcome = null,
         finish_reason = null, input_tokens = null, output_tokens = null, total_tokens = null, latency_ms = null,
         cost_usd_micros = null, error_code = null where invocation_id = 'invocation-step-one-one'`);
-      await assertDenied(store, { ...target, operatorId: "owner-one", ...acknowledged }, ["invocation_not_succeeded"], "outcome_unknown");
+      await assertDenied(store, { ...target, operatorId: "owner-one", ...acknowledged }, ["invocation_result_not_recorded"], "outcome_unknown");
       // Invocation missing.
       await db.admin.query("delete from workflow_model_budget_reservations");
       await db.admin.query("delete from workflow_model_invocations");
@@ -284,17 +296,18 @@ test("Owner recovery is denied outside the narrow HD-12 state and never mutates"
     const { database, store } = await lostResultState({ outcome: "lost", failCas: false });
     try {
       await assertDenied(store, { ...target, operatorId: "owner-one", ...acknowledged },
-        ["invocation_not_succeeded", "budget_not_settled"], "outcome_unknown");
+        ["invocation_result_not_recorded", "budget_not_settled"], "outcome_unknown");
     } finally {
       await database.close();
     }
   }
-  // Definitive provider failure: execution already `failed`, invocation `failed`.
+  // Definitive FREE provider failure (0 tokens, 0 cost): execution already an ordinary retryable
+  // `failed`, and the free invocation itself is never a recoverable paid result.
   {
     const { database, store } = await lostResultState({ outcome: "failed" });
     try {
       await assertDenied(store, { ...target, operatorId: "owner-one", ...acknowledged },
-        ["execution_not_outcome_unknown", "invocation_not_succeeded"], "failed");
+        ["execution_not_outcome_unknown", "invocation_failure_not_billable"], "failed");
     } finally {
       await database.close();
     }
@@ -308,5 +321,91 @@ test("Owner recovery is denied outside the narrow HD-12 state and never mutates"
     } finally {
       await database.close();
     }
+  }
+});
+
+test("AI-037.1.2 Owner recovery: a lost PAID definitive failure is recoverable only with the explicit acknowledgement", async () => {
+  const { database, store, service, provider, collector } = await lostResultState({ outcome: "failed_paid" });
+  try {
+    // The AI-037.1.2 fail-safe state: paid failed outcome recorded and settled, execution unresolved.
+    assert.equal(await executionStatus(), "outcome_unknown");
+    const blocked = fixtures.responseSummary(await service.advance(fixtures.advanceCommand(1, "advance-blocked", "two")));
+    assert.equal(blocked.status, "recovery_required");
+    assert.equal(provider.dispatches.length, 1);
+    const before = await fixtures.ledger(db.admin);
+    assert.deepEqual(before.invocations.map((row: any) => [row.status, row.total_tokens, row.cost]),
+      [["failed", fixtures.mockUsage.totalTokens, fixtures.mockUsage.costUsdMicros]]);
+    assert.deepEqual(before.budgets.map((row: any) => [row.status, row.actual_tokens, row.actual_cost]),
+      [["settled", fixtures.mockUsage.totalTokens, fixtures.mockUsage.costUsdMicros]]);
+
+    // Inspect (operator CLI): eligible, and the failed paid outcome is visible.
+    const inspected = await runRecoveryCli(["inspect", ...cliTarget]);
+    assert.equal(inspected.code, 0, inspected.stdout);
+    const inspection = JSON.parse(inspected.stdout);
+    assert.equal(inspection.eligible, true, inspected.stdout);
+    assert.deepEqual(inspection.invocation, {
+      invocationId: "invocation-step-one-one", status: "failed", outcome: "failed",
+      totalTokens: fixtures.mockUsage.totalTokens, costUsdMicros: fixtures.mockUsage.costUsdMicros,
+    });
+    assert.equal(await executionStatus(), "outcome_unknown");
+
+    // Without the acknowledgement: denied, nothing changes, nothing is called.
+    await assertDenied(store, { ...target, operatorId: "owner-one" }, ["acknowledgement_required"], "outcome_unknown");
+    const unacknowledged = await runRecoveryCli(["authorize-retry", ...cliTarget, "--operator", "owner-one"]);
+    assert.equal(unacknowledged.code, 2);
+    assert.deepEqual(JSON.parse(unacknowledged.stdout), { status: "denied", reasons: ["acknowledgement_required"] });
+    assert.equal(await executionStatus(), "outcome_unknown");
+    assert.equal(provider.dispatches.length, 1);
+
+    // With the acknowledgement: the transition and exactly one audit event; no provider call.
+    const authorized = await runRecoveryCli(["authorize-retry", ...cliTarget, "--operator", "owner-one",
+      "--acknowledge-lost-provider-result-and-duplicate-cost-risk"]);
+    assert.equal(authorized.code, 0, authorized.stdout);
+    assert.deepEqual(JSON.parse(authorized.stdout), { status: "authorized", reasons: [] });
+    assert.equal(await executionStatus(), "failed");
+    assert.equal(await recoveryAuditCount(), 1);
+    assert.equal(provider.dispatches.length, 1, "recovery never calls the provider");
+    const afterRecovery = await fixtures.ledger(db.admin);
+    assert.deepEqual(afterRecovery.invocations, before.invocations, "the paid failed invocation is not rewritten");
+    assert.deepEqual(afterRecovery.budgets, before.budgets, "the settled budget is not reversed");
+    assert.deepEqual(afterRecovery.windows, before.windows);
+    assert.deepEqual(afterRecovery.steps, before.steps);
+    assert.deepEqual(afterRecovery.runs, before.runs);
+    const audit = (await db.admin.query(`select actor_kind, actor_id, metadata from audit_events
+      where event_type = 'workflow.execution_recovery_authorized'`)).rows[0];
+    assert.equal(audit.actor_kind, "owner");
+    assert.equal(audit.actor_id, "owner-one");
+    assert.equal(audit.metadata.duplicateCostRiskAcknowledged, "yes");
+    assert.equal(audit.metadata.invocationStatus, "failed");
+    assert.equal(audit.metadata.invocationOutcome, "failed");
+    assert.equal(audit.metadata.invocationTotalTokens, fixtures.mockUsage.totalTokens);
+    assert.equal(audit.metadata.invocationCostUsdMicros, fixtures.mockUsage.costUsdMicros);
+    assert.equal(audit.metadata.budgetStatus, "settled");
+    assert.equal(/Output of |filtered|content_filter|postgres:\/\//u.test(JSON.stringify(audit.metadata)), false,
+      "no provider output, error text or connection string");
+
+    // Exact replay is idempotent; a different Owner conflicts; neither mutates.
+    assert.deepEqual(await store.authorizeRetryAfterLostProviderResult({ ...target, operatorId: "owner-one", ...acknowledged }),
+      { status: "idempotent", reasons: ["already_authorized"] });
+    assert.deepEqual(await store.authorizeRetryAfterLostProviderResult({ ...target, operatorId: "owner-two", ...acknowledged }),
+      { status: "conflict", reasons: ["already_authorized_by_another_operator"] });
+    assert.equal(await recoveryAuditCount(), 1);
+    assert.equal(collector.snapshot().provider_redispatch, 0, "authorization alone is not a dispatch");
+
+    // Only the next ordinary advance may call the provider again, once, now Owner-authorized.
+    const retried = fixtures.responseSummary(await service.advance(fixtures.advanceCommand(1, "advance-after-recovery", "three")));
+    assert.equal(retried.status, "completed");
+    assert.deepEqual(provider.dispatches.map((dispatch) => dispatch.invocationId),
+      ["invocation-step-one-one", "invocation-step-one-three"]);
+    assert.equal(collector.snapshot().provider_redispatch, 1, "PRIOR recorded paid outcome and CURRENT recorded outcome");
+    const final = await fixtures.ledger(db.admin);
+    assert.deepEqual(final.invocations.map((row: any) => [row.invocation_id, row.status]), [
+      ["invocation-step-one-one", "failed"],
+      ["invocation-step-one-three", "succeeded"],
+    ]);
+    assert.deepEqual(final.runs, [{ runtime_id: fixtures.runId, status: "completed", revision: 5 }]);
+    assert.equal(await recoveryAuditCount(), 1);
+  } finally {
+    await database.close();
   }
 });

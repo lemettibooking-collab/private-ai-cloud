@@ -248,7 +248,7 @@ test("known limitation: a dispatch whose outcome was never recorded leaves no pr
     assert.deepEqual(await r.store.authorizeRetryAfterLostProviderResult({
       runId: fixtures.runId, stepId: fixtures.stepId, executionId: "execution-step-one-one",
       operatorId: "owner-one", acknowledgeLostProviderResultAndDuplicateCostRisk: true,
-    }), { status: "denied", reasons: ["invocation_not_succeeded", "budget_not_settled"] }, "M1 has no retry path here");
+    }), { status: "denied", reasons: ["invocation_result_not_recorded", "budget_not_settled"] }, "M1 has no retry path here");
     // Simulate a future unblock (HD-6 or a manual repair) of this attempt.
     await db.admin.query(`update workflow_runtime_executions set status = 'failed'
       where execution_id = 'execution-step-one-one' and status = 'outcome_unknown'`);
