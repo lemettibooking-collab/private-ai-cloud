@@ -1,7 +1,7 @@
 # Private AI Cloud — Development Roadmap
 
-**Version:** v1.2  
-**Date:** 2026-09-29  
+**Version:** v1.3  
+**Date:** 2026-09-30  
 **Status:** AUTHORITATIVE / CURRENT  
 **Canonical source:** `docs/ROADMAP.md`
 
@@ -18,6 +18,8 @@ Roadmap changes are versioned. A strategic change must be represented as a Roadm
 Important external actions remain separate approvals: accepting a result, allowing commit, allowing push, and allowing deploy are distinct decisions.
 
 The development pipeline must not depend on one specific model, executor, or payment mechanism. API credits, subscription/CLI access, and self-hosted routes are implementation choices behind stable provider/backend contracts.
+
+ModelProvider and ExecutionBackend are separate integration layers. Direct model invocation uses provider/API contracts; coding executors may use provider-supported CLI subscription sessions or API credentials behind the same ExecutionBackend contract. Changing executor authentication or payment mode must not change FeaturePlan, QA, approval, audit, artifact, or recovery semantics.
 
 Security, tenant isolation, budgets, idempotency, audit, and recovery remain system invariants.
 
@@ -120,7 +122,7 @@ The census recorded the current hardening debt and moved development to mileston
 - **AI-037.4a Pool release guard + minimum metrics — DONE**
 - **AI-037.1.2 Paid definitive failure fail-safe — DONE**
 - **M1 Roadmap Review Gate — DONE**
-- **Real Provider Gate — NEXT**
+- **Real Provider Gate — IN REVIEW** (M2.0 + M2.1 implemented; Owner-approved M2.2 real call still required, see §7)
 
 AI-037.1.1 passed independent re-gate and was committed/pushed through the Owner-approved repository workflow.
 
@@ -211,6 +213,10 @@ M1 is timeboxed operationally rather than by a hard calendar promise. The Owner 
 
 The first real provider route remains OpenAI unless the Owner changes the routing decision, because the abstraction and adapter already exist.
 
+Status: IN REVIEW. M2.0 (real-provider composition root and local runner) and M2.1 (fake OpenAI SDK below the real adapter, against live PostgreSQL) are implemented; no real provider call has been made. M2.2, one Owner-approved paid call, remains required; before it, the Owner verifies the configured model prices against the provider's current pricing and confirms that the provider-reported input tokens equal the preflight count.
+
+M2 proves the direct API-backed `ModelProvider` path. Subscription-backed Codex/Claude Code access is an `ExecutionBackend` concern in M4 and does not replace the M2 real-provider proof.
+
 | Check | Requirement |
 |---|---|
 | Credentials | Server-side only; no logs/UI leakage |
@@ -233,6 +239,7 @@ The review must answer:
 - Which UI surfaces are now actually needed?
 - Is AI-040a ready to automate the current human handoff loop?
 - Which executor should become the first production backend?
+- Which access/payment modes are factually available for that executor at implementation time: subscription session, API key/provider credits, or self-hosted?
 - Which second backend is the best portability proof?
 - Which deferred technical debt now blocks autonomy or staging?
 - Are the planned roadmap hierarchy and navigation still appropriate?
@@ -388,7 +395,7 @@ Additional rules:
 
 Define the minimal stable contract required by the control plane. Do not design five implementations in advance.
 
-The contract must keep FeaturePlan, policies, budgets, QA, approvals and audit independent from the chosen executor.
+The contract must keep FeaturePlan, policies, budgets, QA, approvals and audit independent from the chosen executor. It must also keep executor identity separate from authentication/payment mode so the same backend can switch between supported subscription-session and API-funded access without pipeline redesign.
 
 ### AI-041.1 — First Production Backend — PLANNED
 
@@ -396,13 +403,17 @@ Implement exactly one real backend first: the executor actually used by the curr
 
 Current default candidate: **CodexBackend**, unless the M2 Roadmap Review Gate selects another first backend based on actual usage and access model.
 
-Exit criterion: real tasks can run through the backend contract without a parallel special-case pipeline.
+CodexBackend must be able to use a provider-supported authenticated Codex CLI session backed by the Owner's eligible ChatGPT subscription, and it must also allow an OpenAI API/API-credit route where appropriate. Private AI Cloud must not copy ChatGPT passwords, browser cookies, or raw interactive OAuth/session tokens into workflow state, audit records, or its own generic credential store; the backend relies on the provider CLI's supported session mechanism or an explicitly configured API credential.
+
+Exit criterion: real tasks can run through the backend contract without a parallel special-case pipeline, and changing the supported Codex access/payment mode does not change FeaturePlan, QA, evidence, Owner approvals, or audit semantics.
 
 ### AI-041.2 — Second Backend / Portability Proof — PLANNED
 
 Add a second genuinely different backend only after the first one works. A likely candidate is **ClaudeCodeBackend**.
 
-The second implementation is the proof that the abstraction is correct.
+ClaudeCodeBackend must follow the same access abstraction: use a provider-supported authenticated Claude Code subscription session when available, or an Anthropic API/API-credit route when selected by policy. Private AI Cloud must not scrape or persist user passwords, browser cookies, or raw interactive session credentials.
+
+The second implementation is the proof that the abstraction is correct across both executor vendors and access/payment modes.
 
 Portability gate:
 
@@ -411,6 +422,28 @@ Portability gate:
 - same QA/evidence shape
 - same Owner approvals/audit
 - backend can switch without pipeline redesign
+- supported access/payment mode can switch without pipeline redesign
+
+### Executor access / authentication / payment modes
+
+Execution backends must expose access and payment as replaceable runtime configuration, not as workflow semantics. The control plane may select among supported modes according to Owner policy, availability, quota, security, and cost.
+
+| Mode | Intended use | Accounting / security rule |
+|---|---|---|
+| `subscription_session` | Provider-supported authenticated CLI session, e.g. Codex via eligible ChatGPT plan or Claude Code via eligible Claude plan | PAC stores only backend/session status and policy facts needed for orchestration; it does not copy raw interactive session secrets into Run state or audit. Subscription quota/availability is tracked separately from API token spend. |
+| `api_key` | Direct provider API credential | Secret remains server-side; exact usage/cost/budget rules apply where provider reporting supports them. |
+| `provider_credits` | API-funded route using provider account credits/balance | Same execution contract as API key mode; funding source must not change workflow semantics. |
+| `self_hosted` | Local/private inference or executor infrastructure | No provider subscription dependency; infrastructure/resource accounting is separate from provider token billing. |
+
+Rules:
+
+- `CodexBackend` and `ClaudeCodeBackend` are execution backends, not substitutes for the direct `ModelProvider` API abstraction.
+- A backend may support more than one access mode; runtime capability detection must fail closed when a requested mode is unavailable.
+- Switching subscription ↔ API ↔ self-hosted must not change FeaturePlan, repository scope, QA, evidence, approval, audit, or recovery contracts.
+- No fabricated USD per-call cost is recorded for subscription mode unless the provider exposes a trustworthy monetary figure; subscription allowance/quota is tracked as a distinct resource signal.
+- API mode continues to use explicit token/cost budgets and provider-spend controls.
+- Private AI Cloud never obtains subscription access by scraping browser state or copying unsupported credentials.
+- Provider-specific login/session lifecycle remains inside the backend adapter and provider-supported CLI/session store; PAC receives only the minimum status/availability facts required to orchestrate execution.
 
 ### Deferred backends
 
@@ -676,7 +709,7 @@ Roadmap does not imply strictly serial development. Parallel work is allowed onl
 
 ### Current critical line
 
-`AI-037.0 DONE → AI-037.1 DONE → AI-037.1.1 DONE → AI-037.6a DONE → AI-037.4a DONE → AI-037.1.2 DONE → M1 Review Gate DONE → Real Provider Gate NEXT → M2 Review Gate`
+`AI-037.0 DONE → AI-037.1 DONE → AI-037.1.1 DONE → AI-037.6a DONE → AI-037.4a DONE → AI-037.1.2 DONE → M1 Review Gate DONE → Real Provider Gate IN REVIEW (M2.0 + M2.1; M2.2 pending) → M2 Review Gate`
 
 ### Early development automation
 
@@ -721,7 +754,7 @@ AI-045 follows a proven automated development case, unless an earlier deployment
 
 The Owner defines or approves the product roadmap once. Private AI Cloud then plans and executes allowed work, selects an executor/model, manages budgets, performs QA/security, applies bounded recoverable self-fix, and continues through the roadmap. The Owner appears only at predefined approval gates, blockers, strategy changes, risk/budget escalation, and critical external actions.
 
-The system must remain one managed process in which executors and payment methods can change without rebuilding the pipeline.
+The system must remain one managed process in which executors and payment methods can change without rebuilding the pipeline. Supported access modes include provider API credentials/credits, provider-supported subscription CLI sessions, and self-hosted routes; the workflow must remain independent from those choices.
 
 It must support both:
 
@@ -736,12 +769,23 @@ The key production proof remains a real Smart Algorithms feature moving from exe
 | Field | Value |
 |---|---|
 | Document | Private AI Cloud Development Roadmap |
-| Version | v1.2 |
+| Version | v1.3 |
 | Status | Current / Authoritative |
 | Canonical source | `docs/ROADMAP.md` |
 | PDF | Generated snapshot only |
 | Change control | New strategic version requires Owner approval |
-| Priority | v1.2 supersedes roadmap v1.1 and earlier roadmap descriptions where they conflict |
+| Priority | v1.3 supersedes roadmap v1.2 and earlier roadmap descriptions where they conflict |
+
+### v1.3 change summary
+
+- Formalized the separation between direct `ModelProvider` API routes and coding `ExecutionBackend` routes.
+- Added executor access/payment abstraction: `subscription_session`, `api_key`, `provider_credits`, and `self_hosted`.
+- Required `CodexBackend` to support provider-supported Codex CLI subscription-session access when available, alongside an OpenAI API/API-credit route.
+- Required `ClaudeCodeBackend` to support provider-supported Claude Code subscription-session access when available, alongside an Anthropic API/API-credit route.
+- Prohibited copying passwords, browser cookies, or raw interactive subscription/session credentials into workflow state, audit, or generic PAC storage.
+- Made FeaturePlan, QA, evidence, approvals, audit, and recovery invariant across executor payment/authentication modes.
+- Distinguished subscription quota/availability accounting from exact API token/cost accounting; no synthetic per-call USD cost is invented for subscription mode.
+- Clarified that M2 still proves the direct API-backed `ModelProvider` path; subscription-backed coding executors are implemented in M4.
 
 ### v1.2 change summary
 

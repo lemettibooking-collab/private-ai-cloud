@@ -104,6 +104,11 @@ const allowedMetadataKeys = new Set([
   "status", "outcome", "finishReason", "inputTokens", "outputTokens", "totalTokens",
   "latencyMs", "costUsdMicros", "errorCode", "approvalRequestId", "policyFingerprint",
   "requestedCapability", "riskLevel", "decision",
+  // AI-037.1.1 / AI-037.1.2 Owner recovery audit (workflow.execution_recovery_authorized): runtime
+  // identifiers, statuses and counts only; without these keys a recovered Run's timeline was denied.
+  "recoveryAction", "duplicateCostRiskAcknowledged", "executionId", "expectedRevision",
+  "previousExecutionStatus", "newExecutionStatus", "invocationStatus", "invocationOutcome",
+  "invocationTotalTokens", "invocationCostUsdMicros", "budgetStatus",
 ]);
 
 function containsForbiddenKey(input: unknown): boolean {

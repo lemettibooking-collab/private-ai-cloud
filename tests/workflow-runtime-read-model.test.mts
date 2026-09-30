@@ -319,6 +319,43 @@ test("audit timeline is newest-first, bounded, tenant-scoped, and rejects unsafe
   database.done();
 });
 
+test("M2 integration: the Owner recovery audit event (AI-037.1.1 / AI-037.1.2) is readable in the audit timeline", async () => {
+  const recoveryMetadata = {
+    recoveryAction: "authorize_retry_after_lost_provider_result",
+    duplicateCostRiskAcknowledged: "yes",
+    runId: "run-one",
+    stepId: "step-one",
+    executionId: "execution-step-one-one",
+    attemptNumber: 1,
+    expectedRevision: 1,
+    previousExecutionStatus: "outcome_unknown",
+    newExecutionStatus: "failed",
+    invocationId: "invocation-step-one-one",
+    invocationStatus: "failed",
+    invocationOutcome: "failed",
+    invocationTotalTokens: 105,
+    invocationCostUsdMicros: 200,
+    budgetStatus: "settled",
+  };
+  const database = new ReadDatabase([
+    begin,
+    { tag: "workflow-runtime-read:audit-run", rows: [{ id: "db-run-one" }] },
+    { tag: "workflow-runtime-read:audit-timeline", rows: [{
+      event_type: "workflow.execution_recovery_authorized",
+      actor_kind: "owner",
+      actor_id: "owner-one",
+      runtime_run_id: "run-one",
+      metadata: recoveryMetadata,
+      created_at: "2026-09-02T08:05:00.000Z",
+    }] },
+    commit,
+  ]);
+  const timeline = await model(database).getRunAuditTimeline("run-one", 10);
+  assert.equal(timeline.verdict, "allow", JSON.stringify(timeline));
+  assert.deepEqual(timeline.data?.[0]?.metadata, recoveryMetadata);
+  database.done();
+});
+
 test("succeeded model ledger cannot override an outcome_unknown outer execution", async () => {
   const state = fixtureContract.createWorkflowRuntimeStateFixture();
   const database = new ReadDatabase([
