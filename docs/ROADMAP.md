@@ -123,7 +123,8 @@ The census recorded the current hardening debt and moved development to mileston
 - **AI-037.1.2 Paid definitive failure fail-safe — DONE**
 - **M1 Roadmap Review Gate — DONE**
 - **Real Provider Gate — IN REVIEW** (M2.0 DONE, M2.1 DONE; M2.2 DEFERRED BY OWNER; M2 not done — see §7)
-- **AI-037.7 Tenant-bound facade + pre-auth limits — IN REVIEW** (active safe-wiring prerequisite; the Owner authorized it to proceed while M2.2 is deferred — see §9)
+- **AI-037.7 Tenant-bound facade + pre-auth limits — DONE** (commit `50aeffb`; see §9)
+- **AI-038.0 Owner Read Backend Bundle — IN REVIEW** (first M3 slice; see §9)
 
 AI-037.1.1 passed independent re-gate and was committed/pushed through the Owner-approved repository workflow.
 
@@ -352,13 +353,36 @@ Run Detail should show:
 - missing or unauthorized objects remain opaque
 - every decision is audit-logged
 
-### AI-038 — Unified Owner Console — PLANNED
+### AI-038 — Unified Owner Console — PLANNED (active M3 umbrella; not DONE)
 
 Mock UI may continue in parallel. Backend wiring is allowed only after the tenant/transport boundary is safe.
 
-### AI-037.7 — Tenant-bound facade + pre-auth limits — IN REVIEW
+#### AI-038.0 — Owner Read Backend Bundle — IN REVIEW
 
-Active safe-wiring prerequisite; the Owner authorized it to proceed while M2.2 remains deferred. The implementation is a read-oriented tenant-bound facade over the existing authorized access. Tenant-bound runtime command wiring remains a later write-boundary step.
+A server-only Owner read seam (`lib/composition/owner-read-runtime.server.ts`, guarded by `server-only`), consumed by future M3 UI in place of raw DB, read model, access or facade objects.
+
+- workspace and Owner principal are fixed at server composition; the tenant is resolved once
+- the public surface takes only `runId` / `limit` for four read operations; there is no write or command surface
+- an internal read-only Owner authorizer denies `execute_runtime_command` and every non-read action
+- the AI-037.7 facade remains the untrusted-input gate
+- the configured Owner principal is **not** authentication; AI-038.0 implements no auth, HTTP, server action or UI wiring
+
+**UI → real runtime data remains locked** until a trustworthy server-side identity/session source exists. This is intentional fail-closed sequencing, not unfinished wiring.
+
+Next (AI-038.1), selected only after the AI-038.0 re-gate: most likely an authenticated Owner identity/session boundary before production UI wiring. Alternatively, if the Owner explicitly chooses it, a strictly local-only development UI proof with hard non-production constraints, defined separately. No auth product is chosen here.
+
+### AI-037.7 — Tenant-bound facade + pre-auth limits — DONE
+
+Passed independent re-gate; commit `50aeffb`.
+
+- trusted resolved-tenant binding
+- a foreign workspace is rejected before authorization or read
+- pre-auth structural/resource gate
+- Proxy/accessor defenses
+- the caller-owned dependency receiver-mutation corrective passed
+- live PostgreSQL tenant isolation passed
+
+Runtime command/write wiring remains deferred to a later write boundary.
 
 - facade bound to resolved tenant
 - workspace mismatch blocked before raw read
@@ -718,7 +742,7 @@ Roadmap does not imply strictly serial development. Parallel work is allowed onl
 
 `AI-037.0 DONE → AI-037.1 DONE → AI-037.1.1 DONE → AI-037.6a DONE → AI-037.4a DONE → AI-037.1.2 DONE → M1 Review Gate DONE → Real Provider Gate IN REVIEW (M2.0 DONE, M2.1 DONE, M2.2 DEFERRED BY OWNER) → M2 Review Gate`
 
-While M2.2 is deferred: `AI-037.7 IN REVIEW` (safe-wiring prerequisite for backend wiring, §9).
+While M2.2 is deferred: `AI-037.7 DONE → AI-038.0 IN REVIEW` (M3 Owner read seam, §9). UI stays on mock data until a trustworthy server-side identity source exists.
 
 ### Early development automation
 
@@ -726,7 +750,7 @@ While M2.2 is deferred: `AI-037.7 IN REVIEW` (safe-wiring prerequisite for backe
 
 ### UI
 
-AI-038 mock UI may proceed in parallel. Backend wiring only after AI-037.7.
+AI-038 mock UI may proceed in parallel. AI-037.7 is DONE and the AI-038.0 read seam is in review; UI wiring to real runtime data additionally requires a trustworthy server-side identity/session source.
 
 ### Execution platform
 
