@@ -13,10 +13,11 @@ import type {
   TenantBoundWorkflowRuntimeFacade,
 } from "../workflows/workflow-runtime-tenant-facade";
 import type { WorkflowRuntimeDatabase } from "../db/workflow-runtime-store";
+import type { ResolvedWorkflowRuntimeTenant } from "../db/workflow-runtime-tenant";
 // @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
 import { freezeModelProviderAdapterData } from "../contracts/model-provider-adapter.ts";
 // @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
-import { createPostgresWorkflowRuntimeTenantResolver } from "../db/workflow-runtime-tenant.ts";
+import { createPostgresWorkflowRuntimeTenantResolver, isResolvedWorkflowRuntimeTenant } from "../db/workflow-runtime-tenant.ts";
 // @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
 import { createTenantBoundWorkflowRuntimeFacade } from "../workflows/workflow-runtime-tenant-facade.ts";
 
@@ -118,30 +119,25 @@ export function createOwnerReadAuthorizer(ownerActorId: string, workspaceId: str
   });
 }
 
-export async function createOwnerReadRuntime(input: unknown): Promise<OwnerReadRuntimeDecision> {
-  if (typeof window !== "undefined") return deny("invalid_configuration");
-  const config = exactOwnData(input, configurationFields);
-  if (!config) return deny("invalid_configuration");
-  const domainWorkspaceId = config.domainWorkspaceId;
-  const ownerActorId = config.ownerActorId;
-  if (typeof domainWorkspaceId !== "string" || !stableIdPattern.test(domainWorkspaceId)
-    || typeof ownerActorId !== "string" || !actorIdPattern.test(ownerActorId)) {
-    return deny("invalid_configuration");
-  }
-  const connect = capturedConnect(config.database);
-  if (!connect) return deny("invalid_configuration");
-  // Receiver-free, frozen: the caller's database object is not retained (AI-037.7 corrective #1).
-  const database: WorkflowRuntimeDatabase = Object.freeze({
+// Receiver-free, frozen: the caller's database object is not retained (AI-037.7 corrective #1).
+function receiverFreeDatabase(input: unknown): WorkflowRuntimeDatabase | null {
+  const connect = capturedConnect(input);
+  if (!connect) return null;
+  return Object.freeze({
     connect: () => Reflect.apply(connect, undefined, []) as ReturnType<WorkflowRuntimeDatabase["connect"]>,
   });
+}
 
+// The one backend builder shared by both compositions: a factual resolved tenant and a fixed
+// principal in, the four-read OwnerReadBackend out.
+function buildOwnerReadBackend(
+  database: WorkflowRuntimeDatabase,
+  tenant: ResolvedWorkflowRuntimeTenant,
+  ownerActorId: string,
+): OwnerReadRuntimeDecision {
   let facade: TenantBoundWorkflowRuntimeFacade;
-  let workspaceId: string;
+  const workspaceId = tenant.workspaceId;
   try {
-    // Resolved once; missing or inactive workspaces and resolver failures all yield null.
-    const tenant = await createPostgresWorkflowRuntimeTenantResolver(database).resolve(domainWorkspaceId);
-    if (!tenant) return deny("workspace_unavailable");
-    workspaceId = tenant.workspaceId;
     facade = createTenantBoundWorkflowRuntimeFacade({
       tenant,
       database,
@@ -175,4 +171,45 @@ export async function createOwnerReadRuntime(input: unknown): Promise<OwnerReadR
     listApprovalQueue: (limit?: unknown) => guarded(() => facade.listApprovalQueue(request({ limit }, true))),
   });
   return Object.freeze({ verdict: "allow" as const, reason: null, backend });
+}
+
+export async function createOwnerReadRuntime(input: unknown): Promise<OwnerReadRuntimeDecision> {
+  if (typeof window !== "undefined") return deny("invalid_configuration");
+  const config = exactOwnData(input, configurationFields);
+  if (!config) return deny("invalid_configuration");
+  const domainWorkspaceId = config.domainWorkspaceId;
+  const ownerActorId = config.ownerActorId;
+  if (typeof domainWorkspaceId !== "string" || !stableIdPattern.test(domainWorkspaceId)
+    || typeof ownerActorId !== "string" || !actorIdPattern.test(ownerActorId)) {
+    return deny("invalid_configuration");
+  }
+  const database = receiverFreeDatabase(config.database);
+  if (!database) return deny("invalid_configuration");
+  try {
+    // Resolved once; missing or inactive workspaces and resolver failures all yield null.
+    const tenant = await createPostgresWorkflowRuntimeTenantResolver(database).resolve(domainWorkspaceId);
+    if (!tenant) return deny("workspace_unavailable");
+    return buildOwnerReadBackend(database, tenant, ownerActorId);
+  } catch {
+    return deny("workspace_unavailable");
+  }
+}
+
+// AI-038.1: narrow internal extension for a composition that has ALREADY resolved the tenant and
+// verified the principal (the authenticated Owner composition), so the tenant is resolved once and
+// the membership check and the backend bind the same factual tenant object. Accepts only a genuine
+// resolved tenant (trusted resolver identity). Not exported from the application entry.
+export function createOwnerReadRuntimeForTenant(input: unknown): OwnerReadRuntimeDecision {
+  if (typeof window !== "undefined") return deny("invalid_configuration");
+  const config = exactOwnData(input, ["database", "tenant", "ownerActorId"]);
+  if (!config) return deny("invalid_configuration");
+  const tenant = config.tenant;
+  const ownerActorId = config.ownerActorId;
+  if (typeof tenant !== "object" || tenant === null || isProxy(tenant) || !isResolvedWorkflowRuntimeTenant(tenant)
+    || typeof ownerActorId !== "string" || !actorIdPattern.test(ownerActorId)) {
+    return deny("invalid_configuration");
+  }
+  const database = receiverFreeDatabase(config.database);
+  if (!database) return deny("invalid_configuration");
+  return buildOwnerReadBackend(database, tenant, ownerActorId);
 }

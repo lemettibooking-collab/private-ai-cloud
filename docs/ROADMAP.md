@@ -124,7 +124,8 @@ The census recorded the current hardening debt and moved development to mileston
 - **M1 Roadmap Review Gate — DONE**
 - **Real Provider Gate — IN REVIEW** (M2.0 DONE, M2.1 DONE; M2.2 DEFERRED BY OWNER; M2 not done — see §7)
 - **AI-037.7 Tenant-bound facade + pre-auth limits — DONE** (commit `50aeffb`; see §9)
-- **AI-038.0 Owner Read Backend Bundle — IN REVIEW** (first M3 slice; see §9)
+- **AI-038.0 Owner Read Backend Bundle — DONE** (commit `ff6eac0`; see §9)
+- **AI-038.1 Identity/Auth Boundary — IN REVIEW** (provider-neutral, request-scoped; see §9)
 
 AI-037.1.1 passed independent re-gate and was committed/pushed through the Owner-approved repository workflow.
 
@@ -357,19 +358,31 @@ Run Detail should show:
 
 Mock UI may continue in parallel. Backend wiring is allowed only after the tenant/transport boundary is safe.
 
-#### AI-038.0 — Owner Read Backend Bundle — IN REVIEW
+#### AI-038.0 — Owner Read Backend Bundle — DONE
 
-A server-only Owner read seam (`lib/composition/owner-read-runtime.server.ts`, guarded by `server-only`), consumed by future M3 UI in place of raw DB, read model, access or facade objects.
+Passed independent re-gate; commit `ff6eac0`.
 
-- workspace and Owner principal are fixed at server composition; the tenant is resolved once
-- the public surface takes only `runId` / `limit` for four read operations; there is no write or command surface
-- an internal read-only Owner authorizer denies `execute_runtime_command` and every non-read action
-- the AI-037.7 facade remains the untrusted-input gate
-- the configured Owner principal is **not** authentication; AI-038.0 implements no auth, HTTP, server action or UI wiring
+- server-only Owner read bundle (`lib/composition/owner-read-runtime.server.ts`)
+- workspace and Owner principal fixed during trusted composition
+- the caller can pass only `runId` / `limit`; four read operations only; no write or command surface
+- live tenant isolation passed
+- no authentication was implemented in AI-038.0
 
-**UI → real runtime data remains locked** until a trustworthy server-side identity/session source exists. This is intentional fail-closed sequencing, not unfinished wiring.
+#### AI-038.1 — Identity/Auth Boundary — IN REVIEW
 
-Next (AI-038.1), selected only after the AI-038.0 re-gate: most likely an authenticated Owner identity/session boundary before production UI wiring. Alternatively, if the Owner explicitly chooses it, a strictly local-only development UI proof with hard non-production constraints, defined separately. No auth product is chosen here.
+Provider-neutral authenticated identity boundary above AI-038.0 (`lib/composition/authenticated-owner-read-runtime.server.ts`, guarded by `server-only`).
+
+- request-scoped `AuthenticatedIdentitySource.resolve()` yields only `{ userId }` (an internal PAC user UUID); nothing is cached across requests
+- in order: tenant from trusted configuration, then identity, then one tenant-scoped check of active user, active membership and an assigned Owner role (the workspace's own role or an explicit global system role), then delegation through AI-038.0
+- the caller never supplies userId, actor, workspace, role or permission; public failures are only `unauthenticated` / `unavailable`
+- revocation applies to the next request composition
+- no concrete auth product, session, cookie, token, HTTP, middleware or UI
+
+#### AI-038.2 — Concrete Owner Session Adapter — PLANNED
+
+Provider/framework-specific verification of the actual Owner session and construction of the AI-038.1 identity source. The provider is not chosen yet; it will be selected after the AI-038.1 re-gate.
+
+**UI → real private runtime data remains locked** until AI-038.2 passes. Only then may production/browser UI wiring proceed. This is intentional fail-closed sequencing.
 
 ### AI-037.7 — Tenant-bound facade + pre-auth limits — DONE
 
@@ -742,7 +755,7 @@ Roadmap does not imply strictly serial development. Parallel work is allowed onl
 
 `AI-037.0 DONE → AI-037.1 DONE → AI-037.1.1 DONE → AI-037.6a DONE → AI-037.4a DONE → AI-037.1.2 DONE → M1 Review Gate DONE → Real Provider Gate IN REVIEW (M2.0 DONE, M2.1 DONE, M2.2 DEFERRED BY OWNER) → M2 Review Gate`
 
-While M2.2 is deferred: `AI-037.7 DONE → AI-038.0 IN REVIEW` (M3 Owner read seam, §9). UI stays on mock data until a trustworthy server-side identity source exists.
+While M2.2 is deferred: `AI-037.7 DONE → AI-038.0 DONE → AI-038.1 IN REVIEW → AI-038.2 PLANNED` (M3 Owner read path, §9). UI stays on mock data until AI-038.2 passes.
 
 ### Early development automation
 
@@ -750,7 +763,7 @@ While M2.2 is deferred: `AI-037.7 DONE → AI-038.0 IN REVIEW` (M3 Owner read se
 
 ### UI
 
-AI-038 mock UI may proceed in parallel. AI-037.7 is DONE and the AI-038.0 read seam is in review; UI wiring to real runtime data additionally requires a trustworthy server-side identity/session source.
+AI-038 mock UI may proceed in parallel. UI wiring to real runtime data requires the AI-038.2 concrete Owner session adapter on top of AI-038.1.
 
 ### Execution platform
 
