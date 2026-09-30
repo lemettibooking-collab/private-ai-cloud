@@ -122,7 +122,8 @@ The census recorded the current hardening debt and moved development to mileston
 - **AI-037.4a Pool release guard + minimum metrics — DONE**
 - **AI-037.1.2 Paid definitive failure fail-safe — DONE**
 - **M1 Roadmap Review Gate — DONE**
-- **Real Provider Gate — IN REVIEW** (M2.0 + M2.1 implemented; Owner-approved M2.2 real call still required, see §7)
+- **Real Provider Gate — IN REVIEW** (M2.0 DONE, M2.1 DONE; M2.2 DEFERRED BY OWNER; M2 not done — see §7)
+- **AI-037.7 Tenant-bound facade + pre-auth limits — IN REVIEW** (active safe-wiring prerequisite; the Owner authorized it to proceed while M2.2 is deferred — see §9)
 
 AI-037.1.1 passed independent re-gate and was committed/pushed through the Owner-approved repository workflow.
 
@@ -213,7 +214,11 @@ M1 is timeboxed operationally rather than by a hard calendar promise. The Owner 
 
 The first real provider route remains OpenAI unless the Owner changes the routing decision, because the abstraction and adapter already exist.
 
-Status: IN REVIEW. M2.0 (real-provider composition root and local runner) and M2.1 (fake OpenAI SDK below the real adapter, against live PostgreSQL) are implemented; no real provider call has been made. M2.2, one Owner-approved paid call, remains required; before it, the Owner verifies the configured model prices against the provider's current pricing and confirms that the provider-reported input tokens equal the preflight count.
+Status: IN REVIEW. M2 is NOT DONE; the M2 Roadmap Review Gate is not complete.
+
+- **M2.0 — DONE.** Real-provider composition root and local runner.
+- **M2.1 — DONE.** Fake OpenAI SDK below the real adapter, against live PostgreSQL.
+- **M2.2 — DEFERRED BY OWNER**, awaiting intentional API billing activation. This is commercial/API sequencing, not a technical blocker in M2.0/M2.1. No real provider call has been made. When API use becomes useful, provider routes will be tested intentionally under their proper gates. Before the one Owner-approved paid call, the Owner verifies the configured model prices against the provider's current pricing and confirms that the provider-reported input tokens equal the preflight count.
 
 M2 proves the direct API-backed `ModelProvider` path. Subscription-backed Codex/Claude Code access is an `ExecutionBackend` concern in M4 and does not replace the M2 real-provider proof.
 
@@ -351,7 +356,9 @@ Run Detail should show:
 
 Mock UI may continue in parallel. Backend wiring is allowed only after the tenant/transport boundary is safe.
 
-### AI-037.7 — Tenant-bound facade + pre-auth limits — REQUIRED FOR WIRING
+### AI-037.7 — Tenant-bound facade + pre-auth limits — IN REVIEW
+
+Active safe-wiring prerequisite; the Owner authorized it to proceed while M2.2 remains deferred. The implementation is a read-oriented tenant-bound facade over the existing authorized access. Tenant-bound runtime command wiring remains a later write-boundary step.
 
 - facade bound to resolved tenant
 - workspace mismatch blocked before raw read
@@ -709,7 +716,9 @@ Roadmap does not imply strictly serial development. Parallel work is allowed onl
 
 ### Current critical line
 
-`AI-037.0 DONE → AI-037.1 DONE → AI-037.1.1 DONE → AI-037.6a DONE → AI-037.4a DONE → AI-037.1.2 DONE → M1 Review Gate DONE → Real Provider Gate IN REVIEW (M2.0 + M2.1; M2.2 pending) → M2 Review Gate`
+`AI-037.0 DONE → AI-037.1 DONE → AI-037.1.1 DONE → AI-037.6a DONE → AI-037.4a DONE → AI-037.1.2 DONE → M1 Review Gate DONE → Real Provider Gate IN REVIEW (M2.0 DONE, M2.1 DONE, M2.2 DEFERRED BY OWNER) → M2 Review Gate`
+
+While M2.2 is deferred: `AI-037.7 IN REVIEW` (safe-wiring prerequisite for backend wiring, §9).
 
 ### Early development automation
 
