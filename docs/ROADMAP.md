@@ -154,7 +154,7 @@ The census recorded the current hardening debt and moved development to mileston
 - **AI-038.0 Owner Read Backend Bundle — DONE** (commit `ff6eac0`; see §9)
 - **AI-038.1 Identity/Auth Boundary — DONE** (commit `a9f2435`; see §9)
 - **AI-038.2a Auth.js GitHub Session Adapter — DONE** (commit `4e76afd`; see §9)
-- **AI-038.2b Real GitHub OAuth Smoke — PLANNED / BLOCKED ON OWNER EXTERNAL CONFIG** (AI-038.2 NOT DONE; see §9)
+- **AI-038.2b Real GitHub OAuth Smoke — IN REVIEW** (author smoke completed; AI-038.2 NOT DONE pending independent re-gate; see §9)
 - **Roadmap Rebase v1.4 — vendor-neutral control plane — documentation only** (this version; `docs/ROADMAP_REBASE_V1.4.md`)
 
 AI-037.1.1 passed independent re-gate and was committed/pushed through the Owner-approved repository workflow.
@@ -424,18 +424,33 @@ Passed independent re-gate; commit `4e76afd`.
 - the concrete identity source returns only `{ userId }` to AI-038.1, which still decides membership and the Owner role per tenant
 - one authentication HTTP surface (`app/api/auth/[...nextauth]`); no proxy/middleware, no business API, no UI wiring
 
-##### AI-038.2b — Real GitHub OAuth Smoke — PLANNED / BLOCKED ON OWNER EXTERNAL CONFIG
+##### AI-038.2b — Real GitHub OAuth Smoke — IN REVIEW
 
-AI-038.2a has passed and is committed. Remaining:
-- factual GitHub OAuth credentials are configured outside git;
-- the factual GitHub account subject is linked to the Owner's PAC user;
-- one real local sign-in, then verification of the session and the authenticated Owner composition;
-- sign-out, and verification that the session is denied;
-- verification that no secret or token leaked.
+The author-side real external smoke ran on 2026-10-01 under the AGENTS.md exception for Owner-approved external smokes:
+- a local GitHub OAuth App, with credentials kept outside git;
+- a throwaway PostgreSQL 16 database;
+- a temporary local proof route, deleted afterwards.
 
-AI-038.2 is complete only when AI-038.2b passes.
+No production code changed. It awaits independent re-gate. Author-side results:
+- a real GitHub sign-in and callback produced an Auth.js JWT session carrying only `pacIdentity { provider, providerSubject }`;
+- with no `auth_identities` row, PAC denied (`unauthenticated`);
+- a temporary mapping from the factual subject to the seeded Owner enabled the real request-scoped `auth()` → AI-038.1 → AI-038.0 path, and one real `getRunOverview` read succeeded;
+- on the same live GitHub session, disabling or deleting the mapping denied, and disabling membership or removing the Owner role denied (`unavailable`); restoring state restored access, with no restart and no re-login;
+- caller-supplied workspace, actor, role and user claims were ignored, and a foreign-tenant run stayed invisible;
+- a real sign-out removed the session cookie, and later requests were denied;
+- after an Owner-reported local exposure of a session cookie, `AUTH_SECRET` was rotated, which invalidates every earlier JWT. A fresh real sign-in then succeeded. The public `/api/auth/session` contained exactly `expires` and `pacIdentity { provider, providerSubject }`, and sign-out removed both the identity and the session cookie.
+
+Findings:
+- Server-side `auth()` in `next-auth` v5 adds `user` = the decoded JWT, which holds only `pacIdentity`. The public `/api/auth/session` does not include it, and the identity adapter ignores it.
+- With stateless JWT, sign-out does not revoke an issued token. A leaked token stays valid until expiry or `AUTH_SECRET` rotation, while PAC authorization (mapping, membership, role) remains revocable per request.
+
+AI-038.2 is complete only when the independent re-gate of AI-038.2b passes.
 
 **UI → real private runtime data remains locked** until AI-038.2 (2a code gate + 2b real OAuth smoke) passes. Only then may production/browser UI wiring proceed. This is intentional fail-closed sequencing.
+
+#### AI-038.3 — Owner Console Real Read Wiring — PLANNED / TO BE SCOPED
+
+Read-only wiring of the Owner Console to the authenticated Owner read path. It starts only after AI-038.2 passes, and its scope needs a separate task definition.
 
 ### AI-037.7 — Tenant-bound facade + pre-auth limits — DONE
 
@@ -871,7 +886,7 @@ Roadmap does not imply strictly serial development. Parallel work is allowed onl
 
 ### A. Current operational line (unchanged by the rebase)
 
-While M2.2 is deferred: `AI-037.7 DONE → AI-038.0 DONE → AI-038.1 DONE → AI-038.2a DONE → AI-038.2b real OAuth smoke (PLANNED / BLOCKED ON OWNER EXTERNAL CONFIG) → Owner Console real read wiring (AI-038.3, to be scoped) → AI-039 Development Workflow Browser` (M3 Owner path, §9). UI stays on mock data until AI-038.2 passes. The rebase does not cancel or skip any unfinished AI-038 work.
+While M2.2 is deferred: `AI-037.7 DONE → AI-038.0 DONE → AI-038.1 DONE → AI-038.2a DONE → AI-038.2b real OAuth smoke (IN REVIEW) → AI-038.3 Owner Console real read wiring (PLANNED / TO BE SCOPED) → AI-039 Development Workflow Browser` (M3 Owner path, §9). UI stays on mock data until AI-038.2 passes. The rebase does not cancel or skip any unfinished AI-038 work.
 
 ### B. First new architecture implementation introduced by v1.4
 
