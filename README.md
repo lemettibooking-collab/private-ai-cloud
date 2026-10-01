@@ -1,46 +1,34 @@
 # Private AI Cloud
 
-Private AI Cloud is a closed AI Operations Center prototype for managing internal knowledge, RAG-style chat, AI departments, workflows, approvals, reports, settings, and roadmap visibility.
+Private AI Cloud (PAC) is a **vendor-neutral AI Engineering Control Plane**. PAC owns the engineering process: FeaturePlan, admission policy, routing, quality and security gates, corrective loop, human approval, audit and cost. Managed or self-hosted executors own the internal agent execution. The product also includes the Owner-facing AI Operations Center for projects, runs, approvals and roadmap.
 
-## Current Status
+The canonical roadmap is [`docs/ROADMAP.md`](docs/ROADMAP.md). The documentation index is [`docs/README.md`](docs/README.md).
 
-Frontend-only MVP UI prototype.
+## Current State
 
-The current baseline is aligned with Product Blueprint v0.2 and includes UI Refinement Patch 1. All data is mocked in the frontend. No backend services or real integrations are implemented yet.
+- **UI:** a Next.js App Router prototype (Dashboard, Knowledge Base, RAG Chat, AI Departments, Workflows, Approvals, Reports, Settings, Roadmap). It is still mostly backed by mocked data.
+- **Backend foundation (server-only):**
+  - PostgreSQL 16 schema and raw SQL migrations (`db/`);
+  - a durable workflow runtime with tenant isolation, approvals, budgets, idempotency, audit and recovery semantics (`lib/workflows/`, `lib/db/`);
+  - FeaturePlan, admission policy, development-execution and scheduler contracts (`lib/contracts/`);
+  - a `ModelProvider` abstraction with an OpenAI adapter and a deterministic mock (`lib/providers/`).
+- **Owner auth/session (through AI-038.2a):**
+  - the Owner read boundary and identity boundary;
+  - an Auth.js GitHub session adapter (`lib/auth/`), whose only HTTP route is `app/api/auth/[...nextauth]`.
+- **Not complete yet:**
+  - the real GitHub OAuth smoke (AI-038.2b);
+  - UI wiring to real runtime data;
+  - runtime business APIs;
+  - executor integrations (`ExecutorAdapter`, starting with AI-041.0);
+  - RAG and real external integrations;
+  - production deployment.
 
 ## Stack
 
-- Next.js App Router
-- TypeScript
-- Tailwind CSS
-- Mocked data in local TypeScript modules
-
-## Included UI Areas
-
-- Dashboard
-- Knowledge Base
-- RAG Chat
-- AI Departments
-- Workflows
-- Approvals
-- Reports
-- Settings
-- Roadmap
-
-## Not Implemented Yet
-
-- Backend
-- Database
-- Authentication
-- Real LLM/RAG execution
-- Real integrations
-- Docker/self-host runtime
-
-## Database Status
-
-The current project is still frontend-only. DB-01 only adds database scaffold documentation and environment placeholders. There is no runtime database connection yet.
-
-Future DB work targets PostgreSQL. Docker is not required for DB-01.
+- Next.js App Router, TypeScript, Tailwind CSS
+- PostgreSQL 16 (`pg`), raw SQL migrations
+- Auth.js (`next-auth` v5 beta), GitHub provider, JWT sessions
+- Node.js built-in test runner; opt-in live PostgreSQL suite (`npm run test:pg`)
 
 ## Local Prerequisites
 
@@ -63,5 +51,7 @@ npm test
 npm run build
 npm run dev
 ```
+
+`npm run test:pg` runs the opt-in live PostgreSQL regression suite against a throwaway local database. Tests never call real model providers or perform real OAuth.
 
 Open the local app at `http://localhost:3000` after `npm run dev`.

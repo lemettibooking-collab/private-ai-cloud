@@ -10,11 +10,19 @@ This version has breaking changes - APIs, conventions, and file structure may al
 
 ### Project state
 
-- **UI** (`app/`, `components/`): a prototype on mocked data. It has no transport to the backend, no routes or server actions that call the runtime, and no auth.
-- **Backend runtime layer** (server-only, reachable only from tests today):
+- **Product role:** Private AI Cloud is a vendor-neutral AI Engineering Control Plane.
+  - PAC owns the engineering process; executors own the internal agent execution.
+  - Do not build PAC-owned generic agent loops, context compaction, sandboxes, or browser or subagent runtimes unless the roadmap explicitly calls for them.
+  - Canonical roadmap: `docs/ROADMAP.md`. Document authority: `docs/README.md`. Treat v0.3/v0.4/v0.5 strategy documents as historical.
+- **UI** (`app/`, `components/`): a prototype that is still mostly on mocked data. It has no transport to the runtime and no routes or server actions that call the runtime, and pages do not consume a session.
+- **Auth:** Auth.js with GitHub as the only provider (AI-038.2a), wired to the server-only Owner identity boundary (`lib/auth/`, `lib/composition/*owner-read*`).
+  - The only HTTP route is the Auth.js route `app/api/auth/[...nextauth]`. There is no business API.
+  - The real GitHub OAuth smoke (AI-038.2b) is not complete.
+- **Backend runtime layer** (server-only; no runtime business API is exposed):
   - `lib/contracts/`: domain contracts;
-  - `lib/workflows/`: runtime service, authorized access facade, API;
+  - `lib/workflows/`: runtime service, authorized access facade, tenant facade, API;
   - `lib/providers/`: model provider adapters;
+  - `lib/composition/`: server-only composition roots (real provider, Owner read, authenticated Owner read);
   - `lib/db/`: PostgreSQL store, read model, tenant resolver, `pg` adapter;
   - `db/migrations/`, `db/seeds/`: raw SQL, PostgreSQL 16.
 - **Work is tracked as numbered tasks (`AI-0xx`).** Security-relevant stages pass an adversarial gate before the next stage starts (see "Task and gate process").
@@ -23,15 +31,22 @@ This version has breaking changes - APIs, conventions, and file structure may al
 
 - Work only inside `private-ai-cloud`. Do not modify the sibling `twenty` repository, and do not copy Twenty code, styles, components, schemas, assets or product text. Use it only as an architectural reference.
 - Change backend, database or provider code only within an explicit task that names that scope. Do not extend a task's scope on your own. Record out-of-scope findings as hardening debt instead.
-- Do not add without a separate explicit task:
+- Do not add or extend the following without a separate explicit task that authorizes it. One approved Auth.js route existing does not authorize more:
   - Docker;
-  - end-user auth;
+  - end-user auth, or changes to the existing auth/session surface;
   - RAG;
-  - real integrations;
+  - real integrations, including executor or provider SDKs;
   - HTTP routes or server actions that expose the runtime;
   - UI wiring to the backend;
   - new dependencies.
-- Never make real LLM or provider network calls in tests or harnesses. Use the deterministic mock provider or the real adapter with an injected fake SDK.
+- Automated tests and ordinary harnesses never make real LLM, provider, executor or OAuth network calls. They must use the deterministic mock provider, or the real adapter with an injected fake SDK.
+- A real external call is allowed only in a separately scoped integration smoke task (for example AI-038.2b Real GitHub OAuth Smoke). That task must:
+  - explicitly authorize that exact external integration smoke;
+  - have Owner approval;
+  - keep credentials outside git;
+  - stay outside the automated test suite (`npm test`, `npm run test:pg`, CI);
+  - sanitize logs and evidence (no secrets, tokens, cookies or raw provider errors);
+  - perform only the bounded external action approved by the task.
 - Keep Product Blueprint alignment across Dashboard, Knowledge Base, RAG Chat, AI Departments, Workflows, Approvals, Reports, Settings and Roadmap.
 
 ### Security invariants (must never regress)
