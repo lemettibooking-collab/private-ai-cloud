@@ -1,250 +1,122 @@
 import Link from "next/link";
-import { ApprovalCard } from "@/components/domain/approval-card";
-import { AuditTimeline } from "@/components/domain/audit-timeline";
+import { ApprovalQueue } from "@/components/domain/owner-console/approval-queue";
+import { OwnerDataUnavailable, ProjectContext, SignInRequired } from "@/components/domain/owner-console/owner-state";
+import { RunTable } from "@/components/domain/owner-console/run-table";
 import { AppShell } from "@/components/shell/app-shell";
-import { DataTable } from "@/components/ui/data-table";
-import { PageHeader } from "@/components/ui/page-header";
+import { EmptyState } from "@/components/ui/empty-state";
 import { SectionCard } from "@/components/ui/section-card";
-import { StatCard } from "@/components/ui/stat-card";
-import { StatusBadge } from "@/components/ui/status-badge";
-import {
-  activityStats,
-  approvals,
-  auditEvents,
-  departments,
-  quickActions,
-  roadmapItems,
-  weeklyOwnerReportSummary,
-  workflowRuns,
-} from "@/lib/mock-data";
-import type { StatusTone } from "@/types/app";
-import type { WorkflowRun } from "@/types/workflow";
+import { loadOwnerConsoleOverview } from "@/lib/composition/owner-console-read.server";
 
-export default function DashboardPage() {
+type MetricProps = { label: string; value: React.ReactNode; detail: string; tone?: "warn" | "bad" | "ok" | "neutral" };
+
+const metricTone = { warn: "text-warn", bad: "text-bad", ok: "text-ok", neutral: "text-ink" } as const;
+
+function Metric({ label, value, detail, tone = "neutral" }: MetricProps) {
+  return (
+    <div className="min-w-0 px-4 py-3.5">
+      <p className="pac-label">{label}</p>
+      <p className={`mt-2 font-mono text-[28px] font-medium leading-none tracking-tight ${metricTone[tone]}`}>{value}</p>
+      <p className="mt-2 truncate text-[11.5px] text-ink-3">{detail}</p>
+    </div>
+  );
+}
+
+export default async function DashboardPage() {
+  const overview = await loadOwnerConsoleOverview();
+
   return (
     <AppShell>
-      <PageHeader
-        description="Owner attention center for approvals, workflow activity, AI outputs, system health, and weekly reporting."
-        eyebrow="Owner dashboard"
-        title="Smart Algorithms Demo operations"
-      />
-
-      <SectionCard
-        description="Owner-first shortcuts for the MVP Smart Algorithms AI Operations Center."
-        title="Quick actions"
-      >
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          {quickActions.map((action) => (
-            <Link
-              className="rounded-lg border border-slate-800 bg-slate-900/60 p-4 transition hover:border-cyan-400/30 hover:bg-slate-900"
-              href={action.href}
-              key={action.title}
-            >
-              <div className="flex items-start justify-between gap-3">
-                <p className="text-sm font-semibold text-slate-100">
-                  {action.title}
-                </p>
-                <StatusBadge tone={action.tone}>open</StatusBadge>
-              </div>
-              <p className="mt-2 text-sm leading-6 text-slate-400">
-                {action.description}
-              </p>
-            </Link>
-          ))}
+      <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <p className="pac-label !text-accent">Owner attention</p>
+          <h1 className="mt-1 text-xl font-semibold tracking-tight text-ink">Mission control</h1>
         </div>
-      </SectionCard>
-
-      <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        {activityStats.map((stat) => (
-          <StatCard key={stat.label} stat={stat} />
-        ))}
+        {overview.project && <ProjectContext project={overview.project} />}
       </div>
 
-      <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(360px,0.9fr)]">
-        <SectionCard
-          description="Decisions that should happen before the system does anything outside the prototype."
-          title="Owner attention center"
-        >
-          <div className="space-y-3">
-            {[
-              ["Approve or reject Telegram publication", "high risk"],
-              ["Retry failed SEO Strategy indexing", "knowledge gap"],
-              ["Review Codex task before launch", "approval gate"],
-              ["Keep local runner and integrations locked", "system policy"],
-            ].map(([title, label]) => (
-              <div
-                className="flex items-start justify-between gap-3 rounded-lg border border-slate-800 bg-slate-900/50 p-3"
-                key={title}
-              >
-                <p className="text-sm text-slate-200">{title}</p>
-                <StatusBadge tone="warning">{label}</StatusBadge>
-              </div>
-            ))}
+      {overview.state === "unauthenticated" && <SignInRequired />}
+      {overview.state === "unavailable" && <OwnerDataUnavailable />}
+
+      {overview.state === "available" && (
+        <>
+          <div className="grid grid-cols-2 divide-line rounded-pac border border-line bg-panel max-lg:[&>*:nth-child(n+3)]:border-t max-lg:[&>*:nth-child(n+3)]:border-line lg:grid-cols-4 lg:divide-x">
+            <Metric
+              detail={overview.queueTruncated ? "Queue shows the first 100 pending" : "Pending runtime approvals"}
+              label="Pending approvals"
+              tone={overview.pendingApprovals > 0 ? "warn" : "ok"}
+              value={`${overview.pendingApprovals}${overview.queueTruncated ? "+" : ""}`}
+            />
+            <Metric
+              detail="High or critical risk, pending"
+              label="High / critical"
+              tone={overview.highRiskApprovals > 0 ? "bad" : "neutral"}
+              value={overview.highRiskApprovals}
+            />
+            <Metric
+              detail="Distinct runs referenced by approvals"
+              label="Runs requiring attention"
+              tone={overview.attentionRuns.length > 0 ? "warn" : "neutral"}
+              value={overview.attentionRuns.length + overview.attentionRunsUnavailable + overview.attentionRunsOmitted}
+            />
+            <Metric
+              detail={overview.project.slug}
+              label="Current project"
+              value={<span className="font-sans text-lg font-semibold text-ink">{overview.project.displayName}</span>}
+            />
           </div>
-        </SectionCard>
 
-        <SectionCard
-          description="High-priority items that need human review before any external action."
-          title="Pending Approvals"
-        >
-          <div className="space-y-4">
-            {approvals.slice(0, 2).map((approval) => (
-              <ApprovalCard approval={approval} key={approval.id} />
-            ))}
-          </div>
-        </SectionCard>
-      </div>
-
-      <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.7fr)]">
-        <SectionCard title="Activity Summary">
-          <div className="grid gap-3 md:grid-cols-3">
-            {[
-              ["MVP workflows", "5 active"],
-              ["AI Departments", `${departments.length} visible`],
-              ["External actions", "locked"],
-            ].map(([label, value]) => (
-              <div
-                className="rounded-lg border border-slate-800 bg-slate-900/50 p-4"
-                key={label}
-              >
-                <p className="text-xs font-medium uppercase text-slate-500">
-                  {label}
-                </p>
-                <p className="mt-2 text-lg font-semibold text-slate-50">
-                  {value}
-                </p>
-              </div>
-            ))}
-          </div>
-        </SectionCard>
-
-        <SectionCard
-          description="Current operating posture for the prototype."
-          title="System Health"
-        >
-          <div className="space-y-3">
-            {(
-              [
-                ["Knowledge indexing", "1 failed document", "danger"],
-                ["External integrations", "Locked by default", "locked"],
-                ["Workflow worker", "Mocked / not connected", "neutral"],
-                ["Approval policy", "Manual review required", "success"],
-              ] satisfies Array<[string, string, StatusTone]>
-            ).map(([label, value, tone]) => (
-              <div
-                className="flex items-center justify-between rounded-lg border border-slate-800 bg-slate-900/50 p-3"
-                key={label}
-              >
-                <span className="text-sm text-slate-300">{label}</span>
-                <StatusBadge tone={tone}>{value}</StatusBadge>
-              </div>
-            ))}
-          </div>
-        </SectionCard>
-      </div>
-
-      <div className="mt-6 grid gap-6 xl:grid-cols-2">
-        <SectionCard
-          description="Recent generated outputs and run states."
-          title="Recent Workflow Runs"
-        >
-          <DataTable<WorkflowRun>
-            columns={[
-              { key: "title", header: "Run" },
-              {
-                key: "status",
-                header: "Status",
-                render: (row) => (
-                  <StatusBadge tone={row.statusTone}>{row.status}</StatusBadge>
-                ),
-              },
-              { key: "requestedBy", header: "Owner" },
-              { key: "updatedAt", header: "Updated" },
-            ]}
-            getRowKey={(row) => row.id}
-            rows={workflowRuns}
-          />
-        </SectionCard>
-
-        <SectionCard
-          description="Generated AI artifacts that may require review."
-          title="Recent AI Outputs"
-        >
-          <div className="space-y-3">
-            {workflowRuns.map((run) => (
-              <div
-                className="rounded-lg border border-slate-800 bg-slate-900/50 p-4"
-                key={run.id}
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <p className="text-sm font-medium text-slate-100">
-                    {run.title}
-                  </p>
-                  <StatusBadge tone={run.statusTone}>{run.status}</StatusBadge>
-                </div>
-                <p className="mt-2 text-sm leading-6 text-slate-400">
-                  {run.outputPreview}
-                </p>
-              </div>
-            ))}
-          </div>
-        </SectionCard>
-      </div>
-
-      <div className="mt-6 grid gap-6 xl:grid-cols-2">
-        <SectionCard title="Risk / Attention Items">
-          <AuditTimeline events={auditEvents} />
-        </SectionCard>
-
-        <SectionCard
-          description="Latest owner-facing summary generated from mocked operational data."
-          title={weeklyOwnerReportSummary.title}
-        >
-          <p className="text-sm leading-6 text-slate-300">
-            {weeklyOwnerReportSummary.subtitle}
-          </p>
-          <div className="mt-4 grid gap-3 md:grid-cols-2">
-            {weeklyOwnerReportSummary.metrics.map((metric) => (
-              <div
-                className="rounded-lg border border-slate-800 bg-slate-900/50 p-3"
-                key={metric.label}
-              >
-                <p className="text-xs font-medium uppercase text-slate-500">
-                  {metric.label}
-                </p>
-                <p className="mt-2 text-xl font-semibold text-slate-50">
-                  {metric.value}
-                </p>
-              </div>
-            ))}
-          </div>
-        </SectionCard>
-      </div>
-
-      <div className="mt-6">
-        <SectionCard
-          action={<StatusBadge tone="success">current: v0.1</StatusBadge>}
-          description="The prototype is intentionally scoped to the first Smart Algorithms internal demo."
-          title="Roadmap focus"
-        >
-          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-            <div>
-              <p className="text-lg font-semibold text-slate-50">
-                {roadmapItems[0].title}
-              </p>
-              <p className="mt-2 text-sm leading-6 text-slate-400">
-                {roadmapItems[0].description}
-              </p>
-            </div>
-            <Link
-              className="inline-flex h-9 items-center justify-center rounded-md border border-slate-600/80 bg-slate-900/80 px-3 text-sm font-medium text-slate-200 transition hover:bg-slate-800"
-              href="/roadmap"
+          <div className="mt-4 grid gap-4 xl:grid-cols-12">
+            <SectionCard
+              action={<Link className="text-xs text-accent hover:underline" href="/approvals">All approvals →</Link>}
+              className="xl:col-span-7"
+              description="Pending runtime approvals, highest risk first. Read-only."
+              title="Attention queue"
             >
-              Open Roadmap
-            </Link>
+              {overview.approvals.length === 0 ? (
+                <EmptyState description="There are no pending runtime approvals for this project." title="Nothing needs your decision" />
+              ) : (
+                <div className="-mx-4 -my-4">
+                  <ApprovalQueue approvals={overview.approvals.slice(0, 8)} compact />
+                  {overview.approvals.length > 8 && (
+                    <p className="border-t border-line px-4 py-2 text-xs text-ink-3">
+                      +{overview.approvals.length - 8} more in <Link className="text-accent hover:underline" href="/approvals">Approvals</Link>
+                    </p>
+                  )}
+                </div>
+              )}
+            </SectionCard>
+
+            <SectionCard
+              action={<Link className="text-xs text-accent hover:underline" href="/runs">Runs →</Link>}
+              className="xl:col-span-5"
+              description="Runs referenced by the current approval queue — not all runs."
+              title="Approval-linked runs"
+            >
+              {overview.attentionRuns.length === 0 ? (
+                <p className="text-[13px] text-ink-3">No approval-linked runs to show.</p>
+              ) : (
+                <div className="-mx-4 -my-4">
+                  <RunTable runs={overview.attentionRuns} />
+                </div>
+              )}
+              {overview.attentionRunsUnavailable + overview.attentionRunsOmitted > 0 && (
+                <p className="mt-3 text-[11.5px] text-ink-3">
+                  {overview.attentionRunsUnavailable > 0 && `${overview.attentionRunsUnavailable} referenced run(s) unavailable. `}
+                  {overview.attentionRunsOmitted > 0 && `${overview.attentionRunsOmitted} more not loaded on this view.`}
+                </p>
+              )}
+            </SectionCard>
           </div>
-        </SectionCard>
-      </div>
+
+          <div className="mt-4 rounded-pac border border-line bg-panel px-4 py-3">
+            <p className="pac-label">Data coverage</p>
+            <p className="mt-1.5 text-xs leading-5 text-ink-3">
+              Live: approval queue, approval-linked run overviews; per-run usage, cost and audit in Run Detail.
+              Not connected yet: global run discovery, multi-project registry, task creation and approval decisions.
+            </p>
+          </div>
+        </>
+      )}
     </AppShell>
   );
 }

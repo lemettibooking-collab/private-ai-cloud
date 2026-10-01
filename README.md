@@ -6,18 +6,17 @@ The canonical roadmap is [`docs/ROADMAP.md`](docs/ROADMAP.md). The documentation
 
 ## Current State
 
-- **UI:** a Next.js App Router prototype (Dashboard, Knowledge Base, RAG Chat, AI Departments, Workflows, Approvals, Reports, Settings, Roadmap). It is still mostly backed by mocked data.
+- **UI:** the Owner Console (Next.js App Router, Mission Control shell). Dashboard, Projects, Runs, Run Detail and Approvals read real runtime data read-only for the authenticated Owner (AI-038.3). Other prototype pages remain on mocked data.
 - **Backend foundation (server-only):**
   - PostgreSQL 16 schema and raw SQL migrations (`db/`);
   - a durable workflow runtime with tenant isolation, approvals, budgets, idempotency, audit and recovery semantics (`lib/workflows/`, `lib/db/`);
   - FeaturePlan, admission policy, development-execution and scheduler contracts (`lib/contracts/`);
   - a `ModelProvider` abstraction with an OpenAI adapter and a deterministic mock (`lib/providers/`).
-- **Owner auth/session (through AI-038.2a):**
+- **Owner auth/session (AI-038.2, done):**
   - the Owner read boundary and identity boundary;
   - an Auth.js GitHub session adapter (`lib/auth/`), whose only HTTP route is `app/api/auth/[...nextauth]`.
 - **Not complete yet:**
-  - the real GitHub OAuth smoke (AI-038.2b);
-  - UI wiring to real runtime data;
+  - UI write actions (task creation, approve/reject), global run listing and multi-project switching;
   - runtime business APIs;
   - executor integrations (`ExecutorAdapter`, starting with AI-041.0);
   - RAG and real external integrations;

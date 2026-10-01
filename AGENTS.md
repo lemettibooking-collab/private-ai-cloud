@@ -14,10 +14,10 @@ This version has breaking changes - APIs, conventions, and file structure may al
   - PAC owns the engineering process; executors own the internal agent execution.
   - Do not build PAC-owned generic agent loops, context compaction, sandboxes, or browser or subagent runtimes unless the roadmap explicitly calls for them.
   - Canonical roadmap: `docs/ROADMAP.md`. Document authority: `docs/README.md`. Treat v0.3/v0.4/v0.5 strategy documents as historical.
-- **UI** (`app/`, `components/`): a prototype that is still mostly on mocked data. It has no transport to the runtime and no routes or server actions that call the runtime, and pages do not consume a session.
+- **UI** (`app/`, `components/`): Owner Console pages (Dashboard, Projects, Runs, Run Detail, Approvals) read real runtime data **read-only** through the server-only loader `lib/composition/owner-console-read.server.ts` (AI-038.3), called from React Server Components. There is no business HTTP API, no Server Action and no write path. Other prototype pages are still on mocked data.
 - **Auth:** Auth.js with GitHub as the only provider (AI-038.2a), wired to the server-only Owner identity boundary (`lib/auth/`, `lib/composition/*owner-read*`).
   - The only HTTP route is the Auth.js route `app/api/auth/[...nextauth]`. There is no business API.
-  - The real GitHub OAuth smoke (AI-038.2b) is not complete.
+  - The real GitHub OAuth smoke (AI-038.2b) passed; AI-038.2 is DONE.
 - **Backend runtime layer** (server-only; no runtime business API is exposed):
   - `lib/contracts/`: domain contracts;
   - `lib/workflows/`: runtime service, authorized access facade, tenant facade, API;
@@ -37,7 +37,7 @@ This version has breaking changes - APIs, conventions, and file structure may al
   - RAG;
   - real integrations, including executor or provider SDKs;
   - HTTP routes or server actions that expose the runtime;
-  - UI wiring to the backend;
+  - UI wiring to the backend beyond the AI-038.3 read-only Owner Console loader, and any UI write action;
   - new dependencies.
 - Automated tests and ordinary harnesses never make real LLM, provider, executor or OAuth network calls. They must use the deterministic mock provider, or the real adapter with an injected fake SDK.
 - A real external call is allowed only in a separately scoped integration smoke task (for example AI-038.2b Real GitHub OAuth Smoke). That task must:

@@ -1,115 +1,53 @@
-import { ApprovalCard } from "@/components/domain/approval-card";
+import { ApprovalQueue } from "@/components/domain/owner-console/approval-queue";
+import { OwnerDataUnavailable, ProjectContext, SignInRequired } from "@/components/domain/owner-console/owner-state";
 import { AppShell } from "@/components/shell/app-shell";
-import { ActionButton } from "@/components/ui/action-button";
+import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { SectionCard } from "@/components/ui/section-card";
-import { StatusBadge } from "@/components/ui/status-badge";
-import { approvals } from "@/lib/mock-data";
+import { loadOwnerConsoleOverview } from "@/lib/composition/owner-console-read.server";
 
-export default function ApprovalsPage() {
+// Read-only approval queue from OwnerReadBackend.listApprovalQueue. Decisions (approve / reject)
+// are intentionally absent: the write boundary does not exist yet.
+export default async function ApprovalsPage() {
+  const overview = await loadOwnerConsoleOverview();
+
   return (
     <AppShell>
       <PageHeader
-        description="Human review queue for generated outputs and locked external actions. All action buttons are mocked or disabled."
+        action={overview.project ? <ProjectContext project={overview.project} /> : undefined}
+        description="Pending runtime approvals for the current project, highest risk first. Each item opens its Run."
         eyebrow="Approvals"
         title="Approval queue"
       />
 
-      <SectionCard title="Approval-first policy">
-        <div className="grid gap-3 md:grid-cols-3">
-          {[
-            ["External actions", "locked by default"],
-            ["Audit trail", "required for every request"],
-            ["Merge", "always manual outside the system"],
-          ].map(([label, value]) => (
-            <div
-              className="rounded-lg border border-slate-800 bg-slate-900/50 p-4"
-              key={label}
-            >
-              <p className="text-xs font-medium uppercase text-slate-500">
-                {label}
-              </p>
-              <p className="mt-2 text-sm font-semibold text-slate-100">
-                {value}
-              </p>
-            </div>
-          ))}
-        </div>
-      </SectionCard>
+      {overview.state === "unauthenticated" && <SignInRequired />}
+      {overview.state === "unavailable" && <OwnerDataUnavailable />}
 
-      <div className="my-6 flex flex-wrap gap-2">
-        {["All", "Pending", "High risk", "Blocked", "Edited"].map(
-          (filter, index) => (
-            <StatusBadge key={filter} tone={index === 0 ? "info" : "neutral"}>
-              {filter}
-            </StatusBadge>
-          ),
-        )}
-      </div>
-
-      <div className="grid gap-4 xl:grid-cols-2">
-        {approvals.map((approval) => (
-          <div className="space-y-3" key={approval.id}>
-            <ApprovalCard approval={approval} />
-            <div className="rounded-lg border border-slate-800 bg-slate-900/50 p-4">
-              <div className="grid gap-3 lg:grid-cols-3">
-                <div>
-                  <p className="text-xs font-medium uppercase text-slate-500">
-                    Allowed approvers
-                  </p>
-                  <p className="mt-2 text-sm text-slate-300">
-                    {approval.allowedApprovers?.join(", ") ?? "Owner"}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-xs font-medium uppercase text-slate-500">
-                    Risk level
-                  </p>
-                  <div className="mt-2">
-                    <StatusBadge tone={approval.riskTone}>
-                      {approval.riskLevel}
-                    </StatusBadge>
-                  </div>
-                </div>
-                <div>
-                  <p className="text-xs font-medium uppercase text-slate-500">
-                    Audit trail hint
-                  </p>
-                  <p className="mt-2 text-sm text-slate-300">
-                    {approval.auditHint}
-                  </p>
-                </div>
+      {overview.state === "available" && (
+        <div className="grid gap-4 xl:grid-cols-12">
+          <SectionCard
+            className="xl:col-span-9"
+            description={`${overview.pendingApprovals}${overview.queueTruncated ? "+" : ""} pending · ${overview.highRiskApprovals} high/critical`}
+            title="Current approval queue"
+          >
+            {overview.approvals.length === 0 ? (
+              <EmptyState description="There are no pending runtime approvals for this project." title="Queue is clear" />
+            ) : (
+              <div className="-mx-4 -my-4">
+                <ApprovalQueue approvals={overview.approvals} />
               </div>
-              <div className="mt-4">
-                <ActionButton href={`/approvals/${approval.id}`} variant="secondary">
-                  Open detail
-                </ActionButton>
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      <div className="mt-6">
-        <SectionCard title="Approval detail placeholder">
-          <div className="grid gap-4 lg:grid-cols-3">
-            {["Original payload", "Edited payload", "Final payload"].map(
-              (label) => (
-                <div
-                  className="rounded-lg border border-slate-800 bg-slate-900/60 p-4"
-                  key={label}
-                >
-                  <p className="text-sm font-medium text-slate-100">{label}</p>
-                  <p className="mt-2 text-sm leading-6 text-slate-400">
-                    Before/after preview will be shown here when a queue item is
-                    selected.
-                  </p>
-                </div>
-              ),
             )}
-          </div>
-        </SectionCard>
-      </div>
+          </SectionCard>
+
+          <SectionCard className="xl:col-span-3" title="Decision boundary">
+            <p className="text-[13px] leading-5 text-ink-2">Read-only.</p>
+            <p className="mt-1.5 text-xs leading-5 text-ink-3">
+              Approve and reject are not available in the Owner Console yet. They require a separate,
+              audited write boundary. Result acceptance, commit, push and deploy remain separate approvals.
+            </p>
+          </SectionCard>
+        </div>
+      )}
     </AppShell>
   );
 }

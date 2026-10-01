@@ -3,11 +3,12 @@ type DetailDrawerProps = {
   children: React.ReactNode;
 };
 
+// Context drawer. AppShell renders it only when a page passes real context (no idle placeholder).
 export function DetailDrawer({ title, children }: DetailDrawerProps) {
   return (
-    <aside className="hidden w-80 shrink-0 border-l border-slate-800 bg-slate-950/80 p-5 xl:block">
-      <p className="text-sm font-semibold text-slate-100">{title}</p>
-      <div className="mt-4">{children}</div>
+    <aside className="hidden w-80 shrink-0 border-l border-line bg-panel p-4 xl:block">
+      <p className="pac-label !text-ink-2">{title}</p>
+      <div className="mt-3">{children}</div>
     </aside>
   );
 }

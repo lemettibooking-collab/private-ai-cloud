@@ -154,7 +154,8 @@ The census recorded the current hardening debt and moved development to mileston
 - **AI-038.0 Owner Read Backend Bundle — DONE** (commit `ff6eac0`; see §9)
 - **AI-038.1 Identity/Auth Boundary — DONE** (commit `a9f2435`; see §9)
 - **AI-038.2a Auth.js GitHub Session Adapter — DONE** (commit `4e76afd`; see §9)
-- **AI-038.2b Real GitHub OAuth Smoke — IN REVIEW** (author smoke completed; AI-038.2 NOT DONE pending independent re-gate; see §9)
+- **AI-038.2b Real GitHub OAuth Smoke — DONE** (commit `12212ad`; passed independent re-gate; **AI-038.2 DONE**; see §9)
+- **AI-038.3 Owner Console Real Read Wiring + Mission Control UI Foundation — IN REVIEW** (see §9)
 - **Roadmap Rebase v1.4 — vendor-neutral control plane — documentation only** (this version; `docs/ROADMAP_REBASE_V1.4.md`)
 
 AI-037.1.1 passed independent re-gate and was committed/pushed through the Owner-approved repository workflow.
@@ -410,7 +411,7 @@ Passed independent re-gate; commit `a9f2435`.
 - the browser cannot claim a user, workspace or role
 - no concrete authentication existed in AI-038.1
 
-#### AI-038.2 — Concrete Owner Session Adapter — NOT DONE
+#### AI-038.2 — Concrete Owner Session Adapter — DONE
 
 Decomposed as follows.
 
@@ -424,7 +425,9 @@ Passed independent re-gate; commit `4e76afd`.
 - the concrete identity source returns only `{ userId }` to AI-038.1, which still decides membership and the Owner role per tenant
 - one authentication HTTP surface (`app/api/auth/[...nextauth]`); no proxy/middleware, no business API, no UI wiring
 
-##### AI-038.2b — Real GitHub OAuth Smoke — IN REVIEW
+##### AI-038.2b — Real GitHub OAuth Smoke — DONE
+
+Passed independent re-gate; commit `12212ad`.
 
 The author-side real external smoke ran on 2026-10-01 under the AGENTS.md exception for Owner-approved external smokes:
 - a local GitHub OAuth App, with credentials kept outside git;
@@ -444,13 +447,36 @@ Findings:
 - Server-side `auth()` in `next-auth` v5 adds `user` = the decoded JWT, which holds only `pacIdentity`. The public `/api/auth/session` does not include it, and the identity adapter ignores it.
 - With stateless JWT, sign-out does not revoke an issued token. A leaked token stays valid until expiry or `AUTH_SECRET` rotation, while PAC authorization (mapping, membership, role) remains revocable per request.
 
-AI-038.2 is complete only when the independent re-gate of AI-038.2b passes.
+AI-038.2 is DONE: both AI-038.2a and AI-038.2b passed independent re-gate.
 
-**UI → real private runtime data remains locked** until AI-038.2 (2a code gate + 2b real OAuth smoke) passes. Only then may production/browser UI wiring proceed. This is intentional fail-closed sequencing.
+**UI → real private runtime data** was locked until AI-038.2 passed (intentional fail-closed sequencing). It is now unlocked **for read-only wiring only**, through AI-038.3. Writes still require a separate, explicitly approved write boundary.
 
-#### AI-038.3 — Owner Console Real Read Wiring — PLANNED / TO BE SCOPED
+#### AI-038.3 — Owner Console Real Read Wiring + Mission Control UI Foundation — IN REVIEW
 
-Read-only wiring of the Owner Console to the authenticated Owner read path. It starts only after AI-038.2 passes, and its scope needs a separate task definition.
+Author implementation is complete and awaits independent re-gate.
+
+- **Read path:** a server-only Owner Console loader (`lib/composition/owner-console-read.server.ts`) → `createRequestOwnerReadRuntime` (real Auth.js `auth()` → AI-038.1 → AI-038.0) → PostgreSQL. The workspace comes only from trusted server configuration. No business HTTP API, no Server Action, no write.
+- **Real data:**
+  - the Dashboard (attention metrics, approval queue, approval-linked runs);
+  - Approvals (read-only queue, no decision controls);
+  - Runs (approval-linked runs only; global run discovery is not connected);
+  - Run Detail (overview, steps, approval, usage/cost, audit);
+  - Projects (the current trusted project only).
+- **Mission Control shell:** Projects-first navigation, a top bar with a project switcher that shows only the trusted current project, a real pending-approval indicator and an Owner state. Fonts stay Geist / Geist Mono.
+- **Not included:** global `listRuns`, a trusted multi-project registry, task creation, approve/reject, and the full My Attention / Tasks UX.
+- **Owner visual checkpoint: ACCEPTED** as the UX foundation (Projects-first, Owner-attention-first, task/run-centric). Visual refinement is deferred to AI-038.5.
+
+#### AI-038.5 — Mission Control Visual Refinement — PLANNED (deferred from the AI-038.3 Owner checkpoint)
+
+The AI-038.3 foundation is accepted but less refined than the approved Mission Control reference. Scope:
+- a stronger Mission Control character and a more distinctive panel hierarchy;
+- tighter premium typography and spacing, and a better information-density rhythm;
+- telemetry- or instrument-like presentation where useful, and less of a generic card-grid feel;
+- a refined sidebar and top bar, and a stronger visual hierarchy for operational status;
+- restrained custom iconography, and polished hover, focus and selected states;
+- desktop composition at 1440, 1728 and 1920 px.
+
+This is visual work only: no new data capability, write action or API.
 
 ### AI-037.7 — Tenant-bound facade + pre-auth limits — DONE
 
@@ -886,7 +912,7 @@ Roadmap does not imply strictly serial development. Parallel work is allowed onl
 
 ### A. Current operational line (unchanged by the rebase)
 
-While M2.2 is deferred: `AI-037.7 DONE → AI-038.0 DONE → AI-038.1 DONE → AI-038.2a DONE → AI-038.2b real OAuth smoke (IN REVIEW) → AI-038.3 Owner Console real read wiring (PLANNED / TO BE SCOPED) → AI-039 Development Workflow Browser` (M3 Owner path, §9). UI stays on mock data until AI-038.2 passes. The rebase does not cancel or skip any unfinished AI-038 work.
+While M2.2 is deferred: `AI-037.7 DONE → AI-038.0 DONE → AI-038.1 DONE → AI-038.2a DONE → AI-038.2b DONE → AI-038.3 Owner Console real read wiring (IN REVIEW) → AI-039 Development Workflow Browser` (M3 Owner path, §9). AI-038.2 passed; the Owner Console reads real runtime data through AI-038.3, read-only. The rebase does not cancel or skip any unfinished AI-038 work.
 
 ### B. First new architecture implementation introduced by v1.4
 
@@ -898,7 +924,7 @@ While M2.2 is deferred: `AI-037.7 DONE → AI-038.0 DONE → AI-038.1 DONE → A
 
 ### UI
 
-AI-038 mock UI may proceed in parallel. UI wiring to real runtime data requires the AI-038.2 concrete Owner session adapter on top of AI-038.1.
+AI-038.2 is DONE. AI-038.3 wires the Owner Console to real runtime data, read-only. Write actions in the UI need a separate write-boundary task. AI-039 does not start merely because the AI-038.3 author work is finished.
 
 ### Execution platform
 
