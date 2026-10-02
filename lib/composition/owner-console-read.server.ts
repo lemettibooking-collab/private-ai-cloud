@@ -25,6 +25,7 @@ export type {
   OwnerConsoleProjectApprovals,
   OwnerConsoleProjectRun,
   OwnerConsoleProjects,
+  OwnerConsoleQuickCreate,
   OwnerConsoleRunAggregate,
   OwnerConsoleRunDetail,
   OwnerConsoleRuns,
@@ -90,6 +91,11 @@ export async function loadOwnerApprovals(project: RawProjectSelector) {
 export async function loadOwnerTasks(project: RawProjectSelector) {
   await connection();
   return reader.loadOwnerTasks(parseProjectSelector(project));
+}
+
+export async function loadOwnerQuickCreate(project: RawProjectSelector) {
+  await connection();
+  return reader.loadOwnerQuickCreate(parseProjectSelector(project));
 }
 
 export async function loadOwnerTask(taskId: string, project: RawProjectSelector) {

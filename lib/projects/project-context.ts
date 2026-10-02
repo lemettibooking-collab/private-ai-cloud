@@ -46,3 +46,9 @@ export function switchTargetPath(pathname: string): ProjectScopedPath {
   if (pathname === "/approvals" || pathname.startsWith("/approvals/")) return "/approvals";
   return "/dashboard";
 }
+
+// AI-038.4b: the Quick Create form, optionally for one project (same validation as projectScopedHref;
+// the target page re-validates the selector against the authenticated registry).
+export function quickCreateHref(projectId: string | null): string {
+  return projectId !== null && isProjectKey(projectId) ? `/tasks/new?project=${encodeURIComponent(projectId)}` : "/tasks/new";
+}

@@ -240,6 +240,17 @@ export type OwnerConsoleProjects = Gate<ProjectList>;
 
 export type OwnerConsoleTasks = Gate<ProjectList & Readonly<{ mode: "all" | "project"; scope: OwnerConsoleScope } & TaskList>>;
 
+// AI-038.4b Quick Create form data (a READ; the write goes through ./owner-task-create). Only ACTIVE
+// registry projects are offered: createTask accepts nothing else (and re-checks under lock anyway).
+//   choose      — All Projects: the Owner picks one of `creatableProjects`.
+//   project     — a validated active project is preselected (the only entry of `creatableProjects`).
+//   project_paused — a validated paused project: creation is unavailable (no creatable target).
+export type OwnerConsoleQuickCreate = Gate<ProjectList & Readonly<{
+  scope: OwnerConsoleScope;
+  target: "choose" | "project" | "project_paused";
+  creatableProjects: readonly OwnerConsoleProject[];
+}>>;
+
 export type OwnerConsoleTaskView = Gate<ProjectList & Readonly<{
   scope: OwnerConsoleScope;
   task: Readonly<{ state: "available"; detail: OwnerConsoleTaskDetail }> | Readonly<{ state: "unavailable" }>;
@@ -681,6 +692,22 @@ export function createOwnerConsoleReader(dependencies: OwnerConsoleDependencies)
         const scope = resolveScope(selector, list);
         const tasks = await taskList(backend, "all", scope.mode === "project" ? scope.project.projectId : null);
         return { ...list, mode: scope.mode, scope, ...tasks };
+      });
+    },
+
+    // AI-038.4b Quick Create: which projects may receive a new task. A selector that is invalid,
+    // unknown, foreign or archived keeps the existing opaque `project_unavailable`.
+    async loadOwnerQuickCreate(selector: ProjectSelector): Promise<OwnerConsoleQuickCreate> {
+      return gate(async (backend) => {
+        if (selector.kind === "invalid") throw new ProjectUnavailable();
+        const list = await projectList(backend);
+        const scope = resolveScope(selector, list);
+        if (scope.mode === "all") {
+          return { ...list, scope, target: "choose" as const, creatableProjects: Object.freeze(list.projects.filter((item) => item.status === "active")) };
+        }
+        if (scope.project.status === "active") return { ...list, scope, target: "project" as const, creatableProjects: Object.freeze([scope.project]) };
+        if (scope.project.status === "paused") return { ...list, scope, target: "project_paused" as const, creatableProjects: Object.freeze([]) };
+        throw new ProjectUnavailable();
       });
     },
 

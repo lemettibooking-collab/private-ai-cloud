@@ -275,7 +275,7 @@ test("038.3-6. Run Detail's only runtime target is the runId route parameter", a
 
 test("038.3-7 / 3.2-20. the loader exposes read functions only; no write path", () => {
   const { instance } = owner();
-  const loaders = ["loadOwnerApprovals", "loadOwnerAttention", "loadOwnerDashboard", "loadOwnerProjects", "loadOwnerRun",
+  const loaders = ["loadOwnerApprovals", "loadOwnerAttention", "loadOwnerDashboard", "loadOwnerProjects", "loadOwnerQuickCreate", "loadOwnerRun",
     "loadOwnerRuns", "loadOwnerShell", "loadOwnerTask", "loadOwnerTasks"];
   assert.deepEqual(Object.keys(instance).sort(), loaders);
   assert.ok(Object.isFrozen(instance));
@@ -569,7 +569,7 @@ test("4a. My Attention: attention statuses + pending approvals; project scope na
   assert.equal((loader.match(/async function classifyProjectApprovals/gu) ?? []).length, 1, "one approval classification algorithm");
 });
 
-test("4a. navigation preserves Task / Attention scope; + New Task stays disabled; no task write anywhere", () => {
+test("4a/4b. navigation preserves Task / Attention scope; + New Task opens Quick Create; task writes only via the 4b binding", () => {
   for (const path of ["/tasks", "/attention"] as const) {
     assert.equal(context.projectScopedHref(path, "project-a"), `${path}?project=project-a`);
     assert.equal(context.projectScopedHref(path, "../x"), path);
@@ -580,16 +580,61 @@ test("4a. navigation preserves Task / Attention scope; + New Task stays disabled
   assert.match(nav, /label: "My Attention", href: "\/attention", available: true, projectScoped: true/u);
   assert.match(nav, /label: "Tasks", href: "\/tasks", available: true, projectScoped: true/u);
   const topbar = source("components/shell/topbar.tsx");
-  assert.match(topbar, /disabled\s+title="Quick Create is planned for AI-038\.4b/u);
+  // AI-038.4b: + New Task is a plain link to the Quick Create page (no form or action in the shell).
+  assert.match(topbar, /href=\{quickCreateHref\(selectedProject\?\.projectId \?\? null\)\}/u);
+  assert.equal(context.quickCreateHref("project-a"), "/tasks/new?project=project-a");
+  assert.equal(context.quickCreateHref("../x"), "/tasks/new");
+  assert.equal(context.quickCreateHref(null), "/tasks/new");
   assert.ok(!/onClick|<form|formAction/u.test(code("components/shell/topbar.tsx")));
   const writes = /\b(?:createTask|updateTask|deleteTask|setTaskStatus|insertTask|linkRun)\w*\s*\(/u;
-  // The ONLY task write is the AI-038.4a corrective server-side mutation contract; it stays unbound
-  // from every page, component, read backend and console loader (Quick Create is AI-038.4b).
+  // The ONLY task write is the AI-038.4a server-side mutation contract. AI-038.4b binds it in exactly
+  // one server composition module (lib/composition/owner-task-create.ts); every page, component, read
+  // backend and console loader stays unbound (see tests/owner-task-create.test.mts for the full graph).
   const mutationModule = "lib/tasks/owner-task-mutations.ts";
+  const bindingModule = "lib/composition/owner-task-create.ts";
   for (const path of [...walk("lib/tasks").filter((file) => file !== mutationModule), "lib/composition/owner-console-read.ts", "lib/composition/owner-read-runtime.ts", ...ownerPages]) {
     assert.ok(!writes.test(code(path)), `${path} contains a task write`);
   }
-  for (const path of [...walk("app"), ...walk("components"), ...walk("lib/composition"), ...walk("lib/tasks").filter((file) => file !== mutationModule)]) {
+  for (const path of [...walk("app"), ...walk("components"), ...walk("lib/composition").filter((file) => file !== bindingModule), ...walk("lib/tasks").filter((file) => file !== mutationModule)]) {
     assert.ok(!source(path).includes("owner-task-mutations"), `${path} binds the task mutation contract`);
   }
+});
+
+// ---------------------------------------------------------------------------------------------
+// AI-038.4b Quick Create form data (a read; the write is tests/owner-task-create.test.mts)
+// ---------------------------------------------------------------------------------------------
+
+test("4b-J/K/H. Quick Create offers only ACTIVE projects; project context preselects; paused blocks; others opaque", async () => {
+  const projects = [project("project-a"), project("project-b"), project("project-paused", "paused"), project("project-arch", "archived")];
+  const { instance, calls } = owner({ projects });
+  // K. All Projects: a selector of active projects only (paused / archived are never creatable targets).
+  const all = await instance.loadOwnerQuickCreate(allSel);
+  assert.equal(all.state, "available");
+  assert.ok(all.state === "available");
+  assert.equal(all.target, "choose");
+  assert.deepEqual(all.scope, { mode: "all" });
+  assert.deepEqual(all.creatableProjects.map((item) => item.projectId), ["project-a", "project-b"]);
+  // J. Project context: the validated active project is preselected as the only target.
+  const scoped = await instance.loadOwnerQuickCreate(sel("project-a"));
+  assert.ok(scoped.state === "available");
+  assert.equal(scoped.target, "project");
+  assert.deepEqual(scoped.creatableProjects.map((item) => item.projectId), ["project-a"]);
+  // H. Paused project: Quick Create is blocked (no creatable target).
+  const paused = await instance.loadOwnerQuickCreate(sel("project-paused"));
+  assert.ok(paused.state === "available");
+  assert.equal(paused.target, "project_paused");
+  assert.deepEqual(paused.creatableProjects, []);
+  // I. Archived, unknown, malformed or duplicated selectors: the existing opaque state.
+  const opaque = { state: "project_unavailable", workspace: WORKSPACE };
+  for (const raw of ["project-arch", "project-zzz", "Project-A", ["project-a", "project-b"], ""]) {
+    assert.deepEqual(await instance.loadOwnerQuickCreate(sel(raw)), opaque, JSON.stringify(raw));
+  }
+  // The form data is a registry read only: no run, approval or task read, nothing written.
+  assert.deepEqual([...new Set(calls.map((call) => call.method))], ["listProjects"]);
+  for (const view of [all, scoped, paused]) assertSanitized(view);
+  // Unauthenticated / denied compositions keep the existing gate states.
+  assert.deepEqual(await reader({ verdict: "deny", reason: "unauthenticated", backend: null }).instance.loadOwnerQuickCreate(allSel),
+    { state: "unauthenticated", workspace: WORKSPACE });
+  assert.deepEqual(await reader({ verdict: "deny", reason: "unavailable", backend: null }).instance.loadOwnerQuickCreate(allSel),
+    { state: "unavailable", workspace: WORKSPACE });
 });

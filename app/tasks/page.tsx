@@ -53,7 +53,7 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
           )}
         </SectionCard>
       )}
-      <p className="mt-3 text-[11.5px] text-ink-3">Task creation (Quick Create) is planned for AI-038.4b.</p>
+      <p className="mt-3 text-[11.5px] text-ink-3">New tasks are created with + New Task as draft Owner intent; nothing runs automatically.</p>
     </AppShell>
   );
 }

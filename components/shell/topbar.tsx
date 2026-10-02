@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { ProjectSwitcher, type SwitcherProject } from "@/components/shell/project-switcher";
+import { quickCreateHref } from "@/lib/projects/project-context";
 import type { OwnerConsoleProject, OwnerConsoleShell } from "@/lib/composition/owner-console-read.server";
 
 type TopbarProps = {
@@ -49,14 +50,25 @@ export function Topbar({ shell, selectedProject }: TopbarProps) {
       </div>
 
       <div className="ml-auto flex items-center gap-2">
-        <button
-          className="flex h-8 cursor-not-allowed items-center gap-1.5 rounded-pac border border-line bg-panel px-2.5 text-xs text-ink-3"
-          disabled
-          title="Quick Create is planned for AI-038.4b (audited Owner task write boundary). Not available yet."
-          type="button"
-        >
-          + New Task <span className="font-mono text-[9.5px] uppercase tracking-[0.1em]">· soon</span>
-        </button>
+        {summary.state === "available" ? (
+          // AI-038.4b Quick Create: opens the form (project-scoped when a project is selected). The page
+          // and its Server Action re-check Owner authority and the project; this link grants nothing.
+          <Link
+            className="flex h-8 items-center gap-1.5 rounded-pac border border-accent/40 bg-accent/10 px-2.5 text-xs font-medium text-accent hover:bg-accent/20"
+            href={quickCreateHref(selectedProject?.projectId ?? null)}
+            title={selectedProject ? `Create a draft task in ${selectedProject.displayName}` : "Create a draft task in an active project"}
+          >
+            + New Task
+          </Link>
+        ) : (
+          <span
+            aria-disabled="true"
+            className="flex h-8 cursor-not-allowed items-center gap-1.5 rounded-pac border border-line bg-panel px-2.5 text-xs text-ink-3"
+            title="Quick Create needs an authenticated PAC Owner."
+          >
+            + New Task
+          </span>
+        )}
 
         <Link
           aria-label={pending === null ? "Approvals" : `${pending} pending approvals across all projects`}

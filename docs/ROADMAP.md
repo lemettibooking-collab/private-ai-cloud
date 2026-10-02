@@ -158,7 +158,7 @@ The census recorded the current hardening debt and moved development to mileston
 - **AI-038.3 Owner Console Real Read Wiring + Mission Control UI Foundation — DONE** (commit `70f4039`; passed independent re-gate; see §9)
 - **AI-038.3.1 Trusted Project Registry + Run Discovery Foundation — DONE** (commit `d7d1ca0`; passed independent re-gate; see §9)
 - **AI-038.3.2 Trusted Project Context Routing + All Projects + Real Project Switcher — DONE** (commit `50cfed1`; passed independent re-gate; see §9)
-- **AI-038.4 Owner Tasks — ACTIVE**: **AI-038.4a Project Task Foundation + Read Surfaces — IN REVIEW**; **AI-038.4b Quick Create + audited Owner Task Write Boundary — PLANNED** (see §9)
+- **AI-038.4 Owner Tasks — ACTIVE**: **AI-038.4a Project Task Foundation + Read Surfaces — DONE** (`4a55f5b`); **AI-038.4b Quick Create + audited Task Mutation Binding — IN REVIEW** (see §9)
 - **AI-038.5 Mission Control Visual Refinement — PLANNED**
 - **Roadmap Rebase v1.4 — vendor-neutral control plane — documentation only** (this version; `docs/ROADMAP_REBASE_V1.4.md`)
 
@@ -505,9 +505,9 @@ Passed independent re-gate; commit `50cfed1`. Owner-approved model:
 
 Split so that task persistence/read semantics and the first task write boundary are never introduced in one security-sensitive change.
 
-##### AI-038.4a — Project Task Foundation + Read Surfaces — IN REVIEW
+##### AI-038.4a — Project Task Foundation + Read Surfaces — DONE (`4a55f5b`)
 
-Author implementation (with corrective) is complete and awaits independent re-gate. The application UI is read-only; the only writes are the narrow server-side mutation contract below, which has no UI, route or Server Action.
+Implemented with corrective and passed the independent re-gate (committed `4a55f5b`). The application UI is read-only; the only writes are the narrow server-side mutation contract below, which has no UI, route or Server Action.
 
 - **Model:** a persistent **ProjectTask** (`project_tasks`, migration `0010`) is the Owner objective ("what needs to be done"). It is distinct from the FeaturePlan `DevelopmentTask` (an in-memory node inside a FeaturePlan; FeaturePlan persistence and linking stay deferred).
 - **Identity and lifecycle:**
@@ -538,9 +538,27 @@ Author implementation (with corrective) is complete and awaits independent re-ga
   - Exactly one `task.created` / `task.run_attached` audit event, written in the same transaction; DB unique indexes on links, keys and task audits are the last race guards.
   - No run start, model, executor or GitHub action.
 
-##### AI-038.4b — Quick Create + audited Owner Task Write Boundary — PLANNED
+##### AI-038.4b — Quick Create + audited Task Mutation Binding — IN REVIEW
 
-The first Owner-facing task write: Quick Create UI wired to the AI-038.4a `createTask` contract through a separately reviewed, audited write boundary. It creates task **intent** only. It must NOT automatically execute a run, call a model or an executor, mutate GitHub, commit, push or deploy.
+Author implementation is complete and awaits independent re-gate. It is the first Owner-facing task write: Quick Create wired to the AI-038.4a `createTask` contract. No new mutation engine and no schema change (0010 is immutable). It creates task **intent** only and must NOT automatically execute a run, call a model or an executor, mutate GitHub, commit, push or deploy.
+
+- **Path:** `+ New Task` (top bar, project-scoped when a project is selected) → `/tasks/new` → `"use server"` action `app/tasks/new/actions.ts` → server-only `lib/composition/owner-task-create.server.ts` (real Auth.js `auth()`, trusted `APP_DEMO_WORKSPACE_SLUG`, per-request pool) → `lib/composition/owner-task-create.ts`.
+  - That module is the only importer of `owner-task-mutations`, and it exposes `createTask` only.
+  - It calls the AI-038.4a `createTask` (transaction, Owner and project locks, audit).
+- **Form:**
+  - fields: project, title, goal, type, priority, risk;
+  - any other field (task ID, workspace, actor, status, run, …) → `invalid_input`;
+  - only **active** projects are offered: All Projects shows a selector; a project context preselects; a paused project shows "creation unavailable"; archived or unknown selectors keep the opaque state;
+  - the backend re-checks everything.
+- **Idempotency:**
+  - the server issues one opaque CSPRNG key per rendered form (hidden field, never in the URL, the audit or a projection);
+  - retries and double submits of that form replay to the same task;
+  - a changed intent with the same key → generic conflict;
+  - the pending-disabled button is only UX.
+- **Outcome:**
+  - created / replayed → redirect to the factual Task Detail (`/tasks/<taskId>?project=<projectId>`), read again through the existing read path;
+  - otherwise a generic `invalid_input` / `conflict` / `unavailable` / `unauthenticated` message.
+- `attachRun` stays unbound (no UI, action or route). Task ↔ Run binding is for a later orchestrator task (AI-039+).
 
 #### AI-038.5 — Mission Control Visual Refinement — PLANNED (deferred from the AI-038.3 Owner checkpoint)
 
@@ -988,7 +1006,7 @@ Roadmap does not imply strictly serial development. Parallel work is allowed onl
 
 ### A. Current operational line (unchanged by the rebase)
 
-While M2.2 is deferred: `AI-037.7 DONE → AI-038.0 DONE → AI-038.1 DONE → AI-038.2a DONE → AI-038.2b DONE → AI-038.3 DONE → AI-038.3.1 DONE → AI-038.3.2 DONE → AI-038.4a Project Task Foundation + read surfaces (IN REVIEW) → AI-038.4b Quick Create / task write boundary → AI-038.5 Mission Control Visual Refinement → AI-039 Development Workflow Browser` (M3 Owner path, §9). AI-038.2 passed; the Owner Console reads real runtime data through AI-038.3, read-only. The rebase does not cancel or skip any unfinished AI-038 work.
+While M2.2 is deferred: `AI-037.7 DONE → AI-038.0 DONE → AI-038.1 DONE → AI-038.2a DONE → AI-038.2b DONE → AI-038.3 DONE → AI-038.3.1 DONE → AI-038.3.2 DONE → AI-038.4a Project Task Foundation + read surfaces DONE → AI-038.4b Quick Create / task mutation binding (IN REVIEW) → AI-038.5 Mission Control Visual Refinement → AI-039 Development Workflow Browser` (M3 Owner path, §9). AI-038.2 passed; the Owner Console reads real runtime data through AI-038.3, read-only. The rebase does not cancel or skip any unfinished AI-038 work.
 
 ### B. First new architecture implementation introduced by v1.4
 
@@ -1000,7 +1018,7 @@ While M2.2 is deferred: `AI-037.7 DONE → AI-038.0 DONE → AI-038.1 DONE → A
 
 ### UI
 
-AI-038.2, AI-038.3, AI-038.3.1 and AI-038.3.2 are DONE: the Owner Console reads real runtime data with All Projects and real project switching, read-only. AI-038.4a (in review) adds persistent Owner Tasks as read surfaces. Write actions in the UI need a separate write-boundary task. AI-039 is not started.
+AI-038.2, AI-038.3, AI-038.3.1 and AI-038.3.2 are DONE: the Owner Console reads real runtime data with All Projects and real project switching, read-only. AI-038.4a (DONE) adds persistent Owner Tasks as read surfaces; AI-038.4b (in review) adds Quick Create, the only UI write (draft task intent through the audited `createTask`). Other UI write actions need separate tasks. AI-039 is not started.
 
 ### Execution platform
 
