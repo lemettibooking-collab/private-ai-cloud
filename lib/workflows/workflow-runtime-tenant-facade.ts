@@ -5,6 +5,8 @@ import type {
   WorkflowRuntimePublicApprovalSummary,
   WorkflowRuntimePublicAuditTimelineItem,
   WorkflowRuntimePublicModelUsage,
+  WorkflowRuntimePublicProjectRunSummary,
+  WorkflowRuntimePublicProjectSummary,
   WorkflowRuntimePublicRunOverview,
 } from "./workflow-runtime-access";
 import type { WorkflowRuntimeDatabase } from "../db/workflow-runtime-store";
@@ -44,6 +46,11 @@ export interface TenantBoundWorkflowRuntimeFacade {
   getRunModelUsage(request: unknown): Promise<TenantBoundWorkflowRuntimeDecision<WorkflowRuntimePublicModelUsage>>;
   // { workspaceId, actorId, limit? }
   listApprovalQueue(request: unknown): Promise<TenantBoundWorkflowRuntimeDecision<readonly WorkflowRuntimePublicApprovalSummary[]>>;
+  // AI-038.3.1 { workspaceId, actorId, limit? }
+  listProjects(request: unknown): Promise<TenantBoundWorkflowRuntimeDecision<readonly WorkflowRuntimePublicProjectSummary[]>>;
+  // AI-038.3.1 { workspaceId, actorId, projectId, limit? } — projectId is an untrusted selector
+  // resolved only inside the bound workspace; it never chooses the workspace.
+  listProjectRuns(request: unknown): Promise<TenantBoundWorkflowRuntimeDecision<readonly WorkflowRuntimePublicProjectRunSummary[]>>;
 }
 
 export const tenantBoundWorkflowRuntimeFacadeLimits = Object.freeze({
@@ -58,8 +65,8 @@ const stableIdPattern = /^[a-z0-9][a-z0-9._-]{0,63}$/u;
 const actorIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}$/u;
 const constructionFields = Object.freeze(["tenant", "database", "authorizer"] as const);
 
-type Field = "workspaceId" | "actorId" | "runId" | "limit";
-type Request = Readonly<{ workspaceId: string; actorId: string; runId: string | null; limit: number | undefined }>;
+type Field = "workspaceId" | "actorId" | "runId" | "projectId" | "limit";
+type Request = Readonly<{ workspaceId: string; actorId: string; runId: string | null; projectId: string | null; limit: number | undefined }>;
 type Gate = Readonly<{ ok: true; request: Request }> | Readonly<{ ok: false; status: "invalid_input" | "limit_exceeded" }>;
 
 function denial<T>(status: TenantBoundWorkflowRuntimeDenialStatus): TenantBoundWorkflowRuntimeDecision<T> {
@@ -102,8 +109,11 @@ function gate(input: unknown, required: readonly Field[], optional: readonly Fie
   const runId = required.includes("runId")
     ? boundedString(values.runId, tenantBoundWorkflowRuntimeFacadeLimits.maxIdLength, stableIdPattern)
     : null;
-  if (workspaceId === "limited" || actorId === "limited" || runId === "limited") return limited;
-  if (workspaceId === "invalid" || actorId === "invalid" || runId === "invalid") return invalid;
+  const projectId = required.includes("projectId")
+    ? boundedString(values.projectId, tenantBoundWorkflowRuntimeFacadeLimits.maxIdLength, stableIdPattern)
+    : null;
+  if (workspaceId === "limited" || actorId === "limited" || runId === "limited" || projectId === "limited") return limited;
+  if (workspaceId === "invalid" || actorId === "invalid" || runId === "invalid" || projectId === "invalid") return invalid;
   let limit: number | undefined;
   if (Object.hasOwn(values, "limit")) {
     const value = values.limit;
@@ -112,7 +122,7 @@ function gate(input: unknown, required: readonly Field[], optional: readonly Fie
     if (value > tenantBoundWorkflowRuntimeFacadeLimits.maxLimit) return limited;
     limit = value;
   }
-  return { ok: true, request: Object.freeze({ workspaceId, actorId, runId, limit }) };
+  return { ok: true, request: Object.freeze({ workspaceId, actorId, runId, projectId, limit }) };
 }
 
 // Own data members of an ordinary, non-Proxy object only; nothing else is ever read.
@@ -204,5 +214,9 @@ export function createTenantBoundWorkflowRuntimeFacade(input: unknown): TenantBo
       (context, gated) => access.getRunModelUsage(context, gated.runId)),
     listApprovalQueue: (request: unknown) => guarded<readonly WorkflowRuntimePublicApprovalSummary[]>(request, ["workspaceId", "actorId"], ["limit"],
       (context, gated) => access.listApprovalQueue(context, gated.limit)),
+    listProjects: (request: unknown) => guarded<readonly WorkflowRuntimePublicProjectSummary[]>(request, ["workspaceId", "actorId"], ["limit"],
+      (context, gated) => access.listProjects(context, gated.limit)),
+    listProjectRuns: (request: unknown) => guarded<readonly WorkflowRuntimePublicProjectRunSummary[]>(request, ["workspaceId", "actorId", "projectId"], ["limit"],
+      (context, gated) => access.listProjectRuns(context, gated.projectId, gated.limit)),
   });
 }

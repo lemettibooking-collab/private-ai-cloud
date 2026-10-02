@@ -23,6 +23,7 @@ This version has breaking changes - APIs, conventions, and file structure may al
   - `lib/workflows/`: runtime service, authorized access facade, tenant facade, API;
   - `lib/providers/`: model provider adapters;
   - `lib/composition/`: server-only composition roots (real provider, Owner read, authenticated Owner read);
+  - `lib/projects/`: tenant-scoped Project Registry read layer (AI-038.3.1; identity and non-secret repository metadata only, no filesystem paths);
   - `lib/db/`: PostgreSQL store, read model, tenant resolver, `pg` adapter;
   - `db/migrations/`, `db/seeds/`: raw SQL, PostgreSQL 16.
 - **Work is tracked as numbered tasks (`AI-0xx`).** Security-relevant stages pass an adversarial gate before the next stage starts (see "Task and gate process").

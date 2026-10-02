@@ -155,7 +155,11 @@ The census recorded the current hardening debt and moved development to mileston
 - **AI-038.1 Identity/Auth Boundary — DONE** (commit `a9f2435`; see §9)
 - **AI-038.2a Auth.js GitHub Session Adapter — DONE** (commit `4e76afd`; see §9)
 - **AI-038.2b Real GitHub OAuth Smoke — DONE** (commit `12212ad`; passed independent re-gate; **AI-038.2 DONE**; see §9)
-- **AI-038.3 Owner Console Real Read Wiring + Mission Control UI Foundation — IN REVIEW** (see §9)
+- **AI-038.3 Owner Console Real Read Wiring + Mission Control UI Foundation — DONE** (commit `70f4039`; passed independent re-gate; see §9)
+- **AI-038.3.1 Trusted Project Registry + Run Discovery Foundation — IN REVIEW** (see §9)
+- **AI-038.3.2 Trusted Project Context Routing + Real Project Switcher — PLANNED**
+- **AI-038.4 Tasks / My Attention / Quick Create — PLANNED**
+- **AI-038.5 Mission Control Visual Refinement — PLANNED**
 - **Roadmap Rebase v1.4 — vendor-neutral control plane — documentation only** (this version; `docs/ROADMAP_REBASE_V1.4.md`)
 
 AI-037.1.1 passed independent re-gate and was committed/pushed through the Owner-approved repository workflow.
@@ -451,9 +455,9 @@ AI-038.2 is DONE: both AI-038.2a and AI-038.2b passed independent re-gate.
 
 **UI → real private runtime data** was locked until AI-038.2 passed (intentional fail-closed sequencing). It is now unlocked **for read-only wiring only**, through AI-038.3. Writes still require a separate, explicitly approved write boundary.
 
-#### AI-038.3 — Owner Console Real Read Wiring + Mission Control UI Foundation — IN REVIEW
+#### AI-038.3 — Owner Console Real Read Wiring + Mission Control UI Foundation — DONE
 
-Author implementation is complete and awaits independent re-gate.
+Passed independent re-gate; commit `70f4039`.
 
 - **Read path:** a server-only Owner Console loader (`lib/composition/owner-console-read.server.ts`) → `createRequestOwnerReadRuntime` (real Auth.js `auth()` → AI-038.1 → AI-038.0) → PostgreSQL. The workspace comes only from trusted server configuration. No business HTTP API, no Server Action, no write.
 - **Real data:**
@@ -465,6 +469,35 @@ Author implementation is complete and awaits independent re-gate.
 - **Mission Control shell:** Projects-first navigation, a top bar with a project switcher that shows only the trusted current project, a real pending-approval indicator and an Owner state. Fonts stay Geist / Geist Mono.
 - **Not included:** global `listRuns`, a trusted multi-project registry, task creation, approve/reject, and the full My Attention / Tasks UX.
 - **Owner visual checkpoint: ACCEPTED** as the UX foundation (Projects-first, Owner-attention-first, task/run-centric). Visual refinement is deferred to AI-038.5.
+
+#### AI-038.3.1 — Trusted Project Registry + Run Discovery Foundation — IN REVIEW
+
+Backend and read foundation only. Author implementation is complete and awaits independent re-gate.
+
+- **Model:** Workspace (tenant / security boundary) → Project (a product/system inside it) → Runs. A Project is not a folder, checkout, VPS directory, executor session, environment or branch.
+  - Git repositories are the canonical code source; PAC is the control plane.
+  - Managed executors, VPS runners and the Local Runner are execution environments.
+  - Local Mac folders and VPS checkouts are temporary working copies.
+  - The same Project ID works wherever execution happens.
+- **Registry:** migration `0009_project_registry` adds `projects`: workspace-scoped `project_key` (the Owner-facing Project ID, same stable-id rule as `workflow_runs.project_id`), display name, `active` / `paused` / `archived`, and optional non-secret HTTPS `repository_url` + `default_branch`.
+  - Strict CHECK constraints reject credentials, query strings, fragments, ssh/file URLs and local paths.
+  - It stores no filesystem path, no executor/environment/deployment policy and no secrets profile. Those wait for the typed M4 contracts (AI-041 / AI-042).
+  - Nothing is seeded.
+- **Owner reads:** `listProjects(limit?)` returns active and paused projects; archived ones are excluded. `listRuns(projectId, limit?)` is one bounded statement scoped by workspace AND project, newest first.
+  - Both go through AI-038.1 → AI-038.0 → the tenant facade → authorized access, with new read actions `list_projects` / `list_project_runs`.
+  - `projectId` is an untrusted selector resolved only inside the already-authorized workspace. An unknown, foreign, archived or malformed project gives the same opaque `unavailable`.
+- **Not included:** UI project switching (AI-038.3.2), repository clone/checkout, GitHub API, project writes/onboarding, and a foreign key from `workflow_runs.project_id` to the registry (hardening debt: existing runtime rows have no factual registry backfill).
+
+#### AI-038.3.2 — Trusted Project Context Routing + Real Project Switcher — PLANNED
+
+Wire the Owner Console Project Switcher, the Dashboard project context, Runs project filtering and the Approvals project context to `listProjects` / `listRuns`.
+- Only registry-listed Project IDs inside the authenticated workspace are used; the workspace still comes only from trusted server configuration.
+- No workspace, tenant, cookie or `localStorage` authority.
+- Starts only after AI-038.3.1 passes independent re-gate.
+
+#### AI-038.4 — Tasks / My Attention / Quick Create — PLANNED
+
+The Owner task surfaces (My Attention, Tasks, Quick Create). Any creation flow requires its own approved write boundary.
 
 #### AI-038.5 — Mission Control Visual Refinement — PLANNED (deferred from the AI-038.3 Owner checkpoint)
 
@@ -912,7 +945,7 @@ Roadmap does not imply strictly serial development. Parallel work is allowed onl
 
 ### A. Current operational line (unchanged by the rebase)
 
-While M2.2 is deferred: `AI-037.7 DONE → AI-038.0 DONE → AI-038.1 DONE → AI-038.2a DONE → AI-038.2b DONE → AI-038.3 Owner Console real read wiring (IN REVIEW) → AI-039 Development Workflow Browser` (M3 Owner path, §9). AI-038.2 passed; the Owner Console reads real runtime data through AI-038.3, read-only. The rebase does not cancel or skip any unfinished AI-038 work.
+While M2.2 is deferred: `AI-037.7 DONE → AI-038.0 DONE → AI-038.1 DONE → AI-038.2a DONE → AI-038.2b DONE → AI-038.3 DONE → AI-038.3.1 Trusted Project Registry + listProjects/listRuns (IN REVIEW) → AI-038.3.2 Real Project Switcher / Project Context Routing → AI-038.4 Tasks + My Attention + Quick Create → AI-038.5 Mission Control Visual Refinement → AI-039 Development Workflow Browser` (M3 Owner path, §9). AI-038.2 passed; the Owner Console reads real runtime data through AI-038.3, read-only. The rebase does not cancel or skip any unfinished AI-038 work.
 
 ### B. First new architecture implementation introduced by v1.4
 
@@ -924,7 +957,7 @@ While M2.2 is deferred: `AI-037.7 DONE → AI-038.0 DONE → AI-038.1 DONE → A
 
 ### UI
 
-AI-038.2 is DONE. AI-038.3 wires the Owner Console to real runtime data, read-only. Write actions in the UI need a separate write-boundary task. AI-039 does not start merely because the AI-038.3 author work is finished.
+AI-038.2 and AI-038.3 are DONE: the Owner Console reads real runtime data, read-only. UI project switching waits for AI-038.3.2, after the AI-038.3.1 re-gate. Write actions in the UI need a separate write-boundary task. AI-039 is not started.
 
 ### Execution platform
 

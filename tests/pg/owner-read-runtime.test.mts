@@ -120,7 +120,7 @@ test("AI-038.0 live: a Run that exists only in B is unavailable from A, identica
 });
 
 test("AI-038.0 live: there is no API to retarget the bundle — no identity parameter exists and envelopes are rejected", async () => {
-  assert.deepEqual(Reflect.ownKeys(ownerA).sort(), ["getRunAuditTimeline", "getRunModelUsage", "getRunOverview", "listApprovalQueue"]);
+  assert.deepEqual(Reflect.ownKeys(ownerA).sort(), ["getRunAuditTimeline", "getRunModelUsage", "getRunOverview", "listApprovalQueue", "listProjects", "listRuns"]);
   const attempt: any = ownerA.getRunOverview;
   const retarget = record(await attempt({ workspaceId: B.domain, actorId: "owner-one", runId: "run-b-only" }));
   assert.equal(retarget.status, "invalid_input");

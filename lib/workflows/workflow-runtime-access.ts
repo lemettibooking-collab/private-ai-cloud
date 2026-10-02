@@ -7,6 +7,8 @@ import type {
   WorkflowRuntimeReadDecision,
   WorkflowRuntimeRunOverview,
 } from "../db/workflow-runtime-read-model";
+import type { ProjectRunSummary } from "../projects/postgres-project-registry";
+import type { PublicProjectSummary } from "../projects/project-registry";
 import type {
   WorkflowRuntimeCommand,
   WorkflowRuntimeResponse,
@@ -23,6 +25,9 @@ export const workflowRuntimeAccessActions = Object.freeze([
   "read_run_audit_timeline",
   "read_run_model_usage",
   "list_approval_queue",
+  // AI-038.3.1 project discovery (read-only, tenant-scoped).
+  "list_projects",
+  "list_project_runs",
 ] as const);
 
 export type WorkflowRuntimeAccessAction = typeof workflowRuntimeAccessActions[number];
@@ -208,6 +213,25 @@ export type WorkflowRuntimePublicAuditTimelineItem = Readonly<{
   createdAt: string;
 }>;
 
+// AI-038.3.1 public project projections (explicit copies; no internal ids, no settings).
+export type WorkflowRuntimePublicProjectSummary = Readonly<{
+  projectId: string;
+  displayName: string;
+  status: "active" | "paused" | "archived";
+  repository: Readonly<{ url: string; defaultBranch: string | null }> | null;
+}>;
+
+export type WorkflowRuntimePublicProjectRunSummary = Readonly<{
+  runId: string;
+  projectId: string;
+  workflowId: string;
+  status: WorkflowRuntimePublicRunOverview["status"];
+  revision: number;
+  createdAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+}>;
+
 export interface WorkflowRuntimeAccessAuthorizer {
   authorize(
     input: WorkflowRuntimeAccessAuthorizationInput,
@@ -219,7 +243,9 @@ export type WorkflowRuntimeAccessDecision<T> =
   | Readonly<{ verdict: "deny"; status: "unavailable"; data: null }>;
 
 type RuntimeReadModel = Pick<PostgresWorkflowRuntimeReadModel,
-  "getRunOverview" | "getRunAuditTimeline" | "getRunModelUsage" | "listApprovalQueue">;
+  "getRunOverview" | "getRunAuditTimeline" | "getRunModelUsage" | "listApprovalQueue">
+  // AI-038.3.1: optional project discovery; when absent the corresponding reads fail closed.
+  & Partial<Pick<PostgresWorkflowRuntimeReadModel, "listProjects" | "listProjectRuns">>;
 
 export type AuthorizedWorkflowRuntimeAccessDependencies = Readonly<{
   runtimeService: Pick<WorkflowRuntimeService, "execute">;
@@ -249,6 +275,15 @@ export interface AuthorizedWorkflowRuntimeAccess {
     context: unknown,
     limit?: number,
   ): Promise<WorkflowRuntimeAccessDecision<readonly WorkflowRuntimePublicApprovalSummary[]>>;
+  listProjects(
+    context: unknown,
+    limit?: number,
+  ): Promise<WorkflowRuntimeAccessDecision<readonly WorkflowRuntimePublicProjectSummary[]>>;
+  listProjectRuns(
+    context: unknown,
+    projectId: unknown,
+    limit?: number,
+  ): Promise<WorkflowRuntimeAccessDecision<readonly WorkflowRuntimePublicProjectRunSummary[]>>;
 }
 
 const stableIdPattern = /^[a-z0-9][a-z0-9._-]{0,63}$/u;
@@ -494,6 +529,30 @@ function authorizationVerdict(input: unknown): WorkflowRuntimeAccessAuthorizatio
     && (value.verdict === "allow" || value.verdict === "deny") ? value.verdict : null;
 }
 
+function projectProjectSummary(input: PublicProjectSummary): WorkflowRuntimePublicProjectSummary {
+  return {
+    projectId: input.projectId,
+    displayName: input.displayName,
+    status: input.status,
+    repository: input.repository === null
+      ? null
+      : { url: input.repository.url, defaultBranch: input.repository.defaultBranch },
+  };
+}
+
+function projectProjectRunSummary(input: ProjectRunSummary): WorkflowRuntimePublicProjectRunSummary {
+  return {
+    runId: input.runId,
+    projectId: input.projectId,
+    workflowId: input.workflowId,
+    status: input.status,
+    revision: input.revision,
+    createdAt: input.createdAt,
+    startedAt: input.startedAt,
+    completedAt: input.completedAt,
+  };
+}
+
 function runId(input: unknown): string | null {
   return typeof input === "string" && stableIdPattern.test(input) ? input : null;
 }
@@ -638,11 +697,52 @@ export function createAuthorizedWorkflowRuntimeAccess(
     }
   }
 
+  // AI-038.3.1: tenant-scoped project discovery. The projectId is untrusted: it is shape-checked
+  // here, and the read model resolves it ONLY inside the bound workspace's registry. Unknown,
+  // foreign, archived and malformed projects are all the same opaque `unavailable`.
+  async function listProjects(
+    contextInput: unknown,
+    limit?: number,
+  ): Promise<WorkflowRuntimeAccessDecision<readonly WorkflowRuntimePublicProjectSummary[]>> {
+    const readModel = dependencies.readModel;
+    if (typeof readModel.listProjects !== "function") return unavailable();
+    if (!await authorize(contextInput, "list_projects", null)) return unavailable();
+    try {
+      const result = await readModel.listProjects(limit);
+      return rawAllowed(result)
+        ? availableProjected(result.data.map(projectProjectSummary))
+        : unavailable();
+    } catch {
+      return unavailable();
+    }
+  }
+
+  async function listProjectRuns(
+    contextInput: unknown,
+    projectIdInput: unknown,
+    limit?: number,
+  ): Promise<WorkflowRuntimeAccessDecision<readonly WorkflowRuntimePublicProjectRunSummary[]>> {
+    const readModel = dependencies.readModel;
+    const projectId = runId(projectIdInput);
+    if (!projectId || typeof readModel.listProjectRuns !== "function") return unavailable();
+    if (!await authorize(contextInput, "list_project_runs", null)) return unavailable();
+    try {
+      const result = await readModel.listProjectRuns(projectId, limit);
+      return rawAllowed(result)
+        ? availableProjected(result.data.map(projectProjectRunSummary))
+        : unavailable();
+    } catch {
+      return unavailable();
+    }
+  }
+
   return Object.freeze({
     executeCommand,
     getRunOverview,
     getRunAuditTimeline,
     getRunModelUsage,
     listApprovalQueue,
+    listProjects,
+    listProjectRuns,
   });
 }

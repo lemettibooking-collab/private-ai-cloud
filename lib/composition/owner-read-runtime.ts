@@ -6,6 +6,8 @@ import type {
   WorkflowRuntimePublicApprovalSummary,
   WorkflowRuntimePublicAuditTimelineItem,
   WorkflowRuntimePublicModelUsage,
+  WorkflowRuntimePublicProjectRunSummary,
+  WorkflowRuntimePublicProjectSummary,
   WorkflowRuntimePublicRunOverview,
 } from "../workflows/workflow-runtime-access";
 import type {
@@ -25,11 +27,11 @@ import { createTenantBoundWorkflowRuntimeFacade } from "../workflows/workflow-ru
 //
 //   trusted server configuration { database, domainWorkspaceId, ownerActorId }
 //     → tenant resolved ONCE by the existing trusted resolver
-//     → internal read-only Owner authorizer (configured principal, bound workspace, four read actions)
+//     → internal read-only Owner authorizer (configured principal, bound workspace, six read actions)
 //     → AI-037.7 tenant-bound facade (the canonical untrusted-input gate)
 //     → authorized access → read model → PostgreSQL
 //
-// The public surface takes only runId / limit. Workspace and Owner identity are fixed at
+// The public surface takes only runId / projectId / limit. Workspace and Owner identity are fixed at
 // composition and can never be supplied, overridden or retargeted by a caller. `ownerActorId` is a
 // trusted server-configured principal, NOT an authenticated session: this module implements no
 // authentication. Application code must import `./owner-read-runtime.server` (guarded by
@@ -40,6 +42,9 @@ export const ownerReadActions = Object.freeze([
   "read_run_audit_timeline",
   "read_run_model_usage",
   "list_approval_queue",
+  // AI-038.3.1: tenant-scoped project discovery (read-only).
+  "list_projects",
+  "list_project_runs",
 ] as const satisfies readonly WorkflowRuntimeAccessAction[]);
 
 export interface OwnerReadBackend {
@@ -47,6 +52,11 @@ export interface OwnerReadBackend {
   getRunAuditTimeline(runId: unknown, limit?: unknown): Promise<TenantBoundWorkflowRuntimeDecision<readonly WorkflowRuntimePublicAuditTimelineItem[]>>;
   getRunModelUsage(runId: unknown): Promise<TenantBoundWorkflowRuntimeDecision<WorkflowRuntimePublicModelUsage>>;
   listApprovalQueue(limit?: unknown): Promise<TenantBoundWorkflowRuntimeDecision<readonly WorkflowRuntimePublicApprovalSummary[]>>;
+  // AI-038.3.1: projects registered in the bound workspace (archived excluded).
+  listProjects(limit?: unknown): Promise<TenantBoundWorkflowRuntimeDecision<readonly WorkflowRuntimePublicProjectSummary[]>>;
+  // AI-038.3.1: runtime runs of one registered project of the bound workspace. `projectId` is an
+  // untrusted resource selector; it never selects the workspace, actor or role.
+  listRuns(projectId: unknown, limit?: unknown): Promise<TenantBoundWorkflowRuntimeDecision<readonly WorkflowRuntimePublicProjectRunSummary[]>>;
 }
 
 export type OwnerReadRuntimeDecision =
@@ -99,7 +109,8 @@ function capturedConnect(input: unknown): WorkflowRuntimeDatabase["connect"] | n
 }
 
 // Read-only Owner policy: allow only the configured principal, only in the bound workspace, only
-// for the four read actions. execute_runtime_command, unknown actions and anything malformed deny.
+// for the six read actions (AI-038.0 four + AI-038.3.1 project discovery). execute_runtime_command,
+// unknown actions and anything malformed deny.
 export function createOwnerReadAuthorizer(ownerActorId: string, workspaceId: string) {
   const owner = ownerActorId;
   const workspace = workspaceId;
@@ -129,7 +140,7 @@ function receiverFreeDatabase(input: unknown): WorkflowRuntimeDatabase | null {
 }
 
 // The one backend builder shared by both compositions: a factual resolved tenant and a fixed
-// principal in, the four-read OwnerReadBackend out.
+// principal in, the read-only OwnerReadBackend out.
 function buildOwnerReadBackend(
   database: WorkflowRuntimeDatabase,
   tenant: ResolvedWorkflowRuntimeTenant,
@@ -149,9 +160,10 @@ function buildOwnerReadBackend(
 
   // Only the fixed identities and the caller's scalar are placed in the facade request; the facade
   // stays the canonical structural gate for runId / limit (Proxy, type, pattern, bounds).
-  const request = (fields: Readonly<{ runId?: unknown; limit?: unknown }>, withLimit: boolean) => {
+  const request = (fields: Readonly<{ runId?: unknown; projectId?: unknown; limit?: unknown }>, withLimit: boolean) => {
     const envelope: Record<string, unknown> = { workspaceId, actorId: ownerActorId };
     if (Object.hasOwn(fields, "runId")) envelope.runId = fields.runId;
+    if (Object.hasOwn(fields, "projectId")) envelope.projectId = fields.projectId;
     if (withLimit && fields.limit !== undefined) envelope.limit = fields.limit;
     return envelope;
   };
@@ -169,6 +181,8 @@ function buildOwnerReadBackend(
       guarded(() => facade.getRunAuditTimeline(request({ runId, limit }, true))),
     getRunModelUsage: (runId: unknown) => guarded(() => facade.getRunModelUsage(request({ runId }, false))),
     listApprovalQueue: (limit?: unknown) => guarded(() => facade.listApprovalQueue(request({ limit }, true))),
+    listProjects: (limit?: unknown) => guarded(() => facade.listProjects(request({ limit }, true))),
+    listRuns: (projectId: unknown, limit?: unknown) => guarded(() => facade.listProjectRuns(request({ projectId, limit }, true))),
   });
   return Object.freeze({ verdict: "allow" as const, reason: null, backend });
 }

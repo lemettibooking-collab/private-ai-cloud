@@ -297,7 +297,7 @@ test("composition: session → mapping → AI-038.1 membership/Owner → backend
   const ok = await composed.createGitHubOwnerReadRuntime({ database: db.database, domainWorkspaceId: WORKSPACE, sessionResolver: { resolve: () => session() } });
   assert.equal(ok.verdict, "allow");
   assert.deepEqual(db.calls.verify, [[WORKSPACE_UUID, USER]], "AI-038.1 verified THIS tenant with the mapped PAC user");
-  assert.deepEqual(Reflect.ownKeys(ok.backend!).sort(), ["getRunAuditTimeline", "getRunModelUsage", "getRunOverview", "listApprovalQueue"]);
+  assert.deepEqual(Reflect.ownKeys(ok.backend!).sort(), ["getRunAuditTimeline", "getRunModelUsage", "getRunOverview", "listApprovalQueue", "listProjects", "listRuns"]);
   const unauthenticated = { verdict: "deny", reason: "unauthenticated", backend: null };
   const unavailable = { verdict: "deny", reason: "unavailable", backend: null };
   assert.deepEqual(await composed.createGitHubOwnerReadRuntime({ database: fakeDatabase().database, domainWorkspaceId: WORKSPACE, sessionResolver: { resolve: () => null } }), unauthenticated);

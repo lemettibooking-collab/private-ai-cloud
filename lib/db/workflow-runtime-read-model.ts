@@ -7,6 +7,10 @@ import { cloneModelProviderAdapterData, freezeModelProviderAdapterData, snapshot
 import { validateAndNormalizeWorkflowRunSnapshot } from "../contracts/workflow-run.ts";
 // @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
 import { isResolvedWorkflowRuntimeTenant } from "./workflow-runtime-tenant.ts";
+import type { ProjectRunSummary } from "../projects/postgres-project-registry";
+import type { PublicProjectSummary } from "../projects/project-registry";
+// @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
+import { queryProjectRuns, queryProjects } from "../projects/postgres-project-registry.ts";
 
 export const workflowRuntimeReadModelLimits = Object.freeze({
   defaultLimit: 25,
@@ -426,6 +430,26 @@ export class PostgresWorkflowRuntimeReadModel {
   }
 
   // One SELECT already executes against one PostgreSQL MVCC snapshot.
+  // AI-038.3.1: discoverable projects of THIS tenant (one bounded statement).
+  async listProjects(limit?: number): Promise<WorkflowRuntimeReadDecision<readonly PublicProjectSummary[]>> {
+    try {
+      return await this.#withClient(async (client) => {
+        const result = await queryProjects(client, this.#workspaceDatabaseId, limit);
+        return result.verdict === "allow" ? allow(result.data) : deny<readonly PublicProjectSummary[]>(result.reason);
+      });
+    } catch { return deny("read_failed"); }
+  }
+
+  // AI-038.3.1: runtime runs of one registered project of THIS tenant (one bounded statement).
+  async listProjectRuns(projectId: string, limit?: number): Promise<WorkflowRuntimeReadDecision<readonly ProjectRunSummary[]>> {
+    try {
+      return await this.#withClient(async (client) => {
+        const result = await queryProjectRuns(client, this.#workspaceDatabaseId, projectId, limit);
+        return result.verdict === "allow" ? allow(result.data) : deny<readonly ProjectRunSummary[]>(result.reason);
+      });
+    } catch { return deny("read_failed"); }
+  }
+
   async listApprovalQueue(limit?: number): Promise<WorkflowRuntimeReadDecision<readonly WorkflowRuntimeApprovalSummary[]>> {
     const bounded = boundedLimit(limit);
     if (bounded === null) return deny("invalid_input");
