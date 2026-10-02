@@ -27,7 +27,7 @@ export function parseProjectSelector(raw: unknown): ProjectSelector {
 }
 
 // The Owner pages that understand a project scope.
-export const projectScopedPaths = Object.freeze(["/dashboard", "/runs", "/approvals"] as const);
+export const projectScopedPaths = Object.freeze(["/dashboard", "/tasks", "/runs", "/attention", "/approvals"] as const);
 export type ProjectScopedPath = (typeof projectScopedPaths)[number];
 
 // The only way the console builds a project-context link. `projectId` must come from a validated
@@ -40,6 +40,8 @@ export function projectScopedHref(path: ProjectScopedPath, projectId: string | n
 
 // Where a project switch should land from the current page: stay on the same major Owner page.
 export function switchTargetPath(pathname: string): ProjectScopedPath {
+  if (pathname === "/tasks" || pathname.startsWith("/tasks/")) return "/tasks";
+  if (pathname === "/attention" || pathname.startsWith("/attention/")) return "/attention";
   if (pathname === "/runs" || pathname.startsWith("/runs/")) return "/runs";
   if (pathname === "/approvals" || pathname.startsWith("/approvals/")) return "/approvals";
   return "/dashboard";

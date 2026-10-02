@@ -33,6 +33,14 @@ export type {
   OwnerConsoleRunView,
   OwnerConsoleScope,
   OwnerConsoleShell,
+  OwnerConsoleAttention,
+  OwnerConsoleDashboardTasks,
+  OwnerConsoleTask,
+  OwnerConsoleTaskDetail,
+  OwnerConsoleTaskResult,
+  OwnerConsoleTasks,
+  OwnerConsoleTaskStatus,
+  OwnerConsoleTaskView,
   OwnerConsoleUsage,
   OwnerConsoleWorkspace,
 } from "./owner-console-read";
@@ -77,6 +85,21 @@ export async function loadOwnerRuns(project: RawProjectSelector) {
 export async function loadOwnerApprovals(project: RawProjectSelector) {
   await connection();
   return reader.loadOwnerApprovals(parseProjectSelector(project));
+}
+
+export async function loadOwnerTasks(project: RawProjectSelector) {
+  await connection();
+  return reader.loadOwnerTasks(parseProjectSelector(project));
+}
+
+export async function loadOwnerTask(taskId: string, project: RawProjectSelector) {
+  await connection();
+  return reader.loadOwnerTask(taskId, parseProjectSelector(project));
+}
+
+export async function loadOwnerAttention(project: RawProjectSelector) {
+  await connection();
+  return reader.loadOwnerAttention(parseProjectSelector(project));
 }
 
 export async function loadOwnerRun(runId: string, project: RawProjectSelector) {

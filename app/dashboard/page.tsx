@@ -2,11 +2,13 @@ import Link from "next/link";
 import { ApprovalQueue } from "@/components/domain/owner-console/approval-queue";
 import { OwnerDataUnavailable, ProjectUnavailable, ScopeBadge, SignInRequired } from "@/components/domain/owner-console/owner-state";
 import { activeRunStatuses, blockedRunStatuses, ProjectRunTable } from "@/components/domain/owner-console/project-run-table";
+import { TaskTable } from "@/components/domain/owner-console/task-table";
 import { AppShell } from "@/components/shell/app-shell";
 import { EmptyState } from "@/components/ui/empty-state";
 import { SectionCard } from "@/components/ui/section-card";
 import { StatusBadge } from "@/components/ui/status-badge";
-import { loadOwnerDashboard, type OwnerConsoleProject } from "@/lib/composition/owner-console-read.server";
+import { formatTimestamp } from "@/components/domain/owner-console/format";
+import { loadOwnerDashboard, type OwnerConsoleDashboardTasks, type OwnerConsoleProject } from "@/lib/composition/owner-console-read.server";
 import { projectScopedHref } from "@/lib/projects/project-context";
 
 type DashboardPageProps = {
@@ -32,6 +34,60 @@ function MetricStrip({ children, columns }: { children: React.ReactNode; columns
     <div className={`grid grid-cols-2 divide-line rounded-pac border border-line bg-panel max-lg:[&>*:nth-child(n+3)]:border-t max-lg:[&>*:nth-child(n+3)]:border-line lg:divide-x ${
       columns === 5 ? "lg:grid-cols-5" : "lg:grid-cols-4"}`}>
       {children}
+    </div>
+  );
+}
+
+// "What is being worked on?" — factual ProjectTasks only (never inferred from runs), then the most
+// recently completed tasks by the TASK's own completed_at.
+function TaskSections({ tasks, names, selectedProjectId }: {
+  tasks: OwnerConsoleDashboardTasks;
+  names: ReadonlyMap<string, string>;
+  selectedProjectId: string | null;
+}) {
+  const tasksHref = projectScopedHref("/tasks", selectedProjectId);
+  return (
+    <div className="mb-4 grid gap-4 xl:grid-cols-12">
+      <SectionCard
+        action={<Link className="text-xs text-accent hover:underline" href={tasksHref}>All tasks →</Link>}
+        className="xl:col-span-8"
+        description={`Active and attention tasks, most recently updated first${tasks.current.truncated ? " (bounded view)" : ""}.`}
+        title={`Current tasks · ${tasks.current.tasks.length}${tasks.current.truncated ? "+" : ""}`}
+      >
+        {tasks.current.tasks.length === 0 ? (
+          <p className="text-[13px] text-ink-3">No task is currently in progress or waiting on attention.</p>
+        ) : (
+          <div className="-mx-4 -my-4">
+            <TaskTable projectNames={names} selectedProjectId={selectedProjectId} showProject={selectedProjectId === null} tasks={tasks.current.tasks} />
+          </div>
+        )}
+      </SectionCard>
+      <SectionCard
+        className="xl:col-span-4"
+        description="Tasks with status completed, by task completion time."
+        title="Recently completed"
+      >
+        {tasks.recentlyCompleted.tasks.length === 0 ? (
+          <p className="text-[13px] text-ink-3">No completed tasks yet.</p>
+        ) : (
+          <ul className="-mx-4 -my-4 divide-y divide-line">
+            {tasks.recentlyCompleted.tasks.map((task) => (
+              <li key={task.taskId}>
+                <Link
+                  className="block px-4 py-2.5 hover:bg-panel-2"
+                  href={`/tasks/${encodeURIComponent(task.taskId)}${tasksHref.slice("/tasks".length)}`}
+                >
+                  <p className="truncate text-[13px] text-ink">{task.title}</p>
+                  <p className="mt-0.5 font-mono text-[10.5px] text-ink-3">
+                    {selectedProjectId === null && <>{names.get(task.projectId) ?? task.projectId} · </>}
+                    completed {formatTimestamp(task.completedAt)}
+                  </p>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
+      </SectionCard>
     </div>
   );
 }
@@ -75,15 +131,20 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
         const coverageGap = view.aggregate.projectsUnavailable.length > 0 || view.aggregate.projectsNotConsidered > 0;
         return (
           <>
-            <MetricStrip columns={4}>
+            <MetricStrip columns={5}>
               <Metric detail={view.projectsTruncated ? "First 100 registered projects" : "Registered in this workspace"} label="Projects" value={`${view.projects.length}${view.projectsTruncated ? "+" : ""}`} />
               <Metric
-                detail={view.queueTruncated ? "Workspace queue shows the first 100" : "Workspace-wide, all projects"}
+                detail="Active or needing attention, all projects"
+                label="Current tasks"
+                tone={view.tasks.current.tasks.length > 0 ? "run" : "neutral"}
+                value={`${view.tasks.current.tasks.length}${view.tasks.current.truncated ? "+" : ""}`}
+              />
+              <Metric
+                detail={`${view.highRiskApprovals} high/critical · workspace-wide`}
                 label="Pending approvals"
                 tone={view.pendingApprovals > 0 ? "warn" : "ok"}
                 value={`${view.pendingApprovals}${view.queueTruncated ? "+" : ""}`}
               />
-              <Metric detail="High or critical risk, workspace-wide" label="High / critical" tone={view.highRiskApprovals > 0 ? "bad" : "neutral"} value={view.highRiskApprovals} />
               <Metric
                 detail={`${blockedRuns} blocked or failed · in recent project runs`}
                 label="Active runs"
@@ -92,12 +153,16 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
               />
             </MetricStrip>
 
-            <div className="mt-4 grid gap-4 xl:grid-cols-12">
+            <div className="mt-4">
+              <TaskSections names={names} selectedProjectId={null} tasks={view.tasks} />
+            </div>
+
+            <div className="grid gap-4 xl:grid-cols-12">
               <SectionCard
                 action={<Link className="text-xs text-accent hover:underline" href={projectScopedHref("/runs", null)}>All runs →</Link>}
                 className="xl:col-span-7"
-                description={`Newest registered-project runs across all projects (up to ${view.aggregate.runsPerProjectLimit} per project).`}
-                title="Active work"
+                description={`Run attempts across all projects, newest first (up to ${view.aggregate.runsPerProjectLimit} per project).`}
+                title="Recent runs"
               >
                 {view.aggregate.runs.length === 0 ? (
                   <p className="text-[13px] text-ink-3">{view.projects.length === 0 ? "No projects registered." : "No runs in registered projects yet."}</p>
@@ -166,7 +231,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
                 Runs come from the registered projects ({view.aggregate.projectsConsidered} read, up to {view.aggregate.runsPerProjectLimit} newest runs each), not complete run history.
                 {view.aggregate.projectsNotConsidered > 0 && ` ${view.aggregate.projectsNotConsidered} more project(s) are not included in this view.`}
                 {view.aggregate.projectsUnavailable.length > 0 && ` Runs unavailable for: ${view.aggregate.projectsUnavailable.join(", ")}.`}
-                {" "}Tasks are not available yet; current work is shown as runs.
+                {" "}Tasks are factual Owner objectives; runs are their execution attempts.
               </p>
             </div>
           </>
@@ -197,11 +262,15 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
               <Metric detail="High or critical, this project" label="High / critical" tone={approvals.highRiskApprovals > 0 ? "bad" : "neutral"} value={approvals.highRiskApprovals} />
             </MetricStrip>
 
-            <div className="mt-4 grid gap-4 xl:grid-cols-12">
+            <div className="mt-4">
+              <TaskSections names={new Map([[project.projectId, project.displayName]])} selectedProjectId={project.projectId} tasks={view.tasks} />
+            </div>
+
+            <div className="grid gap-4 xl:grid-cols-12">
               <SectionCard
                 action={<Link className="text-xs text-accent hover:underline" href={projectScopedHref("/runs", project.projectId)}>Project runs →</Link>}
                 className="xl:col-span-7"
-                description="Newest runs of this project."
+                description="Run attempts of this project, newest first."
                 title="Project runs"
               >
                 {view.runs.length === 0 ? (

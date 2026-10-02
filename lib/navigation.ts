@@ -20,14 +20,14 @@ export const ownerNavigation: readonly OwnerNavSection[] = [
     id: "overview",
     items: [
       { label: "Dashboard", href: "/dashboard", available: true, projectScoped: true },
-      { label: "My Attention", href: "/attention", available: false },
+      { label: "My Attention", href: "/attention", available: true, projectScoped: true },
     ],
   },
   {
     id: "work",
     items: [
       { label: "Projects", href: "/projects", available: true },
-      { label: "Tasks", href: "/tasks", available: false },
+      { label: "Tasks", href: "/tasks", available: true, projectScoped: true },
       { label: "Runs", href: "/runs", available: true, projectScoped: true },
       { label: "Roadmap", href: "/roadmap", available: true },
       { label: "Approvals", href: "/approvals", available: true, attentionCount: true, projectScoped: true },

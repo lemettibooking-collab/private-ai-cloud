@@ -157,8 +157,8 @@ The census recorded the current hardening debt and moved development to mileston
 - **AI-038.2b Real GitHub OAuth Smoke — DONE** (commit `12212ad`; passed independent re-gate; **AI-038.2 DONE**; see §9)
 - **AI-038.3 Owner Console Real Read Wiring + Mission Control UI Foundation — DONE** (commit `70f4039`; passed independent re-gate; see §9)
 - **AI-038.3.1 Trusted Project Registry + Run Discovery Foundation — DONE** (commit `d7d1ca0`; passed independent re-gate; see §9)
-- **AI-038.3.2 Trusted Project Context Routing + All Projects + Real Project Switcher — IN REVIEW** (see §9)
-- **AI-038.4 Tasks / Task Detail / Task Result / My Attention / Quick Create / Recently Completed — PLANNED**
+- **AI-038.3.2 Trusted Project Context Routing + All Projects + Real Project Switcher — DONE** (commit `50cfed1`; passed independent re-gate; see §9)
+- **AI-038.4 Owner Tasks — ACTIVE**: **AI-038.4a Project Task Foundation + Read Surfaces — IN REVIEW**; **AI-038.4b Quick Create + audited Owner Task Write Boundary — PLANNED** (see §9)
 - **AI-038.5 Mission Control Visual Refinement — PLANNED**
 - **Roadmap Rebase v1.4 — vendor-neutral control plane — documentation only** (this version; `docs/ROADMAP_REBASE_V1.4.md`)
 
@@ -488,9 +488,9 @@ Passed independent re-gate (including the run-snapshot consistency corrective); 
   - `projectId` is an untrusted selector resolved only inside the already-authorized workspace. An unknown, foreign, archived or malformed project gives the same opaque `unavailable`.
 - **Not included:** UI project switching (AI-038.3.2), repository clone/checkout, GitHub API, project writes/onboarding, and a foreign key from `workflow_runs.project_id` to the registry (hardening debt: existing runtime rows have no factual registry backfill).
 
-#### AI-038.3.2 — Trusted Project Context Routing + All Projects + Real Project Switcher — IN REVIEW
+#### AI-038.3.2 — Trusted Project Context Routing + All Projects + Real Project Switcher — DONE
 
-Author implementation is complete and awaits independent re-gate. Owner-approved model:
+Passed independent re-gate; commit `50cfed1`. Owner-approved model:
 - **All Projects is the default scope.** It is the absence of a `?project=` selector: a UI/query scope, not a registry row. `/dashboard` is the global Mission Control home.
 - **Real Project Switcher** (All Projects + the authenticated `listProjects()` results) switches PROJECT context only and stays on the same major page. Dashboard, Runs and Approvals become project-scoped, and sidebar navigation preserves the selected project.
 - **Selector validation:** `?project=` is an untrusted selector. It is honoured only if the structure is valid **and** the authenticated registry of the trusted workspace lists it. Malformed, duplicate, unknown, foreign and archived values all give one opaque "Project unavailable" and never fall back to All Projects. The workspace still comes only from trusted server configuration; there is no cookie or storage authority.
@@ -501,9 +501,46 @@ Author implementation is complete and awaits independent re-gate. Owner-approved
 - **Run Detail:** never presents a run under a selected project it does not factually belong to.
 - **Tasks** do not exist yet: current work is shown as Runs.
 
-#### AI-038.4 — Tasks / Task Detail / Task Result / My Attention / Quick Create / Recently Completed — PLANNED
+#### AI-038.4 — Owner Tasks — ACTIVE
 
-The Owner task surfaces: Tasks, Task Detail, Task Result, My Attention, Quick Create and Recently Completed. After AI-038.4 the Dashboard will surface current Tasks across all projects; until then (AI-038.3.2) Runs are the factual current-work entity. Any creation flow requires its own approved write boundary.
+Split so that task persistence/read semantics and the first task write boundary are never introduced in one security-sensitive change.
+
+##### AI-038.4a — Project Task Foundation + Read Surfaces — IN REVIEW
+
+Author implementation (with corrective) is complete and awaits independent re-gate. The application UI is read-only; the only writes are the narrow server-side mutation contract below, which has no UI, route or Server Action.
+
+- **Model:** a persistent **ProjectTask** (`project_tasks`, migration `0010`) is the Owner objective ("what needs to be done"). It is distinct from the FeaturePlan `DevelopmentTask` (an in-memory node inside a FeaturePlan; FeaturePlan persistence and linking stay deferred).
+- **Identity and lifecycle:**
+  - stable public `task_key` (unique per workspace; the uuid is internal);
+  - type `feature` / `fix` / `investigation` / `roadmap`;
+  - a 12-state lifecycle (draft; active: ready, planning, approved, running, verifying; attention: waiting_owner, blocked, recovery_required, failed; terminal: completed, cancelled);
+  - nullable P0–P4 priority and low–critical risk (never defaulted);
+  - `completed ⇔ completed_at`.
+
+  Task status is persisted task state, never derived from runs.
+- **Integrity:** every task belongs to one registered project of the same workspace (composite FK). **Task ↔ Run** (`project_task_runs`): 0..N runs per task, a run linked to at most one task, and the same workspace and project enforced by composite FKs on both sides.
+- **Reads:** `OwnerReadBackend.listTasks(view)`, `listProjectTasks(projectId, view)` and `getTask(taskId)`. Each is one bounded SQL statement, gated by the Project Registry (archived projects are undiscoverable), with linked runs snapshot-validated.
+- **Owner Console:**
+  - Tasks, Task Detail and a factual Task Result (aggregation only, no agent report);
+  - My Attention (attention-status tasks + pending approvals, project-narrowed via the AI-038.3.2 classification);
+  - Recently Completed (by the task's `completed_at`);
+  - Dashboard Current Tasks, global and per project.
+
+  Runs stay runs (attempts). `+ New Task` stays disabled.
+- **Task mutation contract (corrective):** `lib/tasks/owner-task-mutations.ts`, kept separate from `OwnerReadBackend`. It is server-side only, with no UI, route or Server Action binding.
+  - `createTask` (authenticated active Owner → trusted workspace → active project):
+    - one transaction; Owner authority and project rows held `FOR SHARE` until commit, so a concurrent pause or archive cannot slip through;
+    - the server generates the task ID, and the task starts as `draft`;
+    - `creation_idempotency_key` + immutable intent fingerprint: same key and same intent → the same task; same key and any changed intent → generic conflict.
+  - `attachRun`:
+    - same-tenant, same-project run, with canonical snapshot validation before linking; a corrupted column or snapshot fails closed;
+    - the same task again → idempotent success; a run owned by another task → conflict.
+  - Exactly one `task.created` / `task.run_attached` audit event, written in the same transaction; DB unique indexes on links, keys and task audits are the last race guards.
+  - No run start, model, executor or GitHub action.
+
+##### AI-038.4b — Quick Create + audited Owner Task Write Boundary — PLANNED
+
+The first Owner-facing task write: Quick Create UI wired to the AI-038.4a `createTask` contract through a separately reviewed, audited write boundary. It creates task **intent** only. It must NOT automatically execute a run, call a model or an executor, mutate GitHub, commit, push or deploy.
 
 #### AI-038.5 — Mission Control Visual Refinement — PLANNED (deferred from the AI-038.3 Owner checkpoint)
 
@@ -951,7 +988,7 @@ Roadmap does not imply strictly serial development. Parallel work is allowed onl
 
 ### A. Current operational line (unchanged by the rebase)
 
-While M2.2 is deferred: `AI-037.7 DONE → AI-038.0 DONE → AI-038.1 DONE → AI-038.2a DONE → AI-038.2b DONE → AI-038.3 DONE → AI-038.3.1 DONE → AI-038.3.2 All Projects + Real Project Switcher / Project Context Routing (IN REVIEW) → AI-038.4 Tasks + My Attention + Quick Create → AI-038.5 Mission Control Visual Refinement → AI-039 Development Workflow Browser` (M3 Owner path, §9). AI-038.2 passed; the Owner Console reads real runtime data through AI-038.3, read-only. The rebase does not cancel or skip any unfinished AI-038 work.
+While M2.2 is deferred: `AI-037.7 DONE → AI-038.0 DONE → AI-038.1 DONE → AI-038.2a DONE → AI-038.2b DONE → AI-038.3 DONE → AI-038.3.1 DONE → AI-038.3.2 DONE → AI-038.4a Project Task Foundation + read surfaces (IN REVIEW) → AI-038.4b Quick Create / task write boundary → AI-038.5 Mission Control Visual Refinement → AI-039 Development Workflow Browser` (M3 Owner path, §9). AI-038.2 passed; the Owner Console reads real runtime data through AI-038.3, read-only. The rebase does not cancel or skip any unfinished AI-038 work.
 
 ### B. First new architecture implementation introduced by v1.4
 
@@ -963,7 +1000,7 @@ While M2.2 is deferred: `AI-037.7 DONE → AI-038.0 DONE → AI-038.1 DONE → A
 
 ### UI
 
-AI-038.2, AI-038.3 and AI-038.3.1 are DONE: the Owner Console reads real runtime data, read-only. AI-038.3.2 (in review) adds All Projects and real project switching. Write actions in the UI need a separate write-boundary task. AI-039 is not started.
+AI-038.2, AI-038.3, AI-038.3.1 and AI-038.3.2 are DONE: the Owner Console reads real runtime data with All Projects and real project switching, read-only. AI-038.4a (in review) adds persistent Owner Tasks as read surfaces. Write actions in the UI need a separate write-boundary task. AI-039 is not started.
 
 ### Execution platform
 

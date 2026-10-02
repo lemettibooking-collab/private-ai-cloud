@@ -9,6 +9,7 @@ import type {
 } from "../db/workflow-runtime-read-model";
 import type { ProjectRunSummary } from "../projects/postgres-project-registry";
 import type { PublicProjectSummary } from "../projects/project-registry";
+import type { ProjectTaskView, PublicProjectTaskDetail, PublicProjectTaskSummary } from "../tasks/project-task";
 import type {
   WorkflowRuntimeCommand,
   WorkflowRuntimeResponse,
@@ -28,6 +29,10 @@ export const workflowRuntimeAccessActions = Object.freeze([
   // AI-038.3.1 project discovery (read-only, tenant-scoped).
   "list_projects",
   "list_project_runs",
+  // AI-038.4a ProjectTask reads (read-only, tenant-scoped).
+  "list_tasks",
+  "list_project_tasks",
+  "read_task",
 ] as const);
 
 export type WorkflowRuntimeAccessAction = typeof workflowRuntimeAccessActions[number];
@@ -232,6 +237,29 @@ export type WorkflowRuntimePublicProjectRunSummary = Readonly<{
   completedAt: string | null;
 }>;
 
+// AI-038.4a public ProjectTask projections (explicit copies; no internal ids).
+export type WorkflowRuntimePublicTaskSummary = Readonly<{
+  taskId: string;
+  projectId: string;
+  title: string;
+  goal: string | null;
+  type: PublicProjectTaskSummary["type"];
+  status: PublicProjectTaskSummary["status"];
+  priority: PublicProjectTaskSummary["priority"];
+  riskLevel: PublicProjectTaskSummary["riskLevel"];
+  linkedRunCount: number;
+  latestRun: Readonly<{ runId: string; status: WorkflowRuntimePublicRunOverview["status"]; createdAt: string; completedAt: string | null }> | null;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+}>;
+
+export type WorkflowRuntimePublicTaskDetail = Readonly<{
+  task: WorkflowRuntimePublicTaskSummary;
+  runs: readonly WorkflowRuntimePublicProjectRunSummary[];
+  runsTruncated: boolean;
+}>;
+
 export interface WorkflowRuntimeAccessAuthorizer {
   authorize(
     input: WorkflowRuntimeAccessAuthorizationInput,
@@ -245,7 +273,7 @@ export type WorkflowRuntimeAccessDecision<T> =
 type RuntimeReadModel = Pick<PostgresWorkflowRuntimeReadModel,
   "getRunOverview" | "getRunAuditTimeline" | "getRunModelUsage" | "listApprovalQueue">
   // AI-038.3.1: optional project discovery; when absent the corresponding reads fail closed.
-  & Partial<Pick<PostgresWorkflowRuntimeReadModel, "listProjects" | "listProjectRuns">>;
+  & Partial<Pick<PostgresWorkflowRuntimeReadModel, "listProjects" | "listProjectRuns" | "listTasks" | "getTask">>;
 
 export type AuthorizedWorkflowRuntimeAccessDependencies = Readonly<{
   runtimeService: Pick<WorkflowRuntimeService, "execute">;
@@ -284,6 +312,9 @@ export interface AuthorizedWorkflowRuntimeAccess {
     projectId: unknown,
     limit?: number,
   ): Promise<WorkflowRuntimeAccessDecision<readonly WorkflowRuntimePublicProjectRunSummary[]>>;
+  listTasks(context: unknown, view: unknown): Promise<WorkflowRuntimeAccessDecision<readonly WorkflowRuntimePublicTaskSummary[]>>;
+  listProjectTasks(context: unknown, projectId: unknown, view: unknown): Promise<WorkflowRuntimeAccessDecision<readonly WorkflowRuntimePublicTaskSummary[]>>;
+  getTask(context: unknown, taskId: unknown): Promise<WorkflowRuntimeAccessDecision<WorkflowRuntimePublicTaskDetail>>;
 }
 
 const stableIdPattern = /^[a-z0-9][a-z0-9._-]{0,63}$/u;
@@ -553,6 +584,35 @@ function projectProjectRunSummary(input: ProjectRunSummary): WorkflowRuntimePubl
   };
 }
 
+function projectTaskSummary(input: PublicProjectTaskSummary): WorkflowRuntimePublicTaskSummary {
+  return {
+    taskId: input.taskId,
+    projectId: input.projectId,
+    title: input.title,
+    goal: input.goal,
+    type: input.type,
+    status: input.status,
+    priority: input.priority,
+    riskLevel: input.riskLevel,
+    linkedRunCount: input.linkedRunCount,
+    latestRun: input.latestRun === null
+      ? null
+      : { runId: input.latestRun.runId, status: input.latestRun.status, createdAt: input.latestRun.createdAt, completedAt: input.latestRun.completedAt },
+    createdAt: input.createdAt,
+    updatedAt: input.updatedAt,
+    completedAt: input.completedAt,
+  };
+}
+
+function projectTaskDetail(input: PublicProjectTaskDetail): WorkflowRuntimePublicTaskDetail {
+  return { task: projectTaskSummary(input.task), runs: input.runs.map(projectProjectRunSummary), runsTruncated: input.runsTruncated };
+}
+
+const taskViews = new Set<string>(["all", "current", "attention", "completed"]);
+function taskView(input: unknown): ProjectTaskView | null {
+  return typeof input === "string" && taskViews.has(input) ? input as ProjectTaskView : null;
+}
+
 function runId(input: unknown): string | null {
   return typeof input === "string" && stableIdPattern.test(input) ? input : null;
 }
@@ -736,6 +796,44 @@ export function createAuthorizedWorkflowRuntimeAccess(
     }
   }
 
+  // AI-038.4a: ProjectTask reads. The view is a server-fixed enum; projectId / taskId are untrusted
+  // selectors shape-checked here and resolved only inside the bound workspace by the read model.
+  // Unknown, foreign, archived-project and malformed tasks are all the same opaque `unavailable`.
+  async function readTasks(
+    contextInput: unknown,
+    action: "list_tasks" | "list_project_tasks",
+    projectIdInput: unknown,
+    viewInput: unknown,
+  ): Promise<WorkflowRuntimeAccessDecision<readonly WorkflowRuntimePublicTaskSummary[]>> {
+    const readModel = dependencies.readModel;
+    const view = taskView(viewInput);
+    const projectId = action === "list_project_tasks" ? runId(projectIdInput) : null;
+    if (!view || (action === "list_project_tasks" && !projectId) || typeof readModel.listTasks !== "function") return unavailable();
+    if (!await authorize(contextInput, action, null)) return unavailable();
+    try {
+      const result = await readModel.listTasks(view, projectId);
+      return rawAllowed(result) ? availableProjected(result.data.map(projectTaskSummary)) : unavailable();
+    } catch {
+      return unavailable();
+    }
+  }
+
+  async function getTask(
+    contextInput: unknown,
+    taskIdInput: unknown,
+  ): Promise<WorkflowRuntimeAccessDecision<WorkflowRuntimePublicTaskDetail>> {
+    const readModel = dependencies.readModel;
+    const taskId = runId(taskIdInput);
+    if (!taskId || typeof readModel.getTask !== "function") return unavailable();
+    if (!await authorize(contextInput, "read_task", null)) return unavailable();
+    try {
+      const result = await readModel.getTask(taskId);
+      return rawAllowed(result) ? availableProjected(projectTaskDetail(result.data)) : unavailable();
+    } catch {
+      return unavailable();
+    }
+  }
+
   return Object.freeze({
     executeCommand,
     getRunOverview,
@@ -744,5 +842,8 @@ export function createAuthorizedWorkflowRuntimeAccess(
     listApprovalQueue,
     listProjects,
     listProjectRuns,
+    listTasks: (context: unknown, view: unknown) => readTasks(context, "list_tasks", null, view),
+    listProjectTasks: (context: unknown, projectId: unknown, view: unknown) => readTasks(context, "list_project_tasks", projectId, view),
+    getTask,
   });
 }

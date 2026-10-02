@@ -11,6 +11,9 @@ import type { ProjectRunSummary } from "../projects/postgres-project-registry";
 import type { PublicProjectSummary } from "../projects/project-registry";
 // @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
 import { queryProjectRuns, queryProjects } from "../projects/postgres-project-registry.ts";
+import type { ProjectTaskView, PublicProjectTaskDetail, PublicProjectTaskSummary } from "../tasks/project-task";
+// @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
+import { queryProjectTask, queryProjectTasks } from "../tasks/postgres-project-task-read.ts";
 
 export const workflowRuntimeReadModelLimits = Object.freeze({
   defaultLimit: 25,
@@ -446,6 +449,26 @@ export class PostgresWorkflowRuntimeReadModel {
       return await this.#withClient(async (client) => {
         const result = await queryProjectRuns(client, this.#workspaceDatabaseId, projectId, limit);
         return result.verdict === "allow" ? allow(result.data) : deny<readonly ProjectRunSummary[]>(result.reason);
+      });
+    } catch { return deny("read_failed"); }
+  }
+
+  // AI-038.4a: ProjectTasks of THIS tenant (optionally one project) for a server-fixed view.
+  async listTasks(view: ProjectTaskView, projectId: string | null): Promise<WorkflowRuntimeReadDecision<readonly PublicProjectTaskSummary[]>> {
+    try {
+      return await this.#withClient(async (client) => {
+        const result = await queryProjectTasks(client, this.#workspaceDatabaseId, view, projectId);
+        return result.verdict === "allow" ? allow(result.data) : deny<readonly PublicProjectTaskSummary[]>(result.reason);
+      });
+    } catch { return deny("read_failed"); }
+  }
+
+  // AI-038.4a: one ProjectTask of THIS tenant with its linked runs (one bounded statement).
+  async getTask(taskId: string): Promise<WorkflowRuntimeReadDecision<PublicProjectTaskDetail>> {
+    try {
+      return await this.#withClient(async (client) => {
+        const result = await queryProjectTask(client, this.#workspaceDatabaseId, taskId);
+        return result.verdict === "allow" ? allow(result.data) : deny<PublicProjectTaskDetail>(result.reason);
       });
     } catch { return deny("read_failed"); }
   }

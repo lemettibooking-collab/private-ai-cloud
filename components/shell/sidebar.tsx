@@ -12,8 +12,8 @@ type SidebarProps = {
   selectedProjectId: string | null;
 };
 
-// Project context is preserved on Dashboard / Runs / Approvals. Projects, Roadmap and Settings are
-// not project-scoped yet and navigate without a selector.
+// Project context is preserved on Dashboard / My Attention / Tasks / Runs / Approvals. Projects,
+// Roadmap and Settings are not project-scoped and navigate without a selector.
 export function Sidebar({ pendingApprovals, selectedProjectId }: SidebarProps) {
   const pathname = usePathname();
 

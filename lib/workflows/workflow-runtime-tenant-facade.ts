@@ -8,6 +8,8 @@ import type {
   WorkflowRuntimePublicProjectRunSummary,
   WorkflowRuntimePublicProjectSummary,
   WorkflowRuntimePublicRunOverview,
+  WorkflowRuntimePublicTaskDetail,
+  WorkflowRuntimePublicTaskSummary,
 } from "./workflow-runtime-access";
 import type { WorkflowRuntimeDatabase } from "../db/workflow-runtime-store";
 // @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
@@ -51,6 +53,12 @@ export interface TenantBoundWorkflowRuntimeFacade {
   // AI-038.3.1 { workspaceId, actorId, projectId, limit? } — projectId is an untrusted selector
   // resolved only inside the bound workspace; it never chooses the workspace.
   listProjectRuns(request: unknown): Promise<TenantBoundWorkflowRuntimeDecision<readonly WorkflowRuntimePublicProjectRunSummary[]>>;
+  // AI-038.4a { workspaceId, actorId, view } — view is a fixed enum with a server-fixed bound.
+  listTasks(request: unknown): Promise<TenantBoundWorkflowRuntimeDecision<readonly WorkflowRuntimePublicTaskSummary[]>>;
+  // AI-038.4a { workspaceId, actorId, projectId, view }
+  listProjectTasks(request: unknown): Promise<TenantBoundWorkflowRuntimeDecision<readonly WorkflowRuntimePublicTaskSummary[]>>;
+  // AI-038.4a { workspaceId, actorId, taskId }
+  getTask(request: unknown): Promise<TenantBoundWorkflowRuntimeDecision<WorkflowRuntimePublicTaskDetail>>;
 }
 
 export const tenantBoundWorkflowRuntimeFacadeLimits = Object.freeze({
@@ -65,8 +73,10 @@ const stableIdPattern = /^[a-z0-9][a-z0-9._-]{0,63}$/u;
 const actorIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}$/u;
 const constructionFields = Object.freeze(["tenant", "database", "authorizer"] as const);
 
-type Field = "workspaceId" | "actorId" | "runId" | "projectId" | "limit";
-type Request = Readonly<{ workspaceId: string; actorId: string; runId: string | null; projectId: string | null; limit: number | undefined }>;
+type Field = "workspaceId" | "actorId" | "runId" | "projectId" | "taskId" | "view" | "limit";
+type Request = Readonly<{ workspaceId: string; actorId: string; runId: string | null; projectId: string | null; taskId: string | null; view: string | null; limit: number | undefined }>;
+
+const taskViewPattern = /^(all|current|attention|completed)$/u;
 type Gate = Readonly<{ ok: true; request: Request }> | Readonly<{ ok: false; status: "invalid_input" | "limit_exceeded" }>;
 
 function denial<T>(status: TenantBoundWorkflowRuntimeDenialStatus): TenantBoundWorkflowRuntimeDecision<T> {
@@ -112,8 +122,14 @@ function gate(input: unknown, required: readonly Field[], optional: readonly Fie
   const projectId = required.includes("projectId")
     ? boundedString(values.projectId, tenantBoundWorkflowRuntimeFacadeLimits.maxIdLength, stableIdPattern)
     : null;
-  if (workspaceId === "limited" || actorId === "limited" || runId === "limited" || projectId === "limited") return limited;
-  if (workspaceId === "invalid" || actorId === "invalid" || runId === "invalid" || projectId === "invalid") return invalid;
+  const taskId = required.includes("taskId")
+    ? boundedString(values.taskId, tenantBoundWorkflowRuntimeFacadeLimits.maxIdLength, stableIdPattern)
+    : null;
+  const view = required.includes("view") ? boundedString(values.view, 16, taskViewPattern) : null;
+  if (workspaceId === "limited" || actorId === "limited" || runId === "limited" || projectId === "limited"
+    || taskId === "limited" || view === "limited") return limited;
+  if (workspaceId === "invalid" || actorId === "invalid" || runId === "invalid" || projectId === "invalid"
+    || taskId === "invalid" || view === "invalid") return invalid;
   let limit: number | undefined;
   if (Object.hasOwn(values, "limit")) {
     const value = values.limit;
@@ -122,7 +138,7 @@ function gate(input: unknown, required: readonly Field[], optional: readonly Fie
     if (value > tenantBoundWorkflowRuntimeFacadeLimits.maxLimit) return limited;
     limit = value;
   }
-  return { ok: true, request: Object.freeze({ workspaceId, actorId, runId, projectId, limit }) };
+  return { ok: true, request: Object.freeze({ workspaceId, actorId, runId, projectId, taskId, view, limit }) };
 }
 
 // Own data members of an ordinary, non-Proxy object only; nothing else is ever read.
@@ -218,5 +234,11 @@ export function createTenantBoundWorkflowRuntimeFacade(input: unknown): TenantBo
       (context, gated) => access.listProjects(context, gated.limit)),
     listProjectRuns: (request: unknown) => guarded<readonly WorkflowRuntimePublicProjectRunSummary[]>(request, ["workspaceId", "actorId", "projectId"], ["limit"],
       (context, gated) => access.listProjectRuns(context, gated.projectId, gated.limit)),
+    listTasks: (request: unknown) => guarded<readonly WorkflowRuntimePublicTaskSummary[]>(request, ["workspaceId", "actorId", "view"], [],
+      (context, gated) => access.listTasks(context, gated.view)),
+    listProjectTasks: (request: unknown) => guarded<readonly WorkflowRuntimePublicTaskSummary[]>(request, ["workspaceId", "actorId", "projectId", "view"], [],
+      (context, gated) => access.listProjectTasks(context, gated.projectId, gated.view)),
+    getTask: (request: unknown) => guarded<WorkflowRuntimePublicTaskDetail>(request, ["workspaceId", "actorId", "taskId"], [],
+      (context, gated) => access.getTask(context, gated.taskId)),
   });
 }

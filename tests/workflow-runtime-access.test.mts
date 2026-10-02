@@ -143,6 +143,9 @@ test("exports only stable frozen access actions and rejects unknown actions", ()
     "list_approval_queue",
     "list_projects",
     "list_project_runs",
+    "list_tasks",
+    "list_project_tasks",
+    "read_task",
   ]);
   assert.equal(Object.isFrozen(workflowRuntimeAccessActions), true);
   for (const action of workflowRuntimeAccessActions) {

@@ -105,6 +105,52 @@ export type OwnerConsoleRunDetail = Readonly<{
   audit: Readonly<{ state: "available"; items: readonly OwnerConsoleAuditItem[]; limit: number }> | Readonly<{ state: "unavailable" }>;
 }>;
 
+// AI-038.4a Owner / Project Task (objective). Runs are attempts linked to it; never the same thing.
+export type OwnerConsoleTaskStatus =
+  | "draft" | "ready" | "planning" | "approved" | "running" | "verifying" | "waiting_owner"
+  | "blocked" | "recovery_required" | "completed" | "failed" | "cancelled";
+
+export type OwnerConsoleTask = Readonly<{
+  taskId: string;
+  projectId: string;
+  title: string;
+  goal: string | null;
+  type: "feature" | "fix" | "investigation" | "roadmap";
+  status: OwnerConsoleTaskStatus;
+  priority: "P0" | "P1" | "P2" | "P3" | "P4" | null;
+  riskLevel: "low" | "medium" | "high" | "critical" | null;
+  linkedRunCount: number;
+  latestRun: Readonly<{ runId: string; status: OwnerConsoleRunStatus; createdAt: string; completedAt: string | null }> | null;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+}>;
+
+// Factual Task Result: aggregation of the task and its linked runs only (no agent report).
+export type OwnerConsoleTaskResult = Readonly<{
+  status: OwnerConsoleTaskStatus;
+  completedAt: string | null;
+  linkedRunCount: number;
+  latestRun: OwnerConsoleTask["latestRun"];
+  completedRuns: number;
+  failedOrBlockedRuns: number;
+  activeRuns: number;
+  // Counts above cover the shown (newest) runs only when this is true.
+  runsTruncated: boolean;
+}>;
+
+export type OwnerConsoleTaskDetail = Readonly<{
+  task: OwnerConsoleTask;
+  runs: readonly OwnerConsoleProjectRun[];
+  runsTruncated: boolean;
+  result: OwnerConsoleTaskResult;
+}>;
+
+type TaskList = Readonly<{ tasks: readonly OwnerConsoleTask[]; truncated: boolean }>;
+
+// Dashboard task surfaces (factual project_tasks only; never inferred from runs).
+export type OwnerConsoleDashboardTasks = Readonly<{ current: TaskList; recentlyCompleted: TaskList }>;
+
 type Gate<T> =
   | Readonly<{ state: "available"; workspace: OwnerConsoleWorkspace } & T>
   | Readonly<{ state: "unauthenticated"; workspace: OwnerConsoleWorkspace | null }>
@@ -167,6 +213,7 @@ export type OwnerConsoleDashboard = Gate<
     highRiskApprovals: number;
     queueTruncated: boolean;
     aggregate: OwnerConsoleRunAggregate;
+    tasks: OwnerConsoleDashboardTasks;
   }>)
   | (ProjectList & Readonly<{
     mode: "project";
@@ -175,6 +222,7 @@ export type OwnerConsoleDashboard = Gate<
     runsTruncated: boolean;
     runsLimit: number;
     projectApprovals: OwnerConsoleProjectApprovals;
+    tasks: OwnerConsoleDashboardTasks;
   }>)
 >;
 
@@ -189,6 +237,19 @@ export type OwnerConsoleApprovals = Gate<
 >;
 
 export type OwnerConsoleProjects = Gate<ProjectList>;
+
+export type OwnerConsoleTasks = Gate<ProjectList & Readonly<{ mode: "all" | "project"; scope: OwnerConsoleScope } & TaskList>>;
+
+export type OwnerConsoleTaskView = Gate<ProjectList & Readonly<{
+  scope: OwnerConsoleScope;
+  task: Readonly<{ state: "available"; detail: OwnerConsoleTaskDetail }> | Readonly<{ state: "unavailable" }>;
+}>>;
+
+// My Attention: attention-status tasks + pending approvals (workspace, or factually one project).
+export type OwnerConsoleAttention = Gate<
+  | (ProjectList & Readonly<{ mode: "all"; scope: Readonly<{ mode: "all" }>; attentionTasks: TaskList; approvals: readonly OwnerConsoleApproval[]; pendingApprovals: number; highRiskApprovals: number; queueTruncated: boolean }>)
+  | (ProjectList & Readonly<{ mode: "project"; scope: Readonly<{ mode: "project"; project: OwnerConsoleProject }>; attentionTasks: TaskList; projectApprovals: OwnerConsoleProjectApprovals }>)
+>;
 
 export type OwnerConsoleRunView = Gate<ProjectList & Readonly<{
   scope: OwnerConsoleScope;
@@ -223,6 +284,9 @@ export const ownerConsoleLimits = Object.freeze({
   maxOverviewClassifications: 40,
   // Concurrent backend reads (the per-request PostgreSQL pool has two connections).
   readConcurrency: 2,
+  // AI-038.4a display limits (backend views are bounded at ≤ 100 server-side).
+  dashboardCurrentTasks: 10,
+  dashboardRecentlyCompleted: 5,
 });
 
 const slugPattern = /^[a-z0-9][a-z0-9._-]{0,63}$/u;
@@ -355,7 +419,41 @@ function invocationView(input: Record<string, unknown> | null | undefined): Owne
   });
 }
 
+const taskStatuses = new Set(["draft", "ready", "planning", "approved", "running", "verifying", "waiting_owner",
+  "blocked", "recovery_required", "completed", "failed", "cancelled"]);
+const taskTypes = new Set(["feature", "fix", "investigation", "roadmap"]);
+
+function taskView(input: Record<string, unknown>): OwnerConsoleTask | null {
+  const latest = input.latestRun as Record<string, unknown> | null | undefined;
+  const taskId = str(input.taskId);
+  const projectId = str(input.projectId);
+  if (!runIdPattern.test(taskId) || !runIdPattern.test(projectId) || !taskStatuses.has(str(input.status)) || !taskTypes.has(str(input.type))) return null;
+  return Object.freeze({
+    taskId,
+    projectId,
+    title: str(input.title),
+    goal: strOrNull(input.goal),
+    type: str(input.type) as OwnerConsoleTask["type"],
+    status: str(input.status) as OwnerConsoleTaskStatus,
+    priority: strOrNull(input.priority) as OwnerConsoleTask["priority"],
+    riskLevel: strOrNull(input.riskLevel) as OwnerConsoleTask["riskLevel"],
+    linkedRunCount: num(input.linkedRunCount),
+    latestRun: latest && typeof latest === "object"
+      ? Object.freeze({ runId: str(latest.runId), status: str(latest.status) as OwnerConsoleRunStatus, createdAt: str(latest.createdAt), completedAt: strOrNull(latest.completedAt) })
+      : null,
+    createdAt: str(input.createdAt),
+    updatedAt: str(input.updatedAt),
+    completedAt: strOrNull(input.completedAt),
+  });
+}
+
 class ProjectUnavailable extends Error {}
+
+// Server-fixed bounds of the backend task views (truncation is reported when a view is full).
+const serverViewLimit = Object.freeze({ all: 100, current: 50, attention: 50, completed: 25 });
+const completedRunStatuses = new Set(["completed"]);
+const failedRunStatuses = new Set(["failed", "blocked"]);
+const activeRunStatusSet = new Set(["queued", "running", "waiting_approval", "review"]);
 
 const newestFirst = (a: OwnerConsoleProjectRun, b: OwnerConsoleProjectRun) =>
   a.createdAt === b.createdAt ? (a.runId < b.runId ? 1 : a.runId > b.runId ? -1 : (a.projectId < b.projectId ? 1 : -1))
@@ -457,6 +555,25 @@ export function createOwnerConsoleReader(dependencies: OwnerConsoleDependencies)
     });
   }
 
+  // One bounded task read (workspace or one validated project) → validated list; fails the whole read
+  // closed on any malformed or out-of-scope task.
+  async function taskList(backend: OwnerReadBackend, view: "all" | "current" | "attention" | "completed", projectId: string | null, displayLimit?: number): Promise<TaskList> {
+    const result = projectId === null ? await backend.listTasks(view) : await backend.listProjectTasks(projectId, view);
+    if (result.verdict !== "allow") throw new Error("unavailable");
+    const tasks = result.data.map((item) => taskView(item as unknown as Record<string, unknown>));
+    if (tasks.some((task) => task === null || (projectId !== null && task.projectId !== projectId))) throw new Error("unavailable");
+    const all = tasks as OwnerConsoleTask[];
+    const limit = displayLimit ?? all.length;
+    return Object.freeze({ tasks: Object.freeze(all.slice(0, limit)), truncated: all.length > limit || all.length >= serverViewLimit[view] });
+  }
+
+  async function dashboardTasks(backend: OwnerReadBackend, projectId: string | null): Promise<OwnerConsoleDashboardTasks> {
+    return Object.freeze({
+      current: await taskList(backend, "current", projectId, ownerConsoleLimits.dashboardCurrentTasks),
+      recentlyCompleted: await taskList(backend, "completed", projectId, ownerConsoleLimits.dashboardRecentlyCompleted),
+    });
+  }
+
   // Approvals of ONE project, classified by the factual run project only:
   //   1. membership proof from one listRuns(project, 100) (snapshot-validated factual runs);
   //   2. every other distinct run id → getRunOverview(runId).projectId, at most N reads;
@@ -522,12 +639,13 @@ export function createOwnerConsoleReader(dependencies: OwnerConsoleDependencies)
         if (scope.mode === "all") {
           const queue = await approvalQueue(backend);
           const aggregate = await aggregateRuns(backend, list, ownerConsoleLimits.dashboardActiveWorkLimit);
-          return { ...list, mode: "all" as const, scope, ...queue, aggregate };
+          return { ...list, mode: "all" as const, scope, ...queue, aggregate, tasks: await dashboardTasks(backend, null) };
         }
         const runs = await projectRuns(backend, scope.project.projectId, ownerConsoleLimits.projectRunsLimit);
         if (runs === null) throw new Error("unavailable");
         const projectApprovals = await classifyProjectApprovals(backend, scope.project.projectId);
-        return { ...list, mode: "project" as const, scope, runs, runsTruncated: runs.length >= ownerConsoleLimits.projectRunsLimit, runsLimit: ownerConsoleLimits.projectRunsLimit, projectApprovals };
+        const tasks = await dashboardTasks(backend, scope.project.projectId);
+        return { ...list, mode: "project" as const, scope, runs, runsTruncated: runs.length >= ownerConsoleLimits.projectRunsLimit, runsLimit: ownerConsoleLimits.projectRunsLimit, projectApprovals, tasks };
       });
     },
 
@@ -552,6 +670,82 @@ export function createOwnerConsoleReader(dependencies: OwnerConsoleDependencies)
         const scope = resolveScope(selector, list);
         if (scope.mode === "all") return { ...list, mode: "all" as const, scope, ...(await approvalQueue(backend)) };
         return { ...list, mode: "project" as const, scope, projectApprovals: await classifyProjectApprovals(backend, scope.project.projectId) };
+      });
+    },
+
+    // AI-038.4a Tasks list: All Projects (workspace) or one validated project; factual tasks only.
+    async loadOwnerTasks(selector: ProjectSelector): Promise<OwnerConsoleTasks> {
+      return gate(async (backend) => {
+        if (selector.kind === "invalid") throw new ProjectUnavailable();
+        const list = await projectList(backend);
+        const scope = resolveScope(selector, list);
+        const tasks = await taskList(backend, "all", scope.mode === "project" ? scope.project.projectId : null);
+        return { ...list, mode: scope.mode, scope, ...tasks };
+      });
+    },
+
+    // AI-038.4a Task Detail. The ONLY target is the stable Task ID; the project selector never
+    // authorizes access. Under a selected project, a task of another project is the same opaque
+    // `unavailable` as an unknown task. The Task Result is factual aggregation only.
+    async loadOwnerTask(taskId: unknown, selector: ProjectSelector): Promise<OwnerConsoleTaskView> {
+      return gate(async (backend) => {
+        if (selector.kind === "invalid") throw new ProjectUnavailable();
+        const list = await projectList(backend);
+        const scope = resolveScope(selector, list);
+        const opaque = { ...list, scope, task: Object.freeze({ state: "unavailable" as const }) };
+        if (typeof taskId !== "string" || !runIdPattern.test(taskId)) return opaque;
+        let result;
+        try {
+          result = await backend.getTask(taskId);
+        } catch {
+          result = null;
+        }
+        if (!result || result.verdict !== "allow") return opaque;
+        const data = result.data as unknown as Record<string, unknown>;
+        const task = taskView(data.task as Record<string, unknown>);
+        if (!task || task.taskId !== taskId) return opaque;
+        if (scope.mode === "project" && task.projectId !== scope.project.projectId) return opaque;
+        const runs = Object.freeze((Array.isArray(data.runs) ? data.runs : []).map((item) => projectRunView(item as Record<string, unknown>)));
+        if (runs.some((run) => run.projectId !== task.projectId)) return opaque;
+        const runsTruncated = data.runsTruncated === true;
+        return {
+          ...list,
+          scope,
+          task: Object.freeze({
+            state: "available" as const,
+            detail: Object.freeze({
+              task,
+              runs,
+              runsTruncated,
+              result: Object.freeze({
+                status: task.status,
+                completedAt: task.completedAt,
+                linkedRunCount: task.linkedRunCount,
+                latestRun: task.latestRun,
+                completedRuns: runs.filter((run) => completedRunStatuses.has(run.status)).length,
+                failedOrBlockedRuns: runs.filter((run) => failedRunStatuses.has(run.status)).length,
+                activeRuns: runs.filter((run) => activeRunStatusSet.has(run.status)).length,
+                runsTruncated,
+              }),
+            }),
+          }),
+        };
+      });
+    },
+
+    // AI-038.4a My Attention: attention-status tasks + pending approvals. A selected project narrows
+    // BOTH factually (approvals via the AI-038.3.2 classification, not a second algorithm).
+    async loadOwnerAttention(selector: ProjectSelector): Promise<OwnerConsoleAttention> {
+      return gate(async (backend) => {
+        if (selector.kind === "invalid") throw new ProjectUnavailable();
+        const list = await projectList(backend);
+        const scope = resolveScope(selector, list);
+        if (scope.mode === "all") {
+          const attentionTasks = await taskList(backend, "attention", null);
+          return { ...list, mode: "all" as const, scope, attentionTasks, ...(await approvalQueue(backend)) };
+        }
+        const attentionTasks = await taskList(backend, "attention", scope.project.projectId);
+        return { ...list, mode: "project" as const, scope, attentionTasks, projectApprovals: await classifyProjectApprovals(backend, scope.project.projectId) };
       });
     },
 

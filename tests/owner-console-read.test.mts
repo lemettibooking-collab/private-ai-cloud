@@ -65,7 +65,21 @@ const overview = (runId: string, projectId: string) => ({
 const allow = <T,>(data: T) => ({ verdict: "allow", status: "available", data });
 const unavailable = { verdict: "deny", status: "unavailable", data: null };
 
+const task = (taskId: string, projectId: string, status: string, extra: Record<string, unknown> = {}) => ({
+  taskId, projectId, title: `Task ${taskId}`, goal: null, type: "feature", status, priority: null, riskLevel: null,
+  linkedRunCount: 0, latestRun: null, createdAt: "2026-10-01T08:00:00.000Z", updatedAt: "2026-10-01T09:00:00.000Z",
+  completedAt: status === "completed" ? "2026-10-01T09:30:00.000Z" : null, ...extra,
+});
+const viewStatuses: Record<string, string[] | null> = {
+  all: null,
+  current: ["ready", "planning", "approved", "running", "verifying", "waiting_owner", "blocked", "recovery_required", "failed"],
+  attention: ["waiting_owner", "blocked", "recovery_required", "failed"],
+  completed: ["completed"],
+};
+
 type World = {
+  tasks?: Record<string, unknown>[];
+  taskDetails?: Record<string, unknown>;
   projects?: unknown[];
   // runId → factual project (for getRunOverview) ; per-project run lists (for listRuns)
   runProjects?: Record<string, string>;
@@ -84,6 +98,18 @@ function fakeBackend(world: World = {}) {
     "project-paused": [],
   };
   const approvals = world.approvals ?? [approval("run-a1", "high", 1), approval("run-b1", "critical", 2), approval("run-x", "low", 3)];
+  const tasks = world.tasks ?? [
+    task("task-a-running", "project-a", "running", { linkedRunCount: 2, latestRun: { runId: "run-a2", status: "running", createdAt: "2026-10-01T10:02:00.000Z", completedAt: null } }),
+    task("task-a-waiting", "project-a", "waiting_owner"),
+    task("task-a-done", "project-a", "completed"),
+    task("task-b-blocked", "project-b", "blocked"),
+    task("task-a-draft", "project-a", "draft"),
+  ];
+  const tasksFor = (view: unknown, projectId: string | null) => {
+    const statuses = viewStatuses[view as string];
+    if (statuses === undefined) return unavailable;
+    return allow(tasks.filter((item) => (projectId === null || item.projectId === projectId) && (statuses === null || statuses.includes(item.status as string))));
+  };
   const record = (method: string, args: unknown[]) => calls.push({ method, args });
   const backend = {
     async listProjects(limit?: unknown) { record("listProjects", [limit]); return allow(projects); },
@@ -94,6 +120,15 @@ function fakeBackend(world: World = {}) {
       return runs === undefined || runs === "deny" ? unavailable : allow(runs);
     },
     async listApprovalQueue(limit?: unknown) { record("listApprovalQueue", [limit]); return allow(approvals); },
+    async listTasks(view: unknown) { record("listTasks", [view]); return tasksFor(view, null); },
+    async listProjectTasks(projectId: unknown, view: unknown) { record("listProjectTasks", [projectId, view]); return tasksFor(view, projectId as string); },
+    async getTask(taskId: unknown) {
+      record("getTask", [taskId]);
+      const detail = world.taskDetails?.[taskId as string];
+      if (detail) return allow(detail);
+      const found = tasks.find((item) => item.taskId === taskId);
+      return found ? allow({ task: found, runs: [], runsTruncated: false }) : unavailable;
+    },
     async getRunOverview(runId: unknown) {
       record("getRunOverview", [runId]);
       if (world.failOverview?.has(runId as string)) throw new Error(SENTINEL.error);
@@ -153,7 +188,8 @@ function assertSanitized(value: unknown) {
   visit(value);
 }
 
-const ownerPages = ["app/dashboard/page.tsx", "app/projects/page.tsx", "app/runs/page.tsx", "app/runs/[runId]/page.tsx", "app/approvals/page.tsx"];
+const ownerPages = ["app/dashboard/page.tsx", "app/projects/page.tsx", "app/runs/page.tsx", "app/runs/[runId]/page.tsx", "app/approvals/page.tsx",
+  "app/tasks/page.tsx", "app/tasks/[taskId]/page.tsx", "app/attention/page.tsx"];
 
 // ---------------------------------------------------------------------------------------------
 // AI-038.3 invariants (kept)
@@ -239,12 +275,12 @@ test("038.3-6. Run Detail's only runtime target is the runId route parameter", a
 
 test("038.3-7 / 3.2-20. the loader exposes read functions only; no write path", () => {
   const { instance } = owner();
-  assert.deepEqual(Object.keys(instance).sort(),
-    ["loadOwnerApprovals", "loadOwnerDashboard", "loadOwnerProjects", "loadOwnerRun", "loadOwnerRuns", "loadOwnerShell"]);
+  const loaders = ["loadOwnerApprovals", "loadOwnerAttention", "loadOwnerDashboard", "loadOwnerProjects", "loadOwnerRun",
+    "loadOwnerRuns", "loadOwnerShell", "loadOwnerTask", "loadOwnerTasks"];
+  assert.deepEqual(Object.keys(instance).sort(), loaders);
   assert.ok(Object.isFrozen(instance));
   const server = source("lib/composition/owner-console-read.server.ts");
-  assert.deepEqual([...server.matchAll(/export async function (\w+)/gu)].map((match) => match[1]).sort(),
-    ["loadOwnerApprovals", "loadOwnerDashboard", "loadOwnerProjects", "loadOwnerRun", "loadOwnerRuns", "loadOwnerShell"]);
+  assert.deepEqual([...server.matchAll(/export async function (\w+)/gu)].map((match) => match[1]).sort(), loaders);
   const writes = /\b(?:approve|reject|create(?!OwnerConsoleReader|WorkflowRuntimePostgresDatabase|RequestOwnerReadRuntime)|update|delete|execute|retry|publish|merge|mutate|insert)\w*\s*\(/iu;
   for (const path of ["lib/composition/owner-console-read.ts", "lib/composition/owner-console-read.server.ts", "lib/projects/project-context.ts"]) {
     assert.ok(!writes.test(code(path)), `${path} contains a write-shaped call`);
@@ -252,7 +288,8 @@ test("038.3-7 / 3.2-20. the loader exposes read functions only; no write path", 
 });
 
 test("038.3-8. approval and run views are read-only end to end", () => {
-  for (const path of [...ownerPages, "components/domain/owner-console/approval-queue.tsx", "components/domain/owner-console/project-run-table.tsx"]) {
+  for (const path of [...ownerPages, "components/domain/owner-console/approval-queue.tsx", "components/domain/owner-console/project-run-table.tsx",
+    "components/domain/owner-console/task-table.tsx", "components/domain/owner-console/task-result.tsx"]) {
     assert.ok(!/<form|onClick|formAction|["']use server["']|<button/u.test(code(path)), `${path} must not offer decision controls`);
   }
 });
@@ -261,7 +298,7 @@ test("038.3-9 / 3.2-17. rewritten Owner pages import no mock runtime data and fa
   for (const path of [...ownerPages, ...walk("components/domain/owner-console"), ...walk("components/shell"), "lib/composition/owner-console-read.ts"]) {
     const text = code(path);
     assert.ok(!/mock-data|-demo"|project-control-center|project-operations/u.test(text), `${path} imports demo data`);
-    assert.ok(!/taskCount|currentTasks|recentlyCompletedTasks|TaskCard/u.test(text), `${path} fabricates tasks`);
+    assert.ok(!/taskCount|fakeTask|mockTask|TaskCard/u.test(text), `${path} fabricates tasks`);
   }
 });
 
@@ -436,4 +473,123 @@ test("3.2-26. empty registry and unavailable project runs are honest states", as
   assert.deepEqual([dashboard.projects.length, dashboard.aggregate.runs.length, dashboard.aggregate.projectsConsidered], [0, 0, 0]);
   const failing = owner({ projectRuns: { "project-a": "deny", "project-b": [], "project-paused": [] } });
   assert.deepEqual(await failing.instance.loadOwnerRuns(sel("project-a")), { state: "unavailable", workspace: WORKSPACE }, "selected project runs unavailable is not an empty list");
+});
+
+// ---------------------------------------------------------------------------------------------
+// AI-038.4a Tasks, Task Detail, Task Result, My Attention, Recently Completed (read-only)
+// ---------------------------------------------------------------------------------------------
+
+test("4a. /tasks: All Projects, project-scoped and invalid selector semantics", async () => {
+  const { instance, calls } = owner();
+  const all = await instance.loadOwnerTasks(allSel);
+  assert.ok(all.state === "available" && all.mode === "all");
+  assert.deepEqual(all.tasks.map((item) => item.taskId), ["task-a-running", "task-a-waiting", "task-a-done", "task-b-blocked", "task-a-draft"]);
+  const a = await instance.loadOwnerTasks(sel("project-a"));
+  assert.ok(a.state === "available" && a.mode === "project");
+  assert.ok(a.tasks.every((item) => item.projectId === "project-a"));
+  assert.deepEqual(calls.filter((call) => call.method.endsWith("Tasks")).map((call) => [call.method, ...call.args]),
+    [["listTasks", "all"], ["listProjectTasks", "project-a", "all"]]);
+  for (const raw of ["project-unknown", ["project-a", "project-b"], "BAD", ""]) {
+    assert.deepEqual(await instance.loadOwnerTasks(sel(raw)), { state: "project_unavailable", workspace: WORKSPACE }, JSON.stringify(raw));
+  }
+  // A list returning a task of another project for a project scope fails closed (never mislabelled).
+  const fake = fakeBackend({ tasks: [task("t1", "project-b", "running")] });
+  fake.backend.listProjectTasks = async () => allow([task("t1", "project-b", "running")]) as never;
+  const { instance: mislabelled } = reader({ verdict: "allow", reason: null, backend: fake.backend });
+  assert.deepEqual(await mislabelled.loadOwnerTasks(sel("project-a")), { state: "unavailable", workspace: WORKSPACE });
+});
+
+test("4a. Task Detail: opaque unknown / project mismatch; factual result; zero and multiple runs", async () => {
+  const multi = {
+    task: task("task-multi", "project-a", "running", { linkedRunCount: 3, latestRun: { runId: "run-3", status: "review", createdAt: "2026-10-01T10:03:00.000Z", completedAt: null } }),
+    runs: [listedRun("run-3", "project-a", 3, "review"), listedRun("run-2", "project-a", 2, "completed"), listedRun("run-1", "project-a", 1, "failed")],
+    runsTruncated: false,
+  };
+  const { instance } = owner({ taskDetails: { "task-multi": multi } });
+  const detail = await instance.loadOwnerTask("task-multi", allSel);
+  assert.ok(detail.state === "available" && detail.task.state === "available");
+  assert.deepEqual(detail.task.detail.runs.map((run) => [run.runId, run.status]), [["run-3", "review"], ["run-2", "completed"], ["run-1", "failed"]]);
+  assert.deepEqual(detail.task.detail.result, {
+    status: "running", completedAt: null, linkedRunCount: 3, latestRun: { runId: "run-3", status: "review", createdAt: "2026-10-01T10:03:00.000Z", completedAt: null },
+    completedRuns: 1, failedOrBlockedRuns: 1, activeRuns: 1, runsTruncated: false,
+  }, "a completed run does NOT make the task completed");
+  const zero = await instance.loadOwnerTask("task-a-waiting", allSel);
+  assert.ok(zero.state === "available" && zero.task.state === "available");
+  assert.deepEqual([zero.task.detail.runs.length, zero.task.detail.result.linkedRunCount, zero.task.detail.result.latestRun], [0, 0, null]);
+  const missing = await instance.loadOwnerTask("task-missing", sel("project-a"));
+  const mismatch = await instance.loadOwnerTask("task-b-blocked", sel("project-a"));
+  assert.ok(missing.state === "available");
+  assert.deepEqual(missing.task, { state: "unavailable" });
+  assert.deepEqual(mismatch, missing, "a project-b task is never rendered under project-a");
+  for (const id of ["TASK", "../x", "", "x".repeat(65)]) assert.deepEqual(await instance.loadOwnerTask(id, allSel), { ...missing, scope: { mode: "all" } });
+  // A detail whose runs belong to another project fails closed.
+  const bad = owner({ taskDetails: { "task-x": { task: task("task-x", "project-a", "running"), runs: [listedRun("run-z", "project-b", 1)], runsTruncated: false } } });
+  const badView = await bad.instance.loadOwnerTask("task-x", allSel);
+  assert.ok(badView.state === "available");
+  assert.deepEqual(badView.task, { state: "unavailable" });
+  const page = code("app/tasks/[taskId]/page.tsx");
+  assert.match(page, /params: Promise<\{ taskId: string \}>/u);
+  assert.match(code("components/domain/owner-console/task-result.tsx").replace(/\s+/gu, " "), /not available yet \(AI-039\)/u);
+  assert.ok(!/implemented successfully|security passed|PR ready|changed \d+ files/iu.test(code("components/domain/owner-console/task-result.tsx") + page));
+});
+
+test("4a. Dashboard current tasks and recently completed (global and project)", async () => {
+  const { instance, calls } = owner();
+  const all = await instance.loadOwnerDashboard(allSel);
+  assert.ok(all.state === "available" && all.mode === "all");
+  assert.deepEqual(all.tasks.current.tasks.map((item) => item.taskId), ["task-a-running", "task-a-waiting", "task-b-blocked"], "no draft, completed or cancelled");
+  assert.deepEqual(all.tasks.recentlyCompleted.tasks.map((item) => item.taskId), ["task-a-done"]);
+  assert.ok(all.tasks.recentlyCompleted.tasks.every((item) => item.status === "completed" && item.completedAt !== null));
+  const a = await instance.loadOwnerDashboard(sel("project-b"));
+  assert.ok(a.state === "available" && a.mode === "project");
+  assert.deepEqual(a.tasks.current.tasks.map((item) => item.taskId), ["task-b-blocked"]);
+  assert.deepEqual(a.tasks.recentlyCompleted.tasks, []);
+  const taskCalls = calls.filter((call) => /Tasks$/u.test(call.method)).map((call) => call.args.at(-1));
+  assert.deepEqual(taskCalls, ["current", "completed", "current", "completed"], "one bounded backend read per task section");
+  const dashboard = code("app/dashboard/page.tsx");
+  assert.match(dashboard, /Current tasks/u);
+  assert.match(dashboard, /Recently completed/u);
+  assert.match(dashboard, /Recent runs|Project runs/u, "runs stay labelled as runs");
+});
+
+test("4a. My Attention: attention statuses + pending approvals; project scope narrows both factually", async () => {
+  const { instance, calls } = owner();
+  const all = await instance.loadOwnerAttention(allSel);
+  assert.ok(all.state === "available" && all.mode === "all");
+  assert.deepEqual(all.attentionTasks.tasks.map((item) => [item.taskId, item.status]), [["task-a-waiting", "waiting_owner"], ["task-b-blocked", "blocked"]]);
+  assert.equal(all.approvals.length, 3, "workspace queue");
+  const a = await instance.loadOwnerAttention(sel("project-a"));
+  assert.ok(a.state === "available" && a.mode === "project");
+  assert.deepEqual(a.attentionTasks.tasks.map((item) => item.taskId), ["task-a-waiting"]);
+  assert.deepEqual(a.projectApprovals.approvals.map((item) => item.runId), ["run-a1"], "AI-038.3.2 classification reused");
+  assert.equal(a.projectApprovals.unresolvedApprovals, 1);
+  assert.ok(calls.some((call) => call.method === "listRuns" && call.args[1] === 100), "classification path (listRuns membership) reused");
+  assert.deepEqual(await instance.loadOwnerAttention(sel("project-zzz")), { state: "project_unavailable", workspace: WORKSPACE });
+  const loader = code("lib/composition/owner-console-read.ts");
+  assert.equal((loader.match(/async function classifyProjectApprovals/gu) ?? []).length, 1, "one approval classification algorithm");
+});
+
+test("4a. navigation preserves Task / Attention scope; + New Task stays disabled; no task write anywhere", () => {
+  for (const path of ["/tasks", "/attention"] as const) {
+    assert.equal(context.projectScopedHref(path, "project-a"), `${path}?project=project-a`);
+    assert.equal(context.projectScopedHref(path, "../x"), path);
+  }
+  assert.equal(context.switchTargetPath("/tasks/task-a-running"), "/tasks");
+  assert.equal(context.switchTargetPath("/attention"), "/attention");
+  const nav = source("lib/navigation.ts");
+  assert.match(nav, /label: "My Attention", href: "\/attention", available: true, projectScoped: true/u);
+  assert.match(nav, /label: "Tasks", href: "\/tasks", available: true, projectScoped: true/u);
+  const topbar = source("components/shell/topbar.tsx");
+  assert.match(topbar, /disabled\s+title="Quick Create is planned for AI-038\.4b/u);
+  assert.ok(!/onClick|<form|formAction/u.test(code("components/shell/topbar.tsx")));
+  const writes = /\b(?:createTask|updateTask|deleteTask|setTaskStatus|insertTask|linkRun)\w*\s*\(/u;
+  // The ONLY task write is the AI-038.4a corrective server-side mutation contract; it stays unbound
+  // from every page, component, read backend and console loader (Quick Create is AI-038.4b).
+  const mutationModule = "lib/tasks/owner-task-mutations.ts";
+  for (const path of [...walk("lib/tasks").filter((file) => file !== mutationModule), "lib/composition/owner-console-read.ts", "lib/composition/owner-read-runtime.ts", ...ownerPages]) {
+    assert.ok(!writes.test(code(path)), `${path} contains a task write`);
+  }
+  for (const path of [...walk("app"), ...walk("components"), ...walk("lib/composition"), ...walk("lib/tasks").filter((file) => file !== mutationModule)]) {
+    assert.ok(!source(path).includes("owner-task-mutations"), `${path} binds the task mutation contract`);
+  }
 });

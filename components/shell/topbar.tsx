@@ -52,7 +52,7 @@ export function Topbar({ shell, selectedProject }: TopbarProps) {
         <button
           className="flex h-8 cursor-not-allowed items-center gap-1.5 rounded-pac border border-line bg-panel px-2.5 text-xs text-ink-3"
           disabled
-          title="Task creation is not available yet (no write boundary)"
+          title="Quick Create is planned for AI-038.4b (audited Owner task write boundary). Not available yet."
           type="button"
         >
           + New Task <span className="font-mono text-[9.5px] uppercase tracking-[0.1em]">· soon</span>

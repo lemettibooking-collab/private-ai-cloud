@@ -73,7 +73,7 @@ test("A–B. a valid identity source is resolved exactly once, with no arguments
   assert.equal(db.calls.resolves, 1, "tenant resolved once");
   assert.deepEqual(db.calls.verifies, [[workspaceUuid, ownerUser]], "one tenant-scoped Owner check");
   assert.equal(Object.isFrozen(decision), true);
-  assert.deepEqual(Reflect.ownKeys(decision.backend!).sort(), ["getRunAuditTimeline", "getRunModelUsage", "getRunOverview", "listApprovalQueue", "listProjects", "listRuns"]);
+  assert.deepEqual(Reflect.ownKeys(decision.backend!).sort(), ["getRunAuditTimeline", "getRunModelUsage", "getRunOverview", "getTask", "listApprovalQueue", "listProjectTasks", "listProjects", "listRuns", "listTasks"]);
   assert.deepEqual(await decision.backend!.listApprovalQueue(), { verdict: "allow", status: "available", data: [] });
   // Upper-case UUIDs are canonicalized to the internal lower-case form.
   const upper = await compose({ userId: ownerUser.toUpperCase() });

@@ -170,7 +170,7 @@ test("construction hardening: missing, extra, getter and Proxy dependencies fail
   assert.equal(db.calls.connect, 1);
   assert.equal(auth.calls.length, 1);
   assert.equal(Object.isFrozen(instance), true);
-  assert.deepEqual(Object.keys(instance).sort(), ["getRunAuditTimeline", "getRunModelUsage", "getRunOverview", "listApprovalQueue", "listProjectRuns", "listProjects"]);
+  assert.deepEqual(Object.keys(instance).sort(), ["getRunAuditTimeline", "getRunModelUsage", "getRunOverview", "getTask", "listApprovalQueue", "listProjectRuns", "listProjectTasks", "listProjects", "listTasks"]);
 });
 
 test("G–H. root and nested Proxy requests are denied before any trap runs and before any delegation", async () => {
