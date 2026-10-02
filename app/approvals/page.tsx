@@ -1,43 +1,75 @@
+import Link from "next/link";
 import { ApprovalQueue } from "@/components/domain/owner-console/approval-queue";
-import { OwnerDataUnavailable, ProjectContext, SignInRequired } from "@/components/domain/owner-console/owner-state";
+import { OwnerDataUnavailable, ProjectUnavailable, ScopeBadge, SignInRequired } from "@/components/domain/owner-console/owner-state";
 import { AppShell } from "@/components/shell/app-shell";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { SectionCard } from "@/components/ui/section-card";
-import { loadOwnerConsoleOverview } from "@/lib/composition/owner-console-read.server";
+import { loadOwnerApprovals } from "@/lib/composition/owner-console-read.server";
 
-// Read-only approval queue from OwnerReadBackend.listApprovalQueue. Decisions (approve / reject)
-// are intentionally absent: the write boundary does not exist yet.
-export default async function ApprovalsPage() {
-  const overview = await loadOwnerConsoleOverview();
+type ApprovalsPageProps = {
+  // `project` is an untrusted selector, validated by the loader against the authenticated registry.
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+};
+
+// Read-only. All Projects = the full workspace queue. A selected project = only approvals whose run
+// FACTUALLY belongs to it. Decisions (approve / reject) are intentionally absent: no write boundary.
+export default async function ApprovalsPage({ searchParams }: ApprovalsPageProps) {
+  const view = await loadOwnerApprovals((await searchParams).project);
+  const selected = view.state === "available" && view.scope.mode === "project" ? view.scope.project : null;
 
   return (
-    <AppShell>
+    <AppShell selectedProject={selected}>
       <PageHeader
-        action={overview.project ? <ProjectContext project={overview.project} /> : undefined}
-        description="Pending runtime approvals for the current project, highest risk first. Each item opens its Run."
+        action={view.state === "available" ? <ScopeBadge project={selected} /> : undefined}
+        description={selected
+          ? "Pending runtime approvals whose run belongs to this project, highest risk first. Each item opens its run."
+          : "The workspace approval queue across all projects, highest risk first. Each item opens its run."}
         eyebrow="Approvals"
-        title="Approval queue"
+        title={selected ? `${selected.displayName} approvals` : "All Projects approval queue"}
       />
 
-      {overview.state === "unauthenticated" && <SignInRequired />}
-      {overview.state === "unavailable" && <OwnerDataUnavailable />}
+      {view.state === "unauthenticated" && <SignInRequired />}
+      {view.state === "unavailable" && <OwnerDataUnavailable />}
+      {view.state === "project_unavailable" && <ProjectUnavailable allHref="/approvals" />}
 
-      {overview.state === "available" && (
+      {view.state === "available" && (
         <div className="grid gap-4 xl:grid-cols-12">
-          <SectionCard
-            className="xl:col-span-9"
-            description={`${overview.pendingApprovals}${overview.queueTruncated ? "+" : ""} pending · ${overview.highRiskApprovals} high/critical`}
-            title="Current approval queue"
-          >
-            {overview.approvals.length === 0 ? (
-              <EmptyState description="There are no pending runtime approvals for this project." title="Queue is clear" />
-            ) : (
-              <div className="-mx-4 -my-4">
-                <ApprovalQueue approvals={overview.approvals} />
-              </div>
-            )}
-          </SectionCard>
+          {view.mode === "all" ? (
+            <SectionCard
+              className="xl:col-span-9"
+              description={`${view.pendingApprovals}${view.queueTruncated ? "+" : ""} pending · ${view.highRiskApprovals} high/critical · workspace-wide`}
+              title="Workspace approval queue"
+            >
+              {view.approvals.length === 0 ? (
+                <EmptyState description="There are no pending runtime approvals in this workspace." title="Queue is clear" />
+              ) : (
+                <div className="-mx-4 -my-4">
+                  <ApprovalQueue approvals={view.approvals} />
+                </div>
+              )}
+            </SectionCard>
+          ) : (
+            <SectionCard
+              className="xl:col-span-9"
+              description={`${view.projectApprovals.pendingApprovals} pending · ${view.projectApprovals.highRiskApprovals} high/critical · this project`}
+              title="Project approval queue"
+            >
+              {view.projectApprovals.approvals.length === 0 ? (
+                <EmptyState description="No pending runtime approval belongs to this project." title="Project queue is clear" />
+              ) : (
+                <div className="-mx-4 -my-4">
+                  <ApprovalQueue approvals={view.projectApprovals.approvals} selectedProjectId={view.scope.project.projectId} />
+                </div>
+              )}
+              {view.projectApprovals.unresolvedApprovals > 0 && (
+                <p className="mt-3 rounded-pac border border-warn/40 bg-warn/5 px-3 py-2 text-xs text-ink-3">
+                  {view.projectApprovals.unresolvedApprovals} workspace approval(s) could not be attributed to a project and are not shown here.
+                  See <Link className="text-accent hover:underline" href="/approvals">All Projects</Link>.
+                </p>
+              )}
+            </SectionCard>
+          )}
 
           <SectionCard className="xl:col-span-3" title="Decision boundary">
             <p className="text-[13px] leading-5 text-ink-2">Read-only.</p>

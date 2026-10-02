@@ -3,13 +3,18 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ownerNavigation } from "@/lib/navigation";
+import { projectScopedHref, type ProjectScopedPath } from "@/lib/projects/project-context";
 
 type SidebarProps = {
-  // Real pending-approval count from the authenticated read path; null when not available.
+  // Real, WORKSPACE-GLOBAL pending-approval count from the authenticated read path; null when unavailable.
   pendingApprovals: number | null;
+  // The page's validated selected project (never parsed from the URL here); null = All Projects.
+  selectedProjectId: string | null;
 };
 
-export function Sidebar({ pendingApprovals }: SidebarProps) {
+// Project context is preserved on Dashboard / Runs / Approvals. Projects, Roadmap and Settings are
+// not project-scoped yet and navigate without a selector.
+export function Sidebar({ pendingApprovals, selectedProjectId }: SidebarProps) {
   const pathname = usePathname();
 
   return (
@@ -32,19 +37,20 @@ export function Sidebar({ pendingApprovals }: SidebarProps) {
                 );
               }
               const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+              const href = item.projectScoped ? projectScopedHref(item.href as ProjectScopedPath, selectedProjectId) : item.href;
               return (
                 <Link
                   aria-current={active ? "page" : undefined}
                   className={`relative flex items-center justify-between rounded-pac px-2.5 py-1.5 text-[13px] transition ${
                     active ? "bg-panel-2 text-ink" : "text-ink-2 hover:bg-panel hover:text-ink"
                   }`}
-                  href={item.href}
+                  href={href}
                   key={item.href}
                 >
                   {active && <span aria-hidden className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-accent" />}
                   <span>{item.label}</span>
                   {item.attentionCount && pendingApprovals !== null && pendingApprovals > 0 && (
-                    <span className="rounded-[3px] bg-warn/15 px-1.5 font-mono text-[11px] text-warn">{pendingApprovals}</span>
+                    <span className="rounded-[3px] bg-warn/15 px-1.5 font-mono text-[11px] text-warn" title="Pending approvals across all projects">{pendingApprovals}</span>
                   )}
                 </Link>
               );

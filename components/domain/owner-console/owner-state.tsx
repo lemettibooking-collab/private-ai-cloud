@@ -1,3 +1,4 @@
+import Link from "next/link";
 import type { OwnerConsoleProject } from "@/lib/composition/owner-console-read.server";
 
 type StatePanelProps = { title: string; body: string; children?: React.ReactNode; tone?: "neutral" | "accent" };
@@ -38,12 +39,38 @@ export function OwnerDataUnavailable() {
   );
 }
 
-export function ProjectContext({ project }: { project: OwnerConsoleProject }) {
+// Scope indicator: All Projects (global, workspace-wide) or one selected registry project.
+export function ScopeBadge({ project }: { project: OwnerConsoleProject | null }) {
+  if (!project) {
+    return (
+      <span className="inline-flex items-center gap-2 rounded-pac border border-accent/30 bg-accent/5 px-2 py-1">
+        <span className="pac-label !text-accent">Scope</span>
+        <span className="text-xs font-medium text-ink">All Projects</span>
+        <span className="text-[11px] text-ink-3">workspace-wide</span>
+      </span>
+    );
+  }
   return (
     <span className="inline-flex items-center gap-2 rounded-pac border border-line bg-panel px-2 py-1">
       <span className="pac-label">Project</span>
       <span className="text-xs font-medium text-ink">{project.displayName}</span>
-      <span className="font-mono text-[11px] text-ink-3">{project.slug}</span>
+      <span className="font-mono text-[11px] text-ink-3">{project.projectId}</span>
+      {project.status !== "active" && <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-warn">{project.status}</span>}
     </span>
+  );
+}
+
+// One opaque state for a malformed, duplicated, unknown, foreign or archived `?project=` selector.
+// It deliberately does not fall back to All Projects and does not say why.
+export function ProjectUnavailable({ allHref }: { allHref: string }) {
+  return (
+    <StatePanel
+      body="This project is not available in the current workspace. The link may be outdated or not valid."
+      title="Project unavailable"
+    >
+      <Link className="inline-flex h-8 items-center rounded-pac border border-line-strong bg-panel-2 px-3 text-[13px] text-ink-2 hover:bg-raised" href={allHref}>
+        Open All Projects
+      </Link>
+    </StatePanel>
   );
 }

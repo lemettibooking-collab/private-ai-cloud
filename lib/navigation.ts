@@ -9,6 +9,8 @@ export type OwnerNavItem = Readonly<{
   available: boolean;
   // Shows the real pending-approval count next to this item.
   attentionCount?: boolean;
+  // AI-038.3.2: the page understands `?project=`; the selected (validated) project is preserved.
+  projectScoped?: boolean;
 }>;
 
 export type OwnerNavSection = Readonly<{ id: string; items: readonly OwnerNavItem[] }>;
@@ -17,7 +19,7 @@ export const ownerNavigation: readonly OwnerNavSection[] = [
   {
     id: "overview",
     items: [
-      { label: "Dashboard", href: "/dashboard", available: true },
+      { label: "Dashboard", href: "/dashboard", available: true, projectScoped: true },
       { label: "My Attention", href: "/attention", available: false },
     ],
   },
@@ -26,9 +28,9 @@ export const ownerNavigation: readonly OwnerNavSection[] = [
     items: [
       { label: "Projects", href: "/projects", available: true },
       { label: "Tasks", href: "/tasks", available: false },
-      { label: "Runs", href: "/runs", available: true },
+      { label: "Runs", href: "/runs", available: true, projectScoped: true },
       { label: "Roadmap", href: "/roadmap", available: true },
-      { label: "Approvals", href: "/approvals", available: true, attentionCount: true },
+      { label: "Approvals", href: "/approvals", available: true, attentionCount: true, projectScoped: true },
     ],
   },
   {

@@ -1,35 +1,94 @@
-import type { OwnerConsoleProject } from "@/lib/composition/owner-console-read.server";
+"use client";
+
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { useRef } from "react";
+import { projectScopedHref, switchTargetPath } from "@/lib/projects/project-context";
+
+// Public project summary only (from the authenticated registry read). No auth, session or
+// workspace data ever reaches this client component.
+export type SwitcherProject = Readonly<{ projectId: string; displayName: string; status: "active" | "paused" | "archived" }>;
 
 type ProjectSwitcherProps = {
-  project: OwnerConsoleProject | null;
+  projects: readonly SwitcherProject[];
+  selected: SwitcherProject | null;
+  available: boolean;
+  truncated: boolean;
 };
 
-// Shows ONLY the project chosen by trusted server configuration. It never selects a workspace:
-// there is no trusted Project Registry yet, so no other project is listed or selectable.
-export function ProjectSwitcher({ project }: ProjectSwitcherProps) {
+function GlobeIcon() {
   return (
-    <details className="group relative">
-      <summary className="flex h-8 cursor-pointer list-none items-center gap-2 rounded-pac border border-line bg-panel px-2.5 hover:border-line-strong">
-        <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${project ? "bg-ok" : "bg-idle"}`} />
-        <span className="text-[13px] font-medium text-ink">{project ? project.displayName : "No project configured"}</span>
+    <svg aria-hidden className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 16 16">
+      <circle cx="8" cy="8" r="6" />
+      <path d="M2 8h12M8 2c1.8 2 1.8 10 0 12M8 2c-1.8 2-1.8 10 0 12" />
+    </svg>
+  );
+}
+
+// Switches PROJECT context only: it stays on the same major Owner page and changes nothing but the
+// `?project=` selector (absent = All Projects). The selection is not persisted anywhere.
+export function ProjectSwitcher({ projects, selected, available, truncated }: ProjectSwitcherProps) {
+  const pathname = usePathname();
+  const target = switchTargetPath(pathname);
+  const details = useRef<HTMLDetailsElement>(null);
+  const close = () => details.current?.removeAttribute("open");
+
+  return (
+    <details className="group relative" ref={details}>
+      <summary className={`flex h-8 cursor-pointer list-none items-center gap-2 rounded-pac border px-2.5 hover:border-line-strong ${
+        selected ? "border-line bg-panel" : "border-accent/30 bg-accent/5"}`}>
+        {selected ? (
+          <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${selected.status === "active" ? "bg-ok" : "bg-warn"}`} />
+        ) : (
+          <span className="text-accent"><GlobeIcon /></span>
+        )}
+        <span className="text-[13px] font-medium text-ink">{selected ? selected.displayName : "All Projects"}</span>
+        {selected && <span className="hidden font-mono text-[11px] text-ink-3 xl:inline">{selected.projectId}</span>}
         <span aria-hidden className="text-[10px] text-ink-3 transition group-open:rotate-180">▾</span>
       </summary>
-      <div className="absolute left-0 z-30 mt-1.5 w-80 rounded-pac border border-line-strong bg-panel-2 p-3 shadow-xl shadow-black/40">
-        <p className="pac-label">Current project</p>
-        {project ? (
-          <div className="mt-2 flex items-center justify-between gap-3 rounded-pac border border-line bg-panel px-2.5 py-2">
-            <div className="min-w-0">
-              <p className="truncate text-[13px] font-medium text-ink">{project.displayName}</p>
-              <p className="truncate font-mono text-[11px] text-ink-3">{project.slug}</p>
-            </div>
-            <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-ok">active</span>
-          </div>
-        ) : (
-          <p className="mt-2 text-xs text-ink-3">The trusted workspace configuration is missing or invalid.</p>
-        )}
-        <p className="mt-3 border-t border-line pt-2.5 text-[11px] leading-4 text-ink-3">
-          Additional projects will appear when the trusted Project Registry is connected.
-        </p>
+      <div className="absolute left-0 z-30 mt-1.5 w-80 rounded-pac border border-line-strong bg-panel-2 p-1.5 shadow-xl shadow-black/40">
+        <Link
+          aria-current={selected ? undefined : "true"}
+          className={`flex items-center gap-2.5 rounded-[5px] px-2.5 py-2 ${selected ? "hover:bg-raised" : "bg-accent/10"}`}
+          href={projectScopedHref(target, null)}
+          onClick={close}
+        >
+          <span className="text-accent"><GlobeIcon /></span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-[13px] font-medium text-ink">All Projects</span>
+            <span className="block text-[11px] text-ink-3">Workspace-wide view</span>
+          </span>
+          {!selected && <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-accent">current</span>}
+        </Link>
+        <div className="my-1.5 border-t border-line" />
+        <p className="pac-label px-2.5 pb-1">Projects</p>
+        {!available && <p className="px-2.5 py-2 text-xs text-ink-3">Project registry unavailable.</p>}
+        {available && projects.length === 0 && <p className="px-2.5 py-2 text-xs text-ink-3">No projects registered.</p>}
+        <ul className="max-h-80 overflow-y-auto">
+          {projects.map((project) => {
+            const current = selected?.projectId === project.projectId;
+            return (
+              <li key={project.projectId}>
+                <Link
+                  aria-current={current ? "true" : undefined}
+                  className={`flex items-center gap-2.5 rounded-[5px] px-2.5 py-1.5 ${current ? "bg-accent/10" : "hover:bg-raised"}`}
+                  href={projectScopedHref(target, project.projectId)}
+                  onClick={close}
+                >
+                  <span aria-hidden className={`h-1.5 w-1.5 shrink-0 rounded-full ${project.status === "active" ? "bg-ok" : "bg-warn"}`} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[13px] text-ink">{project.displayName}</span>
+                    <span className="block truncate font-mono text-[11px] text-ink-3">{project.projectId}</span>
+                  </span>
+                  <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-3">
+                    {current ? <span className="text-accent">current</span> : project.status}
+                  </span>
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+        {truncated && <p className="px-2.5 pt-1.5 text-[11px] text-ink-3">Showing the first 100 registered projects.</p>}
       </div>
     </details>
   );

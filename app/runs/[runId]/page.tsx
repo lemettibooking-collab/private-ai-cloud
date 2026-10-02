@@ -1,15 +1,19 @@
 import Link from "next/link";
 import { formatCount, formatTimestamp, formatUsdMicros, humanize } from "@/components/domain/owner-console/format";
-import { OwnerDataUnavailable, ProjectContext, SignInRequired } from "@/components/domain/owner-console/owner-state";
+import { OwnerDataUnavailable, ProjectUnavailable, ScopeBadge, SignInRequired } from "@/components/domain/owner-console/owner-state";
 import { ApprovalStatusBadge, RiskBadge, RunStatusBadge } from "@/components/domain/owner-console/run-status";
 import { AppShell } from "@/components/shell/app-shell";
 import { SectionCard } from "@/components/ui/section-card";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { loadOwnerRun } from "@/lib/composition/owner-console-read.server";
+import { projectScopedHref } from "@/lib/projects/project-context";
 
 type RunDetailPageProps = {
-  // The route carries ONLY the runId; workspace and identity come from trusted server state.
+  // The route carries ONLY the runId as runtime target; workspace and identity come from trusted
+  // server state. The optional `project` selector never authorizes access: under a selected project,
+  // a run of another project is shown as the same opaque "unavailable" as a missing run.
   params: Promise<{ runId: string }>;
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
 };
 
 function Field({ label, children, mono = true }: { label: string; children: React.ReactNode; mono?: boolean }) {
@@ -41,33 +45,38 @@ function UsageRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-export default async function RunDetailPage({ params }: RunDetailPageProps) {
+export default async function RunDetailPage({ params, searchParams }: RunDetailPageProps) {
   const { runId } = await params;
-  const view = await loadOwnerRun(runId);
+  const view = await loadOwnerRun(runId, (await searchParams).project);
+  const selected = view.state === "available" && view.scope.mode === "project" ? view.scope.project : null;
+  const runsHref = projectScopedHref("/runs", selected?.projectId ?? null);
 
   return (
-    <AppShell>
+    <AppShell selectedProject={selected}>
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3 border-b border-line pb-4">
         <div className="min-w-0">
           <p className="pac-label">
-            <Link className="!text-accent hover:underline" href="/runs">Runs</Link> / Run detail
+            <Link className="!text-accent hover:underline" href={runsHref}>Runs</Link> / Run detail
           </p>
           <h1 className="mt-1 truncate font-mono text-lg font-medium text-ink">
             {view.state === "available" && view.run.state === "available" ? view.run.detail.run.runId : "Run"}
           </h1>
         </div>
-        {view.project && <ProjectContext project={view.project} />}
+        {view.state === "available" && <ScopeBadge project={selected} />}
       </div>
 
       {view.state === "unauthenticated" && <SignInRequired />}
       {view.state === "unavailable" && <OwnerDataUnavailable />}
+      {view.state === "project_unavailable" && <ProjectUnavailable allHref="/runs" />}
 
       {view.state === "available" && view.run.state === "unavailable" && (
         <div className="rounded-pac border border-line bg-panel px-6 py-10 text-center">
           <p className="pac-label">Run</p>
           <p className="mt-2 text-base font-semibold text-ink">Run unavailable</p>
-          <p className="mx-auto mt-1.5 max-w-md text-[13px] leading-5 text-ink-3">This run cannot be shown.</p>
-          <Link className="mt-5 inline-flex h-8 items-center rounded-pac border border-line-strong bg-panel-2 px-3 text-[13px] text-ink-2 hover:bg-raised" href="/runs">
+          <p className="mx-auto mt-1.5 max-w-md text-[13px] leading-5 text-ink-3">
+            {selected ? "This run cannot be shown in this project context." : "This run cannot be shown."}
+          </p>
+          <Link className="mt-5 inline-flex h-8 items-center rounded-pac border border-line-strong bg-panel-2 px-3 text-[13px] text-ink-2 hover:bg-raised" href={runsHref}>
             Back to runs
           </Link>
         </div>

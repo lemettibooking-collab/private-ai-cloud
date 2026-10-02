@@ -1,56 +1,78 @@
-import { OwnerDataUnavailable, ProjectContext, SignInRequired } from "@/components/domain/owner-console/owner-state";
-import { RunTable } from "@/components/domain/owner-console/run-table";
+import { OwnerDataUnavailable, ProjectUnavailable, ScopeBadge, SignInRequired } from "@/components/domain/owner-console/owner-state";
+import { ProjectRunTable } from "@/components/domain/owner-console/project-run-table";
 import { AppShell } from "@/components/shell/app-shell";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { SectionCard } from "@/components/ui/section-card";
-import { loadOwnerConsoleOverview } from "@/lib/composition/owner-console-read.server";
+import { loadOwnerRuns } from "@/lib/composition/owner-console-read.server";
 
-// The Owner read surface has no global run listing yet, so this page shows only the Runs that the
-// current approval queue references — and says so.
-export default async function RunsPage() {
-  const overview = await loadOwnerConsoleOverview();
+type RunsPageProps = {
+  // `project` is an untrusted selector, validated by the loader against the authenticated registry.
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+};
+
+export default async function RunsPage({ searchParams }: RunsPageProps) {
+  const view = await loadOwnerRuns((await searchParams).project);
+  const selected = view.state === "available" && view.scope.mode === "project" ? view.scope.project : null;
 
   return (
-    <AppShell>
+    <AppShell selectedProject={selected}>
       <PageHeader
-        action={overview.project ? <ProjectContext project={overview.project} /> : undefined}
-        description="Runs that currently require attention through the approval queue. Global run discovery is not connected yet."
+        action={view.state === "available" ? <ScopeBadge project={selected} /> : undefined}
+        description={selected
+          ? "Runs of the selected project, newest first."
+          : "Recent runs of registered projects, newest first. Each run keeps its factual project."}
         eyebrow="Runs"
-        title="Runs requiring attention"
+        title={selected ? `${selected.displayName} runs` : "Recent project runs"}
       />
 
-      {overview.state === "unauthenticated" && <SignInRequired />}
-      {overview.state === "unavailable" && <OwnerDataUnavailable />}
+      {view.state === "unauthenticated" && <SignInRequired />}
+      {view.state === "unavailable" && <OwnerDataUnavailable />}
+      {view.state === "project_unavailable" && <ProjectUnavailable allHref="/runs" />}
 
-      {overview.state === "available" && (
-        <>
-          <SectionCard description="Distinct runs referenced by pending approvals." title="Approval-linked runs">
-            {overview.attentionRuns.length === 0 ? (
-              <EmptyState
-                description="No run is referenced by a pending approval. Other runs exist only once global run discovery is connected."
-                title="No runs require attention"
-              />
-            ) : (
-              <div className="-mx-4 -my-4">
-                <RunTable runs={overview.attentionRuns} />
+      {view.state === "available" && view.mode === "all" && (() => {
+        const names = new Map(view.projects.map((project) => [project.projectId, project.displayName]));
+        const aggregate = view.aggregate;
+        return (
+          <>
+            <SectionCard
+              description={`Registered-project runs (up to ${aggregate.runsPerProjectLimit} newest per project, ${aggregate.displayLimit} shown).`}
+              title="All Projects"
+            >
+              {view.projects.length === 0 ? (
+                <EmptyState description="Runs appear here once projects are registered in this workspace." title="No projects registered" />
+              ) : aggregate.runs.length === 0 ? (
+                <EmptyState description="The registered projects have no runs yet." title="No runs" />
+              ) : (
+                <div className="-mx-4 -my-4">
+                  <ProjectRunTable projectNames={names} runs={aggregate.runs} selectedProjectId={null} showProject />
+                </div>
+              )}
+            </SectionCard>
+            {(aggregate.runsTruncated || aggregate.projectsNotConsidered > 0 || aggregate.projectsUnavailable.length > 0) && (
+              <div className={`mt-4 rounded-pac border px-4 py-3 ${aggregate.projectsUnavailable.length > 0 ? "border-warn/40 bg-warn/5" : "border-line bg-panel"}`}>
+                <p className="pac-label">Coverage</p>
+                <p className="mt-1.5 text-xs leading-5 text-ink-3">
+                  This is a bounded view, not complete run history.
+                  {aggregate.projectsNotConsidered > 0 && ` ${aggregate.projectsNotConsidered} more project(s) are not included; select a project to see its runs.`}
+                  {aggregate.projectsUnavailable.length > 0 && ` Runs unavailable for: ${aggregate.projectsUnavailable.join(", ")}.`}
+                </p>
               </div>
             )}
-            {overview.attentionRunsUnavailable + overview.attentionRunsOmitted > 0 && (
-              <p className="mt-3 text-[11.5px] text-ink-3">
-                {overview.attentionRunsUnavailable > 0 && `${overview.attentionRunsUnavailable} referenced run(s) unavailable. `}
-                {overview.attentionRunsOmitted > 0 && `${overview.attentionRunsOmitted} more referenced run(s) not loaded on this view.`}
-              </p>
-            )}
-          </SectionCard>
+          </>
+        );
+      })()}
 
-          <div className="mt-4 rounded-pac border border-dashed border-line-strong px-4 py-3">
-            <p className="pac-label">Global run discovery</p>
-            <p className="mt-1.5 text-xs leading-5 text-ink-3">
-              Not connected. Listing all runs needs a new, separately reviewed Owner read capability.
-            </p>
-          </div>
-        </>
+      {view.state === "available" && view.mode === "project" && (
+        <SectionCard description={view.runsTruncated ? `Newest ${view.runsLimit} runs shown.` : undefined} title={view.scope.project.displayName}>
+          {view.runs.length === 0 ? (
+            <EmptyState description="This project has no runs yet." title="No project runs" />
+          ) : (
+            <div className="-mx-4 -my-4">
+              <ProjectRunTable runs={view.runs} selectedProjectId={view.scope.project.projectId} showProject={false} />
+            </div>
+          )}
+        </SectionCard>
       )}
     </AppShell>
   );

@@ -156,9 +156,9 @@ The census recorded the current hardening debt and moved development to mileston
 - **AI-038.2a Auth.js GitHub Session Adapter — DONE** (commit `4e76afd`; see §9)
 - **AI-038.2b Real GitHub OAuth Smoke — DONE** (commit `12212ad`; passed independent re-gate; **AI-038.2 DONE**; see §9)
 - **AI-038.3 Owner Console Real Read Wiring + Mission Control UI Foundation — DONE** (commit `70f4039`; passed independent re-gate; see §9)
-- **AI-038.3.1 Trusted Project Registry + Run Discovery Foundation — IN REVIEW** (see §9)
-- **AI-038.3.2 Trusted Project Context Routing + Real Project Switcher — PLANNED**
-- **AI-038.4 Tasks / My Attention / Quick Create — PLANNED**
+- **AI-038.3.1 Trusted Project Registry + Run Discovery Foundation — DONE** (commit `d7d1ca0`; passed independent re-gate; see §9)
+- **AI-038.3.2 Trusted Project Context Routing + All Projects + Real Project Switcher — IN REVIEW** (see §9)
+- **AI-038.4 Tasks / Task Detail / Task Result / My Attention / Quick Create / Recently Completed — PLANNED**
 - **AI-038.5 Mission Control Visual Refinement — PLANNED**
 - **Roadmap Rebase v1.4 — vendor-neutral control plane — documentation only** (this version; `docs/ROADMAP_REBASE_V1.4.md`)
 
@@ -470,9 +470,9 @@ Passed independent re-gate; commit `70f4039`.
 - **Not included:** global `listRuns`, a trusted multi-project registry, task creation, approve/reject, and the full My Attention / Tasks UX.
 - **Owner visual checkpoint: ACCEPTED** as the UX foundation (Projects-first, Owner-attention-first, task/run-centric). Visual refinement is deferred to AI-038.5.
 
-#### AI-038.3.1 — Trusted Project Registry + Run Discovery Foundation — IN REVIEW
+#### AI-038.3.1 — Trusted Project Registry + Run Discovery Foundation — DONE
 
-Backend and read foundation only. Author implementation is complete and awaits independent re-gate.
+Passed independent re-gate (including the run-snapshot consistency corrective); commit `d7d1ca0`. Backend and read foundation only.
 
 - **Model:** Workspace (tenant / security boundary) → Project (a product/system inside it) → Runs. A Project is not a folder, checkout, VPS directory, executor session, environment or branch.
   - Git repositories are the canonical code source; PAC is the control plane.
@@ -488,16 +488,22 @@ Backend and read foundation only. Author implementation is complete and awaits i
   - `projectId` is an untrusted selector resolved only inside the already-authorized workspace. An unknown, foreign, archived or malformed project gives the same opaque `unavailable`.
 - **Not included:** UI project switching (AI-038.3.2), repository clone/checkout, GitHub API, project writes/onboarding, and a foreign key from `workflow_runs.project_id` to the registry (hardening debt: existing runtime rows have no factual registry backfill).
 
-#### AI-038.3.2 — Trusted Project Context Routing + Real Project Switcher — PLANNED
+#### AI-038.3.2 — Trusted Project Context Routing + All Projects + Real Project Switcher — IN REVIEW
 
-Wire the Owner Console Project Switcher, the Dashboard project context, Runs project filtering and the Approvals project context to `listProjects` / `listRuns`.
-- Only registry-listed Project IDs inside the authenticated workspace are used; the workspace still comes only from trusted server configuration.
-- No workspace, tenant, cookie or `localStorage` authority.
-- Starts only after AI-038.3.1 passes independent re-gate.
+Author implementation is complete and awaits independent re-gate. Owner-approved model:
+- **All Projects is the default scope.** It is the absence of a `?project=` selector: a UI/query scope, not a registry row. `/dashboard` is the global Mission Control home.
+- **Real Project Switcher** (All Projects + the authenticated `listProjects()` results) switches PROJECT context only and stays on the same major page. Dashboard, Runs and Approvals become project-scoped, and sidebar navigation preserves the selected project.
+- **Selector validation:** `?project=` is an untrusted selector. It is honoured only if the structure is valid **and** the authenticated registry of the trusted workspace lists it. Malformed, duplicate, unknown, foreign and archived values all give one opaque "Project unavailable" and never fall back to All Projects. The workspace still comes only from trusted server configuration; there is no cookie or storage authority.
+- **Dashboard:** global (projects, workspace approvals, active work across projects, per-project activity) or per project (identity, repository, runs, project approvals).
+- **Runs:** global bounded aggregation over registry projects via `listRuns` (application fan-out, documented bounds) or per project.
+- **Approvals:** the workspace queue, or per project classified by the factual run project (`listRuns` membership + bounded `getRunOverview`); unresolved approvals are never assigned.
+- **Bell:** the top-bar approval bell stays workspace-global.
+- **Run Detail:** never presents a run under a selected project it does not factually belong to.
+- **Tasks** do not exist yet: current work is shown as Runs.
 
-#### AI-038.4 — Tasks / My Attention / Quick Create — PLANNED
+#### AI-038.4 — Tasks / Task Detail / Task Result / My Attention / Quick Create / Recently Completed — PLANNED
 
-The Owner task surfaces (My Attention, Tasks, Quick Create). Any creation flow requires its own approved write boundary.
+The Owner task surfaces: Tasks, Task Detail, Task Result, My Attention, Quick Create and Recently Completed. After AI-038.4 the Dashboard will surface current Tasks across all projects; until then (AI-038.3.2) Runs are the factual current-work entity. Any creation flow requires its own approved write boundary.
 
 #### AI-038.5 — Mission Control Visual Refinement — PLANNED (deferred from the AI-038.3 Owner checkpoint)
 
@@ -945,7 +951,7 @@ Roadmap does not imply strictly serial development. Parallel work is allowed onl
 
 ### A. Current operational line (unchanged by the rebase)
 
-While M2.2 is deferred: `AI-037.7 DONE → AI-038.0 DONE → AI-038.1 DONE → AI-038.2a DONE → AI-038.2b DONE → AI-038.3 DONE → AI-038.3.1 Trusted Project Registry + listProjects/listRuns (IN REVIEW) → AI-038.3.2 Real Project Switcher / Project Context Routing → AI-038.4 Tasks + My Attention + Quick Create → AI-038.5 Mission Control Visual Refinement → AI-039 Development Workflow Browser` (M3 Owner path, §9). AI-038.2 passed; the Owner Console reads real runtime data through AI-038.3, read-only. The rebase does not cancel or skip any unfinished AI-038 work.
+While M2.2 is deferred: `AI-037.7 DONE → AI-038.0 DONE → AI-038.1 DONE → AI-038.2a DONE → AI-038.2b DONE → AI-038.3 DONE → AI-038.3.1 DONE → AI-038.3.2 All Projects + Real Project Switcher / Project Context Routing (IN REVIEW) → AI-038.4 Tasks + My Attention + Quick Create → AI-038.5 Mission Control Visual Refinement → AI-039 Development Workflow Browser` (M3 Owner path, §9). AI-038.2 passed; the Owner Console reads real runtime data through AI-038.3, read-only. The rebase does not cancel or skip any unfinished AI-038 work.
 
 ### B. First new architecture implementation introduced by v1.4
 
@@ -957,7 +963,7 @@ While M2.2 is deferred: `AI-037.7 DONE → AI-038.0 DONE → AI-038.1 DONE → A
 
 ### UI
 
-AI-038.2 and AI-038.3 are DONE: the Owner Console reads real runtime data, read-only. UI project switching waits for AI-038.3.2, after the AI-038.3.1 re-gate. Write actions in the UI need a separate write-boundary task. AI-039 is not started.
+AI-038.2, AI-038.3 and AI-038.3.1 are DONE: the Owner Console reads real runtime data, read-only. AI-038.3.2 (in review) adds All Projects and real project switching. Write actions in the UI need a separate write-boundary task. AI-039 is not started.
 
 ### Execution platform
 

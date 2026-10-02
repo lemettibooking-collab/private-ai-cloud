@@ -2,6 +2,7 @@ import Link from "next/link";
 import { formatTimestamp, humanize } from "@/components/domain/owner-console/format";
 import { ApprovalStatusBadge, RiskBadge } from "@/components/domain/owner-console/run-status";
 import type { OwnerConsoleApproval } from "@/lib/composition/owner-console-read.server";
+import { projectScopedHref } from "@/lib/projects/project-context";
 
 const riskRail: Record<OwnerConsoleApproval["riskLevel"], string> = {
   low: "bg-idle",
@@ -11,14 +12,21 @@ const riskRail: Record<OwnerConsoleApproval["riskLevel"], string> = {
 };
 
 // Read-only: each row links to the related Run. There are no decision controls (no write boundary).
-export function ApprovalQueue({ approvals, compact = false }: { approvals: readonly OwnerConsoleApproval[]; compact?: boolean }) {
+export function ApprovalQueue({ approvals, compact = false, selectedProjectId = null }: {
+  approvals: readonly OwnerConsoleApproval[];
+  compact?: boolean;
+  // Preserved on run links only when the approvals were classified to this validated project.
+  selectedProjectId?: string | null;
+}) {
+  const scoped = projectScopedHref("/runs", selectedProjectId);
+  const runHref = (runId: string) => `/runs/${encodeURIComponent(runId)}${scoped.slice("/runs".length)}`;
   return (
     <ul className="divide-y divide-line">
       {approvals.map((approval) => (
         <li key={approval.approvalRequestId || `${approval.runId}:${approval.stepId}`}>
           <Link
             className="group relative flex items-center gap-4 py-2.5 pl-3.5 pr-2 hover:bg-panel-2"
-            href={`/runs/${encodeURIComponent(approval.runId)}`}
+            href={runHref(approval.runId)}
           >
             <span aria-hidden className={`absolute inset-y-2 left-0 w-0.5 rounded-full ${riskRail[approval.riskLevel] ?? "bg-idle"}`} />
             <div className="min-w-0 flex-1">

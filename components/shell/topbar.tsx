@@ -1,10 +1,14 @@
 import Link from "next/link";
-import { ProjectSwitcher } from "@/components/shell/project-switcher";
-import type { OwnerConsoleAttentionSummary } from "@/lib/composition/owner-console-read.server";
+import { ProjectSwitcher, type SwitcherProject } from "@/components/shell/project-switcher";
+import type { OwnerConsoleProject, OwnerConsoleShell } from "@/lib/composition/owner-console-read.server";
 
 type TopbarProps = {
-  summary: OwnerConsoleAttentionSummary;
+  shell: OwnerConsoleShell;
+  selectedProject: OwnerConsoleProject | null;
 };
+
+const switcherProject = (project: OwnerConsoleProject): SwitcherProject =>
+  ({ projectId: project.projectId, displayName: project.displayName, status: project.status });
 
 function BellIcon() {
   return (
@@ -15,9 +19,9 @@ function BellIcon() {
   );
 }
 
-export function Topbar({ summary }: TopbarProps) {
-  const available = summary.state === "available";
-  const pending = available ? summary.pendingApprovals : null;
+export function Topbar({ shell, selectedProject }: TopbarProps) {
+  const summary = shell;
+  const pending = summary.state === "available" ? summary.pendingApprovals : null;
 
   return (
     <header className="sticky top-0 z-20 flex h-12 shrink-0 items-center gap-3 border-b border-line bg-canvas/95 px-4 backdrop-blur">
@@ -28,7 +32,12 @@ export function Topbar({ summary }: TopbarProps) {
         <span className="hidden text-[13px] font-semibold tracking-tight text-ink lg:inline">Private AI Cloud</span>
       </Link>
 
-      <ProjectSwitcher project={summary.project} />
+      <ProjectSwitcher
+        available={summary.state === "available" && summary.projectsAvailable}
+        projects={summary.state === "available" ? summary.projects.map(switcherProject) : []}
+        selected={selectedProject ? switcherProject(selectedProject) : null}
+        truncated={summary.state === "available" && summary.projectsTruncated}
+      />
 
       <div
         aria-disabled="true"
@@ -50,15 +59,16 @@ export function Topbar({ summary }: TopbarProps) {
         </button>
 
         <Link
-          aria-label={pending === null ? "Approvals" : `${pending} pending approvals`}
+          aria-label={pending === null ? "Approvals" : `${pending} pending approvals across all projects`}
           className={`flex h-8 items-center gap-1.5 rounded-pac border px-2.5 font-mono text-xs ${
             pending && pending > 0 ? "border-warn/40 bg-warn/10 text-warn" : "border-line bg-panel text-ink-2"
           }`}
           href="/approvals"
-          title="Pending approvals"
+          title="Pending approvals — all projects (workspace-wide), regardless of the selected project"
         >
           <BellIcon />
           {pending === null ? "—" : pending}
+          <span className="hidden font-sans text-[10px] uppercase tracking-[0.1em] opacity-70 xl:inline">all</span>
         </Link>
 
         {summary.state === "available" && (
@@ -78,7 +88,7 @@ export function Topbar({ summary }: TopbarProps) {
             </a>
           </>
         )}
-        {summary.state === "unavailable" && (
+        {(summary.state === "unavailable" || summary.state === "project_unavailable") && (
           <span className="flex h-8 items-center rounded-pac border border-line bg-panel px-2.5 font-mono text-[10.5px] uppercase tracking-[0.14em] text-ink-3">
             Owner · unavailable
           </span>
