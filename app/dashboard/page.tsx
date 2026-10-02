@@ -1,250 +1,316 @@
 import Link from "next/link";
-import { ApprovalCard } from "@/components/domain/approval-card";
-import { AuditTimeline } from "@/components/domain/audit-timeline";
+import { ApprovalQueue } from "@/components/domain/owner-console/approval-queue";
+import { OwnerDataUnavailable, ProjectUnavailable, ScopeBadge, SignInRequired } from "@/components/domain/owner-console/owner-state";
+import { activeRunStatuses, blockedRunStatuses, ProjectRunTable } from "@/components/domain/owner-console/project-run-table";
+import { TaskTable } from "@/components/domain/owner-console/task-table";
 import { AppShell } from "@/components/shell/app-shell";
-import { DataTable } from "@/components/ui/data-table";
-import { PageHeader } from "@/components/ui/page-header";
+import { EmptyState } from "@/components/ui/empty-state";
 import { SectionCard } from "@/components/ui/section-card";
-import { StatCard } from "@/components/ui/stat-card";
 import { StatusBadge } from "@/components/ui/status-badge";
-import {
-  activityStats,
-  approvals,
-  auditEvents,
-  departments,
-  quickActions,
-  roadmapItems,
-  weeklyOwnerReportSummary,
-  workflowRuns,
-} from "@/lib/mock-data";
-import type { StatusTone } from "@/types/app";
-import type { WorkflowRun } from "@/types/workflow";
+import { formatTimestamp } from "@/components/domain/owner-console/format";
+import { loadOwnerDashboard, type OwnerConsoleDashboardTasks, type OwnerConsoleProject } from "@/lib/composition/owner-console-read.server";
+import { projectScopedHref } from "@/lib/projects/project-context";
 
-export default function DashboardPage() {
+type DashboardPageProps = {
+  // `project` is an untrusted selector, validated by the loader against the authenticated registry.
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+};
+
+type MetricProps = { label: string; value: React.ReactNode; detail: string; tone?: "warn" | "bad" | "ok" | "run" | "neutral" };
+const metricTone = { warn: "text-warn", bad: "text-bad", ok: "text-ok", run: "text-run", neutral: "text-ink" } as const;
+
+function Metric({ label, value, detail, tone = "neutral" }: MetricProps) {
   return (
-    <AppShell>
-      <PageHeader
-        description="Owner attention center for approvals, workflow activity, AI outputs, system health, and weekly reporting."
-        eyebrow="Owner dashboard"
-        title="Smart Algorithms Demo operations"
-      />
+    <div className="min-w-0 px-4 py-3.5">
+      <p className="pac-label">{label}</p>
+      <p className={`mt-2 font-mono text-[28px] font-medium leading-none tracking-tight ${metricTone[tone]}`}>{value}</p>
+      <p className="mt-2 truncate text-[11.5px] text-ink-3">{detail}</p>
+    </div>
+  );
+}
 
+function MetricStrip({ children, columns }: { children: React.ReactNode; columns: 4 | 5 }) {
+  return (
+    <div className={`grid grid-cols-2 divide-line rounded-pac border border-line bg-panel max-lg:[&>*:nth-child(n+3)]:border-t max-lg:[&>*:nth-child(n+3)]:border-line lg:divide-x ${
+      columns === 5 ? "lg:grid-cols-5" : "lg:grid-cols-4"}`}>
+      {children}
+    </div>
+  );
+}
+
+// "What is being worked on?" — factual ProjectTasks only (never inferred from runs), then the most
+// recently completed tasks by the TASK's own completed_at.
+function TaskSections({ tasks, names, selectedProjectId }: {
+  tasks: OwnerConsoleDashboardTasks;
+  names: ReadonlyMap<string, string>;
+  selectedProjectId: string | null;
+}) {
+  const tasksHref = projectScopedHref("/tasks", selectedProjectId);
+  return (
+    <div className="mb-4 grid gap-4 xl:grid-cols-12">
       <SectionCard
-        description="Owner-first shortcuts for the MVP Smart Algorithms AI Operations Center."
-        title="Quick actions"
+        action={<Link className="text-xs text-accent hover:underline" href={tasksHref}>All tasks →</Link>}
+        className="xl:col-span-8"
+        description={`Active and attention tasks, most recently updated first${tasks.current.truncated ? " (bounded view)" : ""}.`}
+        title={`Current tasks · ${tasks.current.tasks.length}${tasks.current.truncated ? "+" : ""}`}
       >
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          {quickActions.map((action) => (
-            <Link
-              className="rounded-lg border border-slate-800 bg-slate-900/60 p-4 transition hover:border-cyan-400/30 hover:bg-slate-900"
-              href={action.href}
-              key={action.title}
-            >
-              <div className="flex items-start justify-between gap-3">
-                <p className="text-sm font-semibold text-slate-100">
-                  {action.title}
-                </p>
-                <StatusBadge tone={action.tone}>open</StatusBadge>
-              </div>
-              <p className="mt-2 text-sm leading-6 text-slate-400">
-                {action.description}
-              </p>
-            </Link>
-          ))}
-        </div>
+        {tasks.current.tasks.length === 0 ? (
+          <p className="text-[13px] text-ink-3">No task is currently in progress or waiting on attention.</p>
+        ) : (
+          <div className="-mx-4 -my-4">
+            <TaskTable projectNames={names} selectedProjectId={selectedProjectId} showProject={selectedProjectId === null} tasks={tasks.current.tasks} />
+          </div>
+        )}
       </SectionCard>
-
-      <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        {activityStats.map((stat) => (
-          <StatCard key={stat.label} stat={stat} />
-        ))}
-      </div>
-
-      <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(360px,0.9fr)]">
-        <SectionCard
-          description="Decisions that should happen before the system does anything outside the prototype."
-          title="Owner attention center"
-        >
-          <div className="space-y-3">
-            {[
-              ["Approve or reject Telegram publication", "high risk"],
-              ["Retry failed SEO Strategy indexing", "knowledge gap"],
-              ["Review Codex task before launch", "approval gate"],
-              ["Keep local runner and integrations locked", "system policy"],
-            ].map(([title, label]) => (
-              <div
-                className="flex items-start justify-between gap-3 rounded-lg border border-slate-800 bg-slate-900/50 p-3"
-                key={title}
-              >
-                <p className="text-sm text-slate-200">{title}</p>
-                <StatusBadge tone="warning">{label}</StatusBadge>
-              </div>
-            ))}
-          </div>
-        </SectionCard>
-
-        <SectionCard
-          description="High-priority items that need human review before any external action."
-          title="Pending Approvals"
-        >
-          <div className="space-y-4">
-            {approvals.slice(0, 2).map((approval) => (
-              <ApprovalCard approval={approval} key={approval.id} />
-            ))}
-          </div>
-        </SectionCard>
-      </div>
-
-      <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.7fr)]">
-        <SectionCard title="Activity Summary">
-          <div className="grid gap-3 md:grid-cols-3">
-            {[
-              ["MVP workflows", "5 active"],
-              ["AI Departments", `${departments.length} visible`],
-              ["External actions", "locked"],
-            ].map(([label, value]) => (
-              <div
-                className="rounded-lg border border-slate-800 bg-slate-900/50 p-4"
-                key={label}
-              >
-                <p className="text-xs font-medium uppercase text-slate-500">
-                  {label}
-                </p>
-                <p className="mt-2 text-lg font-semibold text-slate-50">
-                  {value}
-                </p>
-              </div>
-            ))}
-          </div>
-        </SectionCard>
-
-        <SectionCard
-          description="Current operating posture for the prototype."
-          title="System Health"
-        >
-          <div className="space-y-3">
-            {(
-              [
-                ["Knowledge indexing", "1 failed document", "danger"],
-                ["External integrations", "Locked by default", "locked"],
-                ["Workflow worker", "Mocked / not connected", "neutral"],
-                ["Approval policy", "Manual review required", "success"],
-              ] satisfies Array<[string, string, StatusTone]>
-            ).map(([label, value, tone]) => (
-              <div
-                className="flex items-center justify-between rounded-lg border border-slate-800 bg-slate-900/50 p-3"
-                key={label}
-              >
-                <span className="text-sm text-slate-300">{label}</span>
-                <StatusBadge tone={tone}>{value}</StatusBadge>
-              </div>
-            ))}
-          </div>
-        </SectionCard>
-      </div>
-
-      <div className="mt-6 grid gap-6 xl:grid-cols-2">
-        <SectionCard
-          description="Recent generated outputs and run states."
-          title="Recent Workflow Runs"
-        >
-          <DataTable<WorkflowRun>
-            columns={[
-              { key: "title", header: "Run" },
-              {
-                key: "status",
-                header: "Status",
-                render: (row) => (
-                  <StatusBadge tone={row.statusTone}>{row.status}</StatusBadge>
-                ),
-              },
-              { key: "requestedBy", header: "Owner" },
-              { key: "updatedAt", header: "Updated" },
-            ]}
-            getRowKey={(row) => row.id}
-            rows={workflowRuns}
-          />
-        </SectionCard>
-
-        <SectionCard
-          description="Generated AI artifacts that may require review."
-          title="Recent AI Outputs"
-        >
-          <div className="space-y-3">
-            {workflowRuns.map((run) => (
-              <div
-                className="rounded-lg border border-slate-800 bg-slate-900/50 p-4"
-                key={run.id}
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <p className="text-sm font-medium text-slate-100">
-                    {run.title}
+      <SectionCard
+        className="xl:col-span-4"
+        description="Tasks with status completed, by task completion time."
+        title="Recently completed"
+      >
+        {tasks.recentlyCompleted.tasks.length === 0 ? (
+          <p className="text-[13px] text-ink-3">No completed tasks yet.</p>
+        ) : (
+          <ul className="-mx-4 -my-4 divide-y divide-line">
+            {tasks.recentlyCompleted.tasks.map((task) => (
+              <li key={task.taskId}>
+                <Link
+                  className="block px-4 py-2.5 hover:bg-panel-2"
+                  href={`/tasks/${encodeURIComponent(task.taskId)}${tasksHref.slice("/tasks".length)}`}
+                >
+                  <p className="truncate text-[13px] text-ink">{task.title}</p>
+                  <p className="mt-0.5 font-mono text-[10.5px] text-ink-3">
+                    {selectedProjectId === null && <>{names.get(task.projectId) ?? task.projectId} · </>}
+                    completed {formatTimestamp(task.completedAt)}
                   </p>
-                  <StatusBadge tone={run.statusTone}>{run.status}</StatusBadge>
-                </div>
-                <p className="mt-2 text-sm leading-6 text-slate-400">
-                  {run.outputPreview}
-                </p>
-              </div>
+                </Link>
+              </li>
             ))}
-          </div>
-        </SectionCard>
+          </ul>
+        )}
+      </SectionCard>
+    </div>
+  );
+}
+
+function RepositoryLine({ project }: { project: OwnerConsoleProject }) {
+  return project.repository ? (
+    <p className="font-mono text-xs text-ink-2">
+      {project.repository.url}
+      {project.repository.defaultBranch && <span className="text-ink-3"> · {project.repository.defaultBranch}</span>}
+    </p>
+  ) : (
+    <p className="text-xs text-ink-3">Repository not configured</p>
+  );
+}
+
+export default async function DashboardPage({ searchParams }: DashboardPageProps) {
+  const view = await loadOwnerDashboard((await searchParams).project);
+  const selected = view.state === "available" && view.scope.mode === "project" ? view.scope.project : null;
+
+  return (
+    <AppShell selectedProject={selected}>
+      <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <p className="pac-label !text-accent">Owner attention</p>
+          <h1 className="mt-1 text-xl font-semibold tracking-tight text-ink">
+            {selected ? selected.displayName : "Mission control"}
+          </h1>
+        </div>
+        {view.state === "available" && <ScopeBadge project={selected} />}
       </div>
 
-      <div className="mt-6 grid gap-6 xl:grid-cols-2">
-        <SectionCard title="Risk / Attention Items">
-          <AuditTimeline events={auditEvents} />
-        </SectionCard>
+      {view.state === "unauthenticated" && <SignInRequired />}
+      {view.state === "unavailable" && <OwnerDataUnavailable />}
+      {view.state === "project_unavailable" && <ProjectUnavailable allHref="/dashboard" />}
 
-        <SectionCard
-          description="Latest owner-facing summary generated from mocked operational data."
-          title={weeklyOwnerReportSummary.title}
-        >
-          <p className="text-sm leading-6 text-slate-300">
-            {weeklyOwnerReportSummary.subtitle}
-          </p>
-          <div className="mt-4 grid gap-3 md:grid-cols-2">
-            {weeklyOwnerReportSummary.metrics.map((metric) => (
-              <div
-                className="rounded-lg border border-slate-800 bg-slate-900/50 p-3"
-                key={metric.label}
+      {view.state === "available" && view.mode === "all" && (() => {
+        const names = new Map(view.projects.map((project) => [project.projectId, project.displayName]));
+        const activity = new Map(view.aggregate.byProject.map((item) => [item.projectId, item]));
+        const activeRuns = view.aggregate.byProject.reduce((sum, item) => sum + item.activeRuns, 0);
+        const blockedRuns = view.aggregate.byProject.reduce((sum, item) => sum + item.blockedRuns, 0);
+        const coverageGap = view.aggregate.projectsUnavailable.length > 0 || view.aggregate.projectsNotConsidered > 0;
+        return (
+          <>
+            <MetricStrip columns={5}>
+              <Metric detail={view.projectsTruncated ? "First 100 registered projects" : "Registered in this workspace"} label="Projects" value={`${view.projects.length}${view.projectsTruncated ? "+" : ""}`} />
+              <Metric
+                detail="Active or needing attention, all projects"
+                label="Current tasks"
+                tone={view.tasks.current.tasks.length > 0 ? "run" : "neutral"}
+                value={`${view.tasks.current.tasks.length}${view.tasks.current.truncated ? "+" : ""}`}
+              />
+              <Metric
+                detail={`${view.highRiskApprovals} high/critical · workspace-wide`}
+                label="Pending approvals"
+                tone={view.pendingApprovals > 0 ? "warn" : "ok"}
+                value={`${view.pendingApprovals}${view.queueTruncated ? "+" : ""}`}
+              />
+              <Metric
+                detail={`${blockedRuns} blocked or failed · in recent project runs`}
+                label="Active runs"
+                tone={activeRuns > 0 ? "run" : "neutral"}
+                value={activeRuns}
+              />
+            </MetricStrip>
+
+            <div className="mt-4">
+              <TaskSections names={names} selectedProjectId={null} tasks={view.tasks} />
+            </div>
+
+            <div className="grid gap-4 xl:grid-cols-12">
+              <SectionCard
+                action={<Link className="text-xs text-accent hover:underline" href={projectScopedHref("/runs", null)}>All runs →</Link>}
+                className="xl:col-span-7"
+                description={`Run attempts across all projects, newest first (up to ${view.aggregate.runsPerProjectLimit} per project).`}
+                title="Recent runs"
               >
-                <p className="text-xs font-medium uppercase text-slate-500">
-                  {metric.label}
-                </p>
-                <p className="mt-2 text-xl font-semibold text-slate-50">
-                  {metric.value}
-                </p>
-              </div>
-            ))}
-          </div>
-        </SectionCard>
-      </div>
+                {view.aggregate.runs.length === 0 ? (
+                  <p className="text-[13px] text-ink-3">{view.projects.length === 0 ? "No projects registered." : "No runs in registered projects yet."}</p>
+                ) : (
+                  <div className="-mx-4 -my-4">
+                    <ProjectRunTable projectNames={names} runs={view.aggregate.runs} selectedProjectId={null} showProject />
+                  </div>
+                )}
+              </SectionCard>
 
-      <div className="mt-6">
-        <SectionCard
-          action={<StatusBadge tone="success">current: v0.1</StatusBadge>}
-          description="The prototype is intentionally scoped to the first Smart Algorithms internal demo."
-          title="Roadmap focus"
-        >
-          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-            <div>
-              <p className="text-lg font-semibold text-slate-50">
-                {roadmapItems[0].title}
-              </p>
-              <p className="mt-2 text-sm leading-6 text-slate-400">
-                {roadmapItems[0].description}
+              <SectionCard
+                action={<Link className="text-xs text-accent hover:underline" href={projectScopedHref("/approvals", null)}>All approvals →</Link>}
+                className="xl:col-span-5"
+                description="Pending runtime approvals across all projects, highest risk first. Read-only."
+                title="Attention queue"
+              >
+                {view.approvals.length === 0 ? (
+                  <EmptyState description="There are no pending runtime approvals in this workspace." title="Nothing needs your decision" />
+                ) : (
+                  <div className="-mx-4 -my-4">
+                    <ApprovalQueue approvals={view.approvals.slice(0, 8)} compact />
+                    {view.approvals.length > 8 && (
+                      <p className="border-t border-line px-4 py-2 text-xs text-ink-3">
+                        +{view.approvals.length - 8} more in <Link className="text-accent hover:underline" href="/approvals">Approvals</Link>
+                      </p>
+                    )}
+                  </div>
+                )}
+              </SectionCard>
+            </div>
+
+            <SectionCard className="mt-4" description="Registered projects and their activity in recent runs. Select a project to scope the console." title="Projects">
+              {view.projects.length === 0 ? (
+                <EmptyState description="No projects are registered in this workspace yet." title="No projects registered" />
+              ) : (
+                <div className="-mx-4 -my-4 grid divide-line sm:grid-cols-2 xl:grid-cols-3 [&>*]:border-b [&>*]:border-line sm:[&>*]:border-r">
+                  {view.projects.map((project) => {
+                    const item = activity.get(project.projectId);
+                    return (
+                      <Link className="group px-4 py-3 hover:bg-panel-2" href={projectScopedHref("/dashboard", project.projectId)} key={project.projectId}>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="truncate text-[13px] font-medium text-ink group-hover:text-accent">{project.displayName}</span>
+                          <StatusBadge tone={project.status === "active" ? "success" : "warning"}>{project.status}</StatusBadge>
+                        </div>
+                        <p className="font-mono text-[11px] text-ink-3">{project.projectId}</p>
+                        <p className="mt-2 font-mono text-[11.5px] text-ink-2">
+                          {!item ? "not in this view" : !item.available ? "runs unavailable" : (
+                            <>
+                              <span className={item.activeRuns > 0 ? "text-run" : ""}>{item.activeRuns} active</span>
+                              {" · "}
+                              <span className={item.blockedRuns > 0 ? "text-bad" : ""}>{item.blockedRuns} blocked</span>
+                              {" · "}{item.recentRuns}{item.truncated ? "+" : ""} recent
+                            </>
+                          )}
+                        </p>
+                      </Link>
+                    );
+                  })}
+                </div>
+              )}
+            </SectionCard>
+
+            <div className={`mt-4 rounded-pac border px-4 py-3 ${coverageGap ? "border-warn/40 bg-warn/5" : "border-line bg-panel"}`}>
+              <p className="pac-label">Data coverage</p>
+              <p className="mt-1.5 text-xs leading-5 text-ink-3">
+                Runs come from the registered projects ({view.aggregate.projectsConsidered} read, up to {view.aggregate.runsPerProjectLimit} newest runs each), not complete run history.
+                {view.aggregate.projectsNotConsidered > 0 && ` ${view.aggregate.projectsNotConsidered} more project(s) are not included in this view.`}
+                {view.aggregate.projectsUnavailable.length > 0 && ` Runs unavailable for: ${view.aggregate.projectsUnavailable.join(", ")}.`}
+                {" "}Tasks are factual Owner objectives; runs are their execution attempts.
               </p>
             </div>
-            <Link
-              className="inline-flex h-9 items-center justify-center rounded-md border border-slate-600/80 bg-slate-900/80 px-3 text-sm font-medium text-slate-200 transition hover:bg-slate-800"
-              href="/roadmap"
-            >
-              Open Roadmap
-            </Link>
-          </div>
-        </SectionCard>
-      </div>
+          </>
+        );
+      })()}
+
+      {view.state === "available" && view.mode === "project" && (() => {
+        const project = view.scope.project;
+        const approvals = view.projectApprovals;
+        const active = view.runs.filter((run) => activeRunStatuses.has(run.status)).length;
+        const blocked = view.runs.filter((run) => blockedRunStatuses.has(run.status)).length;
+        return (
+          <>
+            <section className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-pac border border-line bg-panel px-4 py-3">
+              <div className="min-w-0">
+                <p className="pac-label">Project</p>
+                <p className="mt-1 text-[15px] font-semibold text-ink">{project.displayName} <span className="font-mono text-xs font-normal text-ink-3">{project.projectId}</span></p>
+                <RepositoryLine project={project} />
+              </div>
+              <StatusBadge tone={project.status === "active" ? "success" : "warning"}>{project.status}</StatusBadge>
+            </section>
+
+            <MetricStrip columns={5}>
+              <Metric detail={view.runsTruncated ? `Newest ${view.runsLimit} shown` : "Runs of this project"} label="Project runs" value={`${view.runs.length}${view.runsTruncated ? "+" : ""}`} />
+              <Metric detail="Queued, running, waiting or in review" label="Active" tone={active > 0 ? "run" : "neutral"} value={active} />
+              <Metric detail="Blocked or failed" label="Blocked" tone={blocked > 0 ? "bad" : "neutral"} value={blocked} />
+              <Metric detail="This project only" label="Pending approvals" tone={approvals.pendingApprovals > 0 ? "warn" : "ok"} value={approvals.pendingApprovals} />
+              <Metric detail="High or critical, this project" label="High / critical" tone={approvals.highRiskApprovals > 0 ? "bad" : "neutral"} value={approvals.highRiskApprovals} />
+            </MetricStrip>
+
+            <div className="mt-4">
+              <TaskSections names={new Map([[project.projectId, project.displayName]])} selectedProjectId={project.projectId} tasks={view.tasks} />
+            </div>
+
+            <div className="grid gap-4 xl:grid-cols-12">
+              <SectionCard
+                action={<Link className="text-xs text-accent hover:underline" href={projectScopedHref("/runs", project.projectId)}>Project runs →</Link>}
+                className="xl:col-span-7"
+                description="Run attempts of this project, newest first."
+                title="Project runs"
+              >
+                {view.runs.length === 0 ? (
+                  <p className="text-[13px] text-ink-3">This project has no runs yet.</p>
+                ) : (
+                  <div className="-mx-4 -my-4">
+                    <ProjectRunTable runs={view.runs.slice(0, 15)} selectedProjectId={project.projectId} showProject={false} />
+                  </div>
+                )}
+              </SectionCard>
+
+              <SectionCard
+                action={<Link className="text-xs text-accent hover:underline" href={projectScopedHref("/approvals", project.projectId)}>Project approvals →</Link>}
+                className="xl:col-span-5"
+                description="Approvals whose run factually belongs to this project. Read-only."
+                title="Project approvals"
+              >
+                {approvals.approvals.length === 0 ? (
+                  <EmptyState description="No pending runtime approval belongs to this project." title="Project queue is clear" />
+                ) : (
+                  <div className="-mx-4 -my-4">
+                    <ApprovalQueue approvals={approvals.approvals.slice(0, 8)} compact selectedProjectId={project.projectId} />
+                  </div>
+                )}
+              </SectionCard>
+            </div>
+
+            {approvals.unresolvedApprovals > 0 && (
+              <div className="mt-4 rounded-pac border border-warn/40 bg-warn/5 px-4 py-3">
+                <p className="pac-label !text-warn">Unresolved approvals</p>
+                <p className="mt-1.5 text-xs leading-5 text-ink-3">
+                  {approvals.unresolvedApprovals} workspace approval(s) could not be attributed to a project in this view and are not counted here.
+                  See <Link className="text-accent hover:underline" href="/approvals">All Projects approvals</Link>.
+                </p>
+              </div>
+            )}
+            <p className="mt-3 text-[11.5px] text-ink-3">The top-bar approval count stays workspace-wide (all projects).</p>
+          </>
+        );
+      })()}
     </AppShell>
   );
 }

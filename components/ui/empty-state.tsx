@@ -14,11 +14,9 @@ export function EmptyState({
   actionHref,
 }: EmptyStateProps) {
   return (
-    <div className="rounded-xl border border-dashed border-slate-700 bg-slate-950/60 p-6 text-center">
-      <p className="text-base font-semibold text-slate-100">{title}</p>
-      <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-slate-400">
-        {description}
-      </p>
+    <div className="rounded-pac border border-dashed border-line-strong bg-panel/60 px-6 py-8 text-center">
+      <p className="text-sm font-semibold text-ink">{title}</p>
+      <p className="mx-auto mt-1.5 max-w-xl text-[13px] leading-5 text-ink-3">{description}</p>
       {actionLabel && actionHref && (
         <div className="mt-4">
           <ActionButton href={actionHref} variant="secondary">

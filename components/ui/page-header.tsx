@@ -12,17 +12,11 @@ export function PageHeader({
   action,
 }: PageHeaderProps) {
   return (
-    <div className="mb-6 flex flex-col gap-4 border-b border-slate-800 pb-6 lg:flex-row lg:items-end lg:justify-between">
+    <div className="mb-5 flex flex-col gap-3 border-b border-line pb-4 lg:flex-row lg:items-end lg:justify-between">
       <div className="max-w-3xl">
-        {eyebrow && (
-          <p className="mb-2 text-xs font-semibold uppercase tracking-[0.24em] text-cyan-300">
-            {eyebrow}
-          </p>
-        )}
-        <h1 className="text-2xl font-semibold tracking-tight text-slate-50">
-          {title}
-        </h1>
-        <p className="mt-2 text-sm leading-6 text-slate-400">{description}</p>
+        {eyebrow && <p className="pac-label mb-1.5 !text-accent">{eyebrow}</p>}
+        <h1 className="text-xl font-semibold tracking-tight text-ink">{title}</h1>
+        <p className="mt-1 text-[13px] leading-5 text-ink-3">{description}</p>
       </div>
       {action}
     </div>

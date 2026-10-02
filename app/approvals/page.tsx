@@ -1,115 +1,85 @@
-import { ApprovalCard } from "@/components/domain/approval-card";
+import Link from "next/link";
+import { ApprovalQueue } from "@/components/domain/owner-console/approval-queue";
+import { OwnerDataUnavailable, ProjectUnavailable, ScopeBadge, SignInRequired } from "@/components/domain/owner-console/owner-state";
 import { AppShell } from "@/components/shell/app-shell";
-import { ActionButton } from "@/components/ui/action-button";
+import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { SectionCard } from "@/components/ui/section-card";
-import { StatusBadge } from "@/components/ui/status-badge";
-import { approvals } from "@/lib/mock-data";
+import { loadOwnerApprovals } from "@/lib/composition/owner-console-read.server";
 
-export default function ApprovalsPage() {
+type ApprovalsPageProps = {
+  // `project` is an untrusted selector, validated by the loader against the authenticated registry.
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+};
+
+// Read-only. All Projects = the full workspace queue. A selected project = only approvals whose run
+// FACTUALLY belongs to it. Decisions (approve / reject) are intentionally absent: no write boundary.
+export default async function ApprovalsPage({ searchParams }: ApprovalsPageProps) {
+  const view = await loadOwnerApprovals((await searchParams).project);
+  const selected = view.state === "available" && view.scope.mode === "project" ? view.scope.project : null;
+
   return (
-    <AppShell>
+    <AppShell selectedProject={selected}>
       <PageHeader
-        description="Human review queue for generated outputs and locked external actions. All action buttons are mocked or disabled."
+        action={view.state === "available" ? <ScopeBadge project={selected} /> : undefined}
+        description={selected
+          ? "Pending runtime approvals whose run belongs to this project, highest risk first. Each item opens its run."
+          : "The workspace approval queue across all projects, highest risk first. Each item opens its run."}
         eyebrow="Approvals"
-        title="Approval queue"
+        title={selected ? `${selected.displayName} approvals` : "All Projects approval queue"}
       />
 
-      <SectionCard title="Approval-first policy">
-        <div className="grid gap-3 md:grid-cols-3">
-          {[
-            ["External actions", "locked by default"],
-            ["Audit trail", "required for every request"],
-            ["Merge", "always manual outside the system"],
-          ].map(([label, value]) => (
-            <div
-              className="rounded-lg border border-slate-800 bg-slate-900/50 p-4"
-              key={label}
+      {view.state === "unauthenticated" && <SignInRequired />}
+      {view.state === "unavailable" && <OwnerDataUnavailable />}
+      {view.state === "project_unavailable" && <ProjectUnavailable allHref="/approvals" />}
+
+      {view.state === "available" && (
+        <div className="grid gap-4 xl:grid-cols-12">
+          {view.mode === "all" ? (
+            <SectionCard
+              className="xl:col-span-9"
+              description={`${view.pendingApprovals}${view.queueTruncated ? "+" : ""} pending · ${view.highRiskApprovals} high/critical · workspace-wide`}
+              title="Workspace approval queue"
             >
-              <p className="text-xs font-medium uppercase text-slate-500">
-                {label}
-              </p>
-              <p className="mt-2 text-sm font-semibold text-slate-100">
-                {value}
-              </p>
-            </div>
-          ))}
+              {view.approvals.length === 0 ? (
+                <EmptyState description="There are no pending runtime approvals in this workspace." title="Queue is clear" />
+              ) : (
+                <div className="-mx-4 -my-4">
+                  <ApprovalQueue approvals={view.approvals} />
+                </div>
+              )}
+            </SectionCard>
+          ) : (
+            <SectionCard
+              className="xl:col-span-9"
+              description={`${view.projectApprovals.pendingApprovals} pending · ${view.projectApprovals.highRiskApprovals} high/critical · this project`}
+              title="Project approval queue"
+            >
+              {view.projectApprovals.approvals.length === 0 ? (
+                <EmptyState description="No pending runtime approval belongs to this project." title="Project queue is clear" />
+              ) : (
+                <div className="-mx-4 -my-4">
+                  <ApprovalQueue approvals={view.projectApprovals.approvals} selectedProjectId={view.scope.project.projectId} />
+                </div>
+              )}
+              {view.projectApprovals.unresolvedApprovals > 0 && (
+                <p className="mt-3 rounded-pac border border-warn/40 bg-warn/5 px-3 py-2 text-xs text-ink-3">
+                  {view.projectApprovals.unresolvedApprovals} workspace approval(s) could not be attributed to a project and are not shown here.
+                  See <Link className="text-accent hover:underline" href="/approvals">All Projects</Link>.
+                </p>
+              )}
+            </SectionCard>
+          )}
+
+          <SectionCard className="xl:col-span-3" title="Decision boundary">
+            <p className="text-[13px] leading-5 text-ink-2">Read-only.</p>
+            <p className="mt-1.5 text-xs leading-5 text-ink-3">
+              Approve and reject are not available in the Owner Console yet. They require a separate,
+              audited write boundary. Result acceptance, commit, push and deploy remain separate approvals.
+            </p>
+          </SectionCard>
         </div>
-      </SectionCard>
-
-      <div className="my-6 flex flex-wrap gap-2">
-        {["All", "Pending", "High risk", "Blocked", "Edited"].map(
-          (filter, index) => (
-            <StatusBadge key={filter} tone={index === 0 ? "info" : "neutral"}>
-              {filter}
-            </StatusBadge>
-          ),
-        )}
-      </div>
-
-      <div className="grid gap-4 xl:grid-cols-2">
-        {approvals.map((approval) => (
-          <div className="space-y-3" key={approval.id}>
-            <ApprovalCard approval={approval} />
-            <div className="rounded-lg border border-slate-800 bg-slate-900/50 p-4">
-              <div className="grid gap-3 lg:grid-cols-3">
-                <div>
-                  <p className="text-xs font-medium uppercase text-slate-500">
-                    Allowed approvers
-                  </p>
-                  <p className="mt-2 text-sm text-slate-300">
-                    {approval.allowedApprovers?.join(", ") ?? "Owner"}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-xs font-medium uppercase text-slate-500">
-                    Risk level
-                  </p>
-                  <div className="mt-2">
-                    <StatusBadge tone={approval.riskTone}>
-                      {approval.riskLevel}
-                    </StatusBadge>
-                  </div>
-                </div>
-                <div>
-                  <p className="text-xs font-medium uppercase text-slate-500">
-                    Audit trail hint
-                  </p>
-                  <p className="mt-2 text-sm text-slate-300">
-                    {approval.auditHint}
-                  </p>
-                </div>
-              </div>
-              <div className="mt-4">
-                <ActionButton href={`/approvals/${approval.id}`} variant="secondary">
-                  Open detail
-                </ActionButton>
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      <div className="mt-6">
-        <SectionCard title="Approval detail placeholder">
-          <div className="grid gap-4 lg:grid-cols-3">
-            {["Original payload", "Edited payload", "Final payload"].map(
-              (label) => (
-                <div
-                  className="rounded-lg border border-slate-800 bg-slate-900/60 p-4"
-                  key={label}
-                >
-                  <p className="text-sm font-medium text-slate-100">{label}</p>
-                  <p className="mt-2 text-sm leading-6 text-slate-400">
-                    Before/after preview will be shown here when a queue item is
-                    selected.
-                  </p>
-                </div>
-              ),
-            )}
-          </div>
-        </SectionCard>
-      </div>
+      )}
     </AppShell>
   );
 }

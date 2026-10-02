@@ -1,13 +1,58 @@
 @import "tailwindcss";
 
+/*
+ * PAC Owner Console — Mission Control tokens (AI-038.3).
+ * Deep graphite / blue-black surfaces, thin lines, restrained cyan accent.
+ * Status colors encode meaning only:
+ *   run  = running / active          ok   = pass / healthy / completed
+ *   warn = attention / waiting       bad  = failed / blocked / critical
+ *   idle = neutral / unavailable
+ */
 :root {
-  --background: #020617;
-  --foreground: #e2e8f0;
+  --pac-canvas: #0a0d12;
+  --pac-panel: #0f141b;
+  --pac-panel-2: #141a23;
+  --pac-raised: #1a212c;
+  --pac-line: #1f2733;
+  --pac-line-strong: #2b3544;
+  --pac-ink: #e6ebf2;
+  --pac-ink-2: #a9b4c3;
+  --pac-ink-3: #6b7788;
+  --pac-accent: #38bdf8;
+
+  --pac-run: #38bdf8;
+  --pac-ok: #34d399;
+  --pac-warn: #fbbf24;
+  --pac-bad: #f87171;
+  --pac-idle: #7c8797;
+
+  --background: var(--pac-canvas);
+  --foreground: var(--pac-ink);
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+
+  --color-canvas: var(--pac-canvas);
+  --color-panel: var(--pac-panel);
+  --color-panel-2: var(--pac-panel-2);
+  --color-raised: var(--pac-raised);
+  --color-line: var(--pac-line);
+  --color-line-strong: var(--pac-line-strong);
+  --color-ink: var(--pac-ink);
+  --color-ink-2: var(--pac-ink-2);
+  --color-ink-3: var(--pac-ink-3);
+  --color-accent: var(--pac-accent);
+
+  --color-run: var(--pac-run);
+  --color-ok: var(--pac-ok);
+  --color-warn: var(--pac-warn);
+  --color-bad: var(--pac-bad);
+  --color-idle: var(--pac-idle);
+
+  --radius-pac: 6px;
+
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
@@ -16,6 +61,7 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+  font-feature-settings: "tnum" 1, "cv11" 1;
 }
 
 * {
@@ -23,6 +69,19 @@ body {
 }
 
 ::selection {
-  background: rgba(34, 211, 238, 0.25);
+  background: rgba(56, 189, 248, 0.25);
   color: #f8fafc;
+}
+
+/* Compact uppercase technical label used across the console. */
+.pac-label {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 10.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--pac-ink-3);
+}
+
+summary::-webkit-details-marker {
+  display: none;
 }
