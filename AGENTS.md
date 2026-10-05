@@ -19,6 +19,11 @@ This version has breaking changes - APIs, conventions, and file structure may al
   - domain / storage enum values stay canonical and locale-neutral;
   - identifiers and stored content are never translated;
   - the locale never takes part in auth, tenancy, reads, writes or audit.
+- **Ambient background** (AI-038.7): a native WebGL shader (`components/shell/ambient-renderer.ts`) over the AI-038.5 CSS mesh. It is decorative only:
+  - it receives no operational data (only size and time) and must never look like telemetry;
+  - it must keep the static CSS fallback (no WebGL, shader failure, context loss);
+  - it must honor `prefers-reduced-motion` (no animation loop);
+  - no WebGL / animation library.
 - **Auth:** Auth.js with GitHub as the only provider (AI-038.2a), wired to the server-only Owner identity boundary (`lib/auth/`, `lib/composition/*owner-read*`).
   - The only HTTP route is the Auth.js route `app/api/auth/[...nextauth]`. There is no business API.
   - The real GitHub OAuth smoke (AI-038.2b) passed; AI-038.2 is DONE.

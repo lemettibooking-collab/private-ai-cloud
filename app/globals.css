@@ -81,7 +81,16 @@ body {
 }
 
 /*
- * Layer 1 — ambient masses. A ShaderGradient-like slow mesh, adapted for PAC: four very large,
+ * Layer 1 — ambient light (AI-038.7). The primary moving layer is a native WebGL fragment shader
+ * (components/shell/ambient-renderer.ts): one broad luminous band that bends, thickens and thins
+ * through the middle-lower viewport, over a deeper ocean / teal field — capped at ~30 FPS, drawn at
+ * 1 device pixel per CSS pixel, paused in hidden tabs. `.pac-ambient-canvas` is transparent until the
+ * renderer has started and sets `data-renderer="shader"` on `.pac-ambient`; then the canvas fades in,
+ * the CSS mesh fades out and its animations are paused (one moving layer, never two).
+ *
+ * Layer 1 fallback — the AI-038.5 CSS mesh: server-rendered, visible before hydration, without
+ * WebGL, after any shader / context failure and under prefers-reduced-motion. A ShaderGradient-like
+ * slow mesh, adapted for PAC: four very large,
  * low-saturation elliptical gradient masses (deep teal #0E7490, ocean #0B3150, steel navy #123B63,
  * and a small, rare touch of cyan #38BDF8). Each drifts, turns a few degrees and breathes in scale
  * on its own 24–40 s cycle, so the masses overlap differently over time — the "shader" feel — without
@@ -89,8 +98,9 @@ body {
  * `opacity` animate, so motion stays on the compositor. Pure CSS, no canvas / WebGL / JS.
  *
  * Layer 2 — haze (`.pac-ambient::after`): a static veil that lifts the top slightly and deepens the
- * edges, keeping text contrast stable wherever the masses are. Panels, shell and tables sit above.
- * Under prefers-reduced-motion the masses freeze in a composed still frame.
+ * edges, keeping text contrast stable wherever the light is; it sits above both the canvas and the
+ * mesh. Panels, shell and tables sit above it.
+ * Under prefers-reduced-motion the shader never starts and the masses freeze in a composed still frame.
  */
 .pac-ambient {
   position: fixed;
@@ -99,6 +109,32 @@ body {
   overflow: hidden;
   pointer-events: none;
   contain: strict;
+}
+.pac-ambient-mesh {
+  position: absolute;
+  inset: 0;
+  transition: opacity 1.6s ease, visibility 0s linear 0s;
+}
+.pac-ambient-canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  transition: opacity 1.6s ease;
+}
+.pac-ambient[data-renderer="shader"] .pac-ambient-canvas {
+  opacity: 1;
+}
+.pac-ambient[data-renderer="shader"] .pac-ambient-mesh {
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 1.6s ease, visibility 0s linear 1.6s;
+}
+.pac-ambient[data-renderer="shader"] .pac-ambient-field {
+  animation-play-state: paused;
+  will-change: auto;
 }
 .pac-ambient-field {
   position: absolute;

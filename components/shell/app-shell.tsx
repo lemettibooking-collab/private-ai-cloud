@@ -1,3 +1,4 @@
+import { AmbientShaderBackground } from "@/components/shell/ambient-shader-background";
 import { Sidebar } from "@/components/shell/sidebar";
 import { Topbar } from "@/components/shell/topbar";
 import { loadOwnerShell, type OwnerConsoleProject } from "@/lib/composition/owner-console-read.server";
@@ -16,7 +17,8 @@ type AppShellProps = {
 // the switcher) is loaded once per request through the authenticated read path, with no
 // cross-request caching. The browser receives only counts, states and public project summaries.
 // AI-038.5: the content column is width-controlled so 1440 / 1728 / 1920 px keep one rhythm, and
-// sits above the decorative ambient layer (globals.css `.pac-ambient`).
+// sits above the decorative ambient layer (globals.css `.pac-ambient`). AI-038.7: that layer is a
+// small prop-less client component — a WebGL ambient shader over the CSS fallback; no data reaches it.
 export async function AppShell({ children, drawer, selectedProject = null }: AppShellProps) {
   const shell = await loadOwnerShell();
   const { locale, t } = await getI18n();
@@ -25,13 +27,8 @@ export async function AppShell({ children, drawer, selectedProject = null }: App
 
   return (
     <div className="relative isolate flex min-h-screen flex-col text-ink">
-      {/* Ambient background: decorative only, CSS-animated, frozen under reduced motion. */}
-      <div aria-hidden className="pac-ambient">
-        <span className="pac-ambient-field pac-ambient-field-a" />
-        <span className="pac-ambient-field pac-ambient-field-b" />
-        <span className="pac-ambient-field pac-ambient-field-c" />
-        <span className="pac-ambient-field pac-ambient-field-d" />
-      </div>
+      {/* Ambient background: decorative only (WebGL shader over the CSS fallback), static under reduced motion. */}
+      <AmbientShaderBackground />
       <Topbar locale={locale} selectedProject={selectedProject} shell={shell} t={t} />
       <div className="relative z-[1] flex min-h-0 flex-1">
         <Sidebar labels={t.nav} pendingApprovals={pendingApprovals} selectedProjectId={selectedProjectId} />

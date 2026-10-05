@@ -160,7 +160,8 @@ The census recorded the current hardening debt and moved development to mileston
 - **AI-038.3.2 Trusted Project Context Routing + All Projects + Real Project Switcher — DONE** (commit `50cfed1`; passed independent re-gate; see §9)
 - **AI-038.4 Owner Tasks — DONE**: **AI-038.4a Project Task Foundation + Read Surfaces — DONE** (`4a55f5b`); **AI-038.4b Quick Create + audited Task Mutation Binding — DONE** (`60b563b`) (see §9)
 - **AI-038.5 Mission Control Visual Refinement — DONE** (`c7d9b26`)
-- **AI-038.6 RU/EN Owner Console Localization — IN REVIEW**
+- **AI-038.6 RU/EN Owner Console Localization — DONE** (`5af9f50`)
+- **AI-038.7 Dynamic Ambient Shader Background — IN REVIEW**
 - **Roadmap Rebase v1.4 — vendor-neutral control plane — documentation only** (this version; `docs/ROADMAP_REBASE_V1.4.md`)
 
 AI-037.1.1 passed independent re-gate and was committed/pushed through the Owner-approved repository workflow.
@@ -580,9 +581,9 @@ Implementation notes:
 - an attention-first Dashboard instrument strip; My Attention grouped by severity; inspection-style Task and Run detail; grouped Quick Create form;
 - every value is existing factual read data; there is no new telemetry.
 
-#### AI-038.6 — RU/EN Owner Console Localization — IN REVIEW
+#### AI-038.6 — RU/EN Owner Console Localization — DONE (`5af9f50`)
 
-Author implementation is complete and awaits independent re-gate. This is presentation only: no domain, storage, auth, routing or write-semantics change.
+Implemented and passed the independent re-gate (committed `5af9f50`). This is presentation only: no domain, storage, auth, routing or write-semantics change.
 
 - **Locales:** `ru` (default) and `en` only.
   - The `pac_locale` cookie holds exactly `ru` / `en` (Path=/, SameSite=Lax, ~1 year, Secure on HTTPS, not HttpOnly).
@@ -603,6 +604,23 @@ Author implementation is complete and awaits independent re-gate. This is presen
   - no route, Server Action or DB write.
 - **The locale never takes part in** auth, tenancy, Project Registry trust, reads, Quick Create payload / idempotency, audit or approvals.
 - **Corrective L10N-1:** every human-facing `app/**/page.tsx` is covered by a test-enforced inventory: Owner pages, prototype pages via `lib/i18n/prototype-{pages,mock,content}.ts`, and Russian-native simulators with their English remnants localized. Internal links from localized pages (for example Settings → `/knowledge`) reach only covered routes.
+
+#### AI-038.7 — Dynamic Ambient Shader Background — IN REVIEW
+
+Author implementation awaits the Owner visual checkpoint and the independent re-gate. Visual-only Mission Control refinement: no product, runtime, data or i18n semantics.
+
+- **Renderer:** a native WebGL 1 ambient shader (`components/shell/ambient-renderer.ts`, no library) behind one small prop-less client component (`components/shell/ambient-shader-background.tsx`). `AppShell` stays a Server Component.
+- **Look:** a fluid luminous band that bends, widens and narrows through the middle-lower viewport over a deeper ocean / teal field, inspired by the React Bits HeroBand motion (own shader, not a copy). PAC palette only; no status colors.
+- **Fallback:** the AI-038.5 CSS ambient mesh stays the server-rendered background. It is used before hydration, without (hardware) WebGL, on shader compile / link failure and after a context loss (until reload). While the shader runs, the mesh fades out and its animations pause, so there is one moving layer. The static haze / vignette stays above both.
+- **Lifecycle / performance:**
+  - ~30 FPS cap on requestAnimationFrame;
+  - drawing buffer at 1 pixel per CSS pixel (DPR 1);
+  - resize only on real size changes;
+  - paused in hidden tabs, resuming without a time jump;
+  - under `prefers-reduced-motion` the shader never starts (static CSS frame);
+  - no pointer interaction;
+  - full cleanup on unmount.
+- **Never** a telemetry signal: the shader receives only size and time.
 
 ### AI-037.7 — Tenant-bound facade + pre-auth limits — DONE
 
@@ -1038,7 +1056,7 @@ Roadmap does not imply strictly serial development. Parallel work is allowed onl
 
 ### A. Current operational line (unchanged by the rebase)
 
-While M2.2 is deferred: `AI-037.7 DONE → AI-038.0 DONE → AI-038.1 DONE → AI-038.2a DONE → AI-038.2b DONE → AI-038.3 DONE → AI-038.3.1 DONE → AI-038.3.2 DONE → AI-038.4a Project Task Foundation + read surfaces DONE → AI-038.4b Quick Create / task mutation binding DONE → AI-038.5 Mission Control Visual Refinement DONE → AI-038.6 RU/EN Owner Console Localization (IN REVIEW) → AI-039 Development Workflow Browser` (M3 Owner path, §9). AI-038.2 passed; the Owner Console reads real runtime data through AI-038.3, read-only. The rebase does not cancel or skip any unfinished AI-038 work.
+While M2.2 is deferred: `AI-037.7 DONE → AI-038.0 DONE → AI-038.1 DONE → AI-038.2a DONE → AI-038.2b DONE → AI-038.3 DONE → AI-038.3.1 DONE → AI-038.3.2 DONE → AI-038.4a Project Task Foundation + read surfaces DONE → AI-038.4b Quick Create / task mutation binding DONE → AI-038.5 Mission Control Visual Refinement DONE → AI-038.6 RU/EN Owner Console Localization DONE → AI-038.7 Dynamic Ambient Shader Background (IN REVIEW) → AI-039 Development Workflow Browser` (M3 Owner path, §9). AI-038.2 passed; the Owner Console reads real runtime data through AI-038.3, read-only. The rebase does not cancel or skip any unfinished AI-038 work.
 
 ### B. First new architecture implementation introduced by v1.4
 
