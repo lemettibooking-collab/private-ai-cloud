@@ -1,3 +1,4 @@
+import Image from "next/image";
 import Link from "next/link";
 import { BellIcon, PlusIcon } from "@/components/shell/icons";
 import { LocaleSwitcher } from "@/components/shell/locale-switcher";
@@ -28,9 +29,16 @@ export function Topbar({ shell, selectedProject, locale, t }: TopbarProps) {
   return (
     <header className="pac-shell sticky top-0 z-20 flex h-12 shrink-0 items-center border-b border-line">
       <Link className="flex h-full w-56 shrink-0 items-center gap-2.5 border-r border-line px-4" href="/dashboard">
-        <span className="pac-control-accent flex h-6 w-6 items-center justify-center !rounded-[6px] font-mono text-[9.5px] font-semibold">
-          PAC
-        </span>
+        {/* Pre-sized 96px brand mark with transparent corners (public/brand), served as-is; decorative next to the name. */}
+        <Image
+          alt=""
+          className="h-7 w-7 shrink-0"
+          height={28}
+          preload
+          src="/brand/pac-logo.png"
+          unoptimized
+          width={28}
+        />
         <span className="whitespace-nowrap text-[12.5px] font-semibold tracking-tight text-ink">Private AI Cloud</span>
       </Link>
 
