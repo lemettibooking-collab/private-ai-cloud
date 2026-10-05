@@ -2,6 +2,7 @@ import Link from "next/link";
 import { formatCount, formatTimestamp, formatUsdMicros, humanize } from "@/components/domain/owner-console/format";
 import { OwnerDataUnavailable, ProjectUnavailable, ScopeBadge, SignInRequired } from "@/components/domain/owner-console/owner-state";
 import { ApprovalStatusBadge, RiskBadge, RunStatusBadge } from "@/components/domain/owner-console/run-status";
+import { approvalTone } from "@/components/domain/owner-console/status-tone";
 import { AppShell } from "@/components/shell/app-shell";
 import { SectionCard } from "@/components/ui/section-card";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -18,9 +19,9 @@ type RunDetailPageProps = {
 
 function Field({ label, children, mono = true }: { label: string; children: React.ReactNode; mono?: boolean }) {
   return (
-    <div className="min-w-0 px-4 py-3">
-      <p className="pac-label">{label}</p>
-      <div className={`mt-1.5 truncate text-[13px] text-ink ${mono ? "font-mono" : ""}`}>{children}</div>
+    <div className="min-w-0 px-4 py-2.5">
+      <dt className="pac-label !text-[9.5px]">{label}</dt>
+      <dd className={`mt-1 truncate text-[12.5px] text-ink ${mono ? "font-mono" : ""}`}>{children}</dd>
     </div>
   );
 }
@@ -38,9 +39,9 @@ function StepList({ ids }: { ids: readonly string[] }) {
 
 function UsageRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-baseline justify-between gap-3 py-1.5">
-      <span className="text-xs text-ink-3">{label}</span>
-      <span className="font-mono text-[13px] text-ink">{value}</span>
+    <div className="flex items-baseline justify-between gap-3 py-2">
+      <dt className="text-xs text-ink-3">{label}</dt>
+      <dd className="font-mono text-[12.5px] text-ink">{value}</dd>
     </div>
   );
 }
@@ -58,9 +59,19 @@ export default async function RunDetailPage({ params, searchParams }: RunDetailP
           <p className="pac-label">
             <Link className="!text-accent hover:underline" href={runsHref}>Runs</Link> / Run detail
           </p>
-          <h1 className="mt-1 truncate font-mono text-lg font-medium text-ink">
+          <h1 className="mt-1 truncate font-mono text-[18px] font-medium leading-7 text-ink">
             {view.state === "available" && view.run.state === "available" ? view.run.detail.run.runId : "Run"}
           </h1>
+          {view.state === "available" && view.run.state === "available" && (
+            <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+              <RunStatusBadge status={view.run.detail.run.status} />
+              <span className="text-[12px] text-ink-3">Execution attempt</span>
+              <span className="text-ink-3">·</span>
+              <span className="font-mono text-[11.5px] text-ink-2">{view.run.detail.run.projectId}</span>
+              <span className="text-ink-3">·</span>
+              <span className="font-mono text-[11.5px] text-ink-2">{view.run.detail.run.workflowId}</span>
+            </div>
+          )}
         </div>
         {view.state === "available" && <ScopeBadge project={selected} />}
       </div>
@@ -70,13 +81,13 @@ export default async function RunDetailPage({ params, searchParams }: RunDetailP
       {view.state === "project_unavailable" && <ProjectUnavailable allHref="/runs" />}
 
       {view.state === "available" && view.run.state === "unavailable" && (
-        <div className="rounded-pac border border-line bg-panel px-6 py-10 text-center">
+        <div className="pac-surface px-6 py-9 text-center">
           <p className="pac-label">Run</p>
-          <p className="mt-2 text-base font-semibold text-ink">Run unavailable</p>
+          <p className="mt-2 text-[15px] font-semibold text-ink">Run unavailable</p>
           <p className="mx-auto mt-1.5 max-w-md text-[13px] leading-5 text-ink-3">
             {selected ? "This run cannot be shown in this project context." : "This run cannot be shown."}
           </p>
-          <Link className="mt-5 inline-flex h-8 items-center rounded-pac border border-line-strong bg-panel-2 px-3 text-[13px] text-ink-2 hover:bg-raised" href={runsHref}>
+          <Link className="pac-control mt-5 inline-flex h-8 items-center px-3 text-[13px] text-ink-2" href={runsHref}>
             Back to runs
           </Link>
         </div>
@@ -86,15 +97,14 @@ export default async function RunDetailPage({ params, searchParams }: RunDetailP
         const { run, usage, latestModelInvocation, audit } = view.run.detail;
         return (
           <>
-            <div className="grid grid-cols-2 divide-line rounded-pac border border-line bg-panel md:grid-cols-4 xl:grid-cols-7 xl:divide-x">
-              <Field label="Status" mono={false}><RunStatusBadge status={run.status} /></Field>
+            <dl className="pac-surface grid grid-cols-2 divide-line overflow-hidden md:grid-cols-3 xl:grid-cols-6 xl:divide-x">
               <Field label="Project ID">{run.projectId}</Field>
               <Field label="Workflow ID">{run.workflowId}</Field>
               <Field label="Revision">{run.revision}</Field>
               <Field label="Created">{formatTimestamp(run.createdAt)}</Field>
               <Field label="Started">{formatTimestamp(run.startedAt)}</Field>
               <Field label="Completed">{formatTimestamp(run.completedAt)}</Field>
-            </div>
+            </dl>
 
             <div className="mt-4 grid gap-4 xl:grid-cols-12">
               <div className="flex flex-col gap-4 xl:col-span-8">
@@ -111,7 +121,7 @@ export default async function RunDetailPage({ params, searchParams }: RunDetailP
                   </div>
                 </SectionCard>
 
-                <SectionCard description="Read-only. Decisions require the future write boundary." title="Approval">
+                <SectionCard description="Read-only. Decisions require the future write boundary." title="Approval" tone={run.approval ? approvalTone[run.approval.status] : undefined}>
                   {run.approval ? (
                     <div className="flex flex-wrap items-center gap-2">
                       <ApprovalStatusBadge status={run.approval.status} />
@@ -125,6 +135,7 @@ export default async function RunDetailPage({ params, searchParams }: RunDetailP
                 </SectionCard>
 
                 <SectionCard
+                  count={audit.state === "available" ? audit.items.length : undefined}
                   description={audit.state === "available" ? `Latest ${audit.limit} events at most` : undefined}
                   title="Audit timeline"
                 >
@@ -153,13 +164,13 @@ export default async function RunDetailPage({ params, searchParams }: RunDetailP
                 <SectionCard title="Usage & cost">
                   <p className="font-mono text-[26px] font-medium leading-none text-ink">{formatUsdMicros(usage.totalCostUsdMicros)}</p>
                   <p className="mt-1.5 text-[11.5px] text-ink-3">Recorded provider cost for this run</p>
-                  <div className="mt-3 divide-y divide-line border-t border-line">
+                  <dl className="mt-3 divide-y divide-line border-t border-line">
                     <UsageRow label="Total tokens" value={formatCount(usage.totalTokens)} />
                     <UsageRow label="Input / output" value={`${formatCount(usage.inputTokens)} / ${formatCount(usage.outputTokens)}`} />
                     <UsageRow label="Invocations" value={formatCount(usage.invocationCount)} />
                     <UsageRow label="Succeeded / failed" value={`${usage.succeededCount} / ${usage.failedCount}`} />
                     <UsageRow label="Outcome unknown" value={String(usage.ambiguousCount)} />
-                  </div>
+                  </dl>
                   {usage.ambiguousCount > 0 && (
                     <p className="mt-2"><StatusBadge tone="warning">ambiguous outcome held</StatusBadge></p>
                   )}
@@ -167,7 +178,7 @@ export default async function RunDetailPage({ params, searchParams }: RunDetailP
 
                 <SectionCard title="Latest model invocation">
                   {latestModelInvocation ? (
-                    <div className="divide-y divide-line">
+                    <dl className="-my-2 divide-y divide-line">
                       <UsageRow label="Status" value={latestModelInvocation.status.replaceAll("_", " ")} />
                       <UsageRow label="Step / attempt" value={`${latestModelInvocation.stepId} · #${latestModelInvocation.attemptNumber}`} />
                       <UsageRow label="Provider" value={latestModelInvocation.providerId} />
@@ -175,7 +186,7 @@ export default async function RunDetailPage({ params, searchParams }: RunDetailP
                       <UsageRow label="Version" value={latestModelInvocation.providerModelVersion} />
                       <UsageRow label="Started" value={formatTimestamp(latestModelInvocation.createdAt)} />
                       <UsageRow label="Completed" value={formatTimestamp(latestModelInvocation.completedAt)} />
-                    </div>
+                    </dl>
                   ) : (
                     <p className="text-[13px] text-ink-3">No model invocation recorded.</p>
                   )}

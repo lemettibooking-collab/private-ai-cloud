@@ -1,6 +1,9 @@
 import Link from "next/link";
 import { formatTimestamp } from "@/components/domain/owner-console/format";
+import { RunStatusBadge } from "@/components/domain/owner-console/run-status";
+import { taskTone } from "@/components/domain/owner-console/status-tone";
 import { TaskClassification, TaskStatusBadge, TaskTypeLabel } from "@/components/domain/owner-console/task-status";
+import { toneDot } from "@/components/ui/tone";
 import type { OwnerConsoleTask } from "@/lib/composition/owner-console-read.server";
 import { projectScopedHref } from "@/lib/projects/project-context";
 
@@ -13,43 +16,55 @@ type TaskTableProps = {
   dateColumn?: "updated" | "completed";
 };
 
-// Tasks are objectives; the "Runs" column counts linked attempts (a task may have none).
+// Tasks are Owner objectives: the title is the primary field. Runs are secondary telemetry (linked
+// attempts and the latest one's factual status); a task may have none.
 export function TaskTable({ tasks, projectNames, selectedProjectId, showProject, dateColumn = "updated" }: TaskTableProps) {
   const scoped = projectScopedHref("/tasks", selectedProjectId);
   const taskHref = (taskId: string) => `/tasks/${encodeURIComponent(taskId)}${scoped.slice("/tasks".length)}`;
   return (
     <div className="overflow-x-auto">
-      <table className="min-w-full text-left text-[13px]">
+      <table className="pac-table">
         <thead>
-          <tr className="border-b border-line">
-            {[...(showProject ? ["Project"] : []), "Task", "Type", "Status", "Priority · Risk", "Runs", dateColumn === "completed" ? "Completed" : "Updated"].map((header) => (
-              <th className="pac-label px-3 py-2 font-medium" key={header}>{header}</th>
+          <tr>
+            {["Task", ...(showProject ? ["Project"] : []), "Status", "Type", "Priority · Risk", "Runs", dateColumn === "completed" ? "Completed" : "Updated"].map((header) => (
+              <th key={header} scope="col">{header}</th>
             ))}
           </tr>
         </thead>
-        <tbody className="divide-y divide-line">
+        <tbody>
           {tasks.map((task) => (
-            <tr className="hover:bg-panel-2" key={task.taskId}>
+            <tr key={task.taskId}>
+              <td className="max-w-[30rem]">
+                <div className="flex items-start gap-2.5">
+                  <span aria-hidden className={`mt-[7px] h-1.5 w-1.5 shrink-0 rounded-[2px] ${toneDot[taskTone[task.status] ?? "neutral"]}`} />
+                  <div className="min-w-0">
+                    <Link className="block truncate text-[13.5px] font-medium text-ink hover:text-accent" href={taskHref(task.taskId)}>{task.title}</Link>
+                    <p className="pac-id">{task.taskId}</p>
+                  </div>
+                </div>
+              </td>
               {showProject && (
-                <td className="px-3 py-2">
-                  <Link className="text-[13px] text-ink hover:text-accent" href={projectScopedHref("/tasks", task.projectId)}>
+                <td>
+                  <Link className="text-[12.5px] text-ink-2 hover:text-accent" href={projectScopedHref("/tasks", task.projectId)}>
                     {projectNames?.get(task.projectId) ?? task.projectId}
                   </Link>
-                  <p className="font-mono text-[10.5px] text-ink-3">{task.projectId}</p>
+                  <p className="pac-id">{task.projectId}</p>
                 </td>
               )}
-              <td className="max-w-[28rem] px-3 py-2">
-                <Link className="block truncate text-[13px] font-medium text-ink hover:text-accent" href={taskHref(task.taskId)}>{task.title}</Link>
-                <p className="font-mono text-[10.5px] text-ink-3">{task.taskId}</p>
+              <td><TaskStatusBadge status={task.status} /></td>
+              <td><TaskTypeLabel type={task.type} /></td>
+              <td><TaskClassification task={task} /></td>
+              <td className="whitespace-nowrap">
+                {task.linkedRunCount === 0 ? (
+                  <span className="font-mono text-[11px] text-ink-3">no runs</span>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-[11px] text-ink-2">{task.linkedRunCount}</span>
+                    {task.latestRun && <RunStatusBadge status={task.latestRun.status} />}
+                  </div>
+                )}
               </td>
-              <td className="px-3 py-2"><TaskTypeLabel type={task.type} /></td>
-              <td className="px-3 py-2"><TaskStatusBadge status={task.status} /></td>
-              <td className="px-3 py-2"><TaskClassification task={task} /></td>
-              <td className="px-3 py-2 font-mono text-xs text-ink-2">
-                {task.linkedRunCount === 0 ? <span className="text-ink-3">no runs</span> : `${task.linkedRunCount} run${task.linkedRunCount === 1 ? "" : "s"}`}
-                {task.latestRun && <p className="font-mono text-[10.5px] text-ink-3">latest {task.latestRun.status.replaceAll("_", " ")}</p>}
-              </td>
-              <td className="px-3 py-2 font-mono text-[11px] text-ink-3">{formatTimestamp(dateColumn === "completed" ? task.completedAt : task.updatedAt)}</td>
+              <td className="whitespace-nowrap font-mono text-[11px] text-ink-3">{formatTimestamp(dateColumn === "completed" ? task.completedAt : task.updatedAt)}</td>
             </tr>
           ))}
         </tbody>

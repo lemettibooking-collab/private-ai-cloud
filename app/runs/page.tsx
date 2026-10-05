@@ -36,21 +36,21 @@ export default async function RunsPage({ searchParams }: RunsPageProps) {
         return (
           <>
             <SectionCard
+              count={aggregate.runs.length}
+              flush
               description={`Registered-project runs (up to ${aggregate.runsPerProjectLimit} newest per project, ${aggregate.displayLimit} shown).`}
               title="All Projects"
             >
               {view.projects.length === 0 ? (
-                <EmptyState description="Runs appear here once projects are registered in this workspace." title="No projects registered" />
+                <EmptyState description="Runs appear here once projects are registered in this workspace." title="No projects registered" variant="inline" />
               ) : aggregate.runs.length === 0 ? (
-                <EmptyState description="The registered projects have no runs yet." title="No runs" />
+                <EmptyState description="The registered projects have no runs yet." title="No runs" variant="inline" />
               ) : (
-                <div className="-mx-4 -my-4">
-                  <ProjectRunTable projectNames={names} runs={aggregate.runs} selectedProjectId={null} showProject />
-                </div>
+                <ProjectRunTable projectNames={names} runs={aggregate.runs} selectedProjectId={null} showProject />
               )}
             </SectionCard>
             {(aggregate.runsTruncated || aggregate.projectsNotConsidered > 0 || aggregate.projectsUnavailable.length > 0) && (
-              <div className={`mt-4 rounded-pac border px-4 py-3 ${aggregate.projectsUnavailable.length > 0 ? "border-warn/40 bg-warn/5" : "border-line bg-panel"}`}>
+              <div className={`pac-inset mt-4 px-4 py-3 ${aggregate.projectsUnavailable.length > 0 ? "!border-warn/35" : ""}`}>
                 <p className="pac-label">Coverage</p>
                 <p className="mt-1.5 text-xs leading-5 text-ink-3">
                   This is a bounded view, not complete run history.
@@ -64,13 +64,11 @@ export default async function RunsPage({ searchParams }: RunsPageProps) {
       })()}
 
       {view.state === "available" && view.mode === "project" && (
-        <SectionCard description={view.runsTruncated ? `Newest ${view.runsLimit} runs shown.` : undefined} title={view.scope.project.displayName}>
+        <SectionCard count={`${view.runs.length}${view.runsTruncated ? "+" : ""}`} description={view.runsTruncated ? `Newest ${view.runsLimit} runs shown.` : "Newest first."} flush title={`${view.scope.project.displayName} runs`}>
           {view.runs.length === 0 ? (
-            <EmptyState description="This project has no runs yet." title="No project runs" />
+            <EmptyState description="No run has been recorded for this project." title="No project runs" variant="inline" />
           ) : (
-            <div className="-mx-4 -my-4">
-              <ProjectRunTable runs={view.runs} selectedProjectId={view.scope.project.projectId} showProject={false} />
-            </div>
+            <ProjectRunTable runs={view.runs} selectedProjectId={view.scope.project.projectId} showProject={false} />
           )}
         </SectionCard>
       )}

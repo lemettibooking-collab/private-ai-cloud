@@ -5,9 +5,9 @@ import type { OwnerConsoleTaskResult } from "@/lib/composition/owner-console-rea
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-baseline justify-between gap-3 py-1.5">
-      <span className="text-xs text-ink-3">{label}</span>
-      <span className="font-mono text-[13px] text-ink">{children}</span>
+    <div className="flex items-center justify-between gap-3 py-2">
+      <dt className="text-xs text-ink-3">{label}</dt>
+      <dd className="font-mono text-[12.5px] text-ink">{children}</dd>
     </div>
   );
 }
@@ -17,7 +17,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 export function TaskResultPanel({ result }: { result: OwnerConsoleTaskResult }) {
   return (
     <div>
-      <div className="divide-y divide-line">
+      <dl className="-my-2 divide-y divide-line">
         <Row label="Task status"><TaskStatusBadge status={result.status} /></Row>
         <Row label="Completed">{formatTimestamp(result.completedAt)}</Row>
         <Row label="Linked runs">{result.linkedRunCount}</Row>
@@ -25,9 +25,9 @@ export function TaskResultPanel({ result }: { result: OwnerConsoleTaskResult }) 
         <Row label="Completed runs">{result.completedRuns}</Row>
         <Row label="Failed / blocked runs">{result.failedOrBlockedRuns}</Row>
         <Row label="Active runs">{result.activeRuns}</Row>
-      </div>
+      </dl>
       {result.runsTruncated && <p className="mt-2 text-[11px] text-ink-3">Run counts cover the newest linked runs shown.</p>}
-      <p className="mt-3 border-t border-line pt-2.5 text-[11px] leading-4 text-ink-3">
+      <p className="mt-4 border-t border-line pt-2.5 text-[11px] leading-4 text-ink-3">
         Factual aggregation of the task and its linked runs. Agent reports, evidence, security results and PR status are not
         available yet (AI-039).
       </p>

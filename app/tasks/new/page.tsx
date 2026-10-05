@@ -38,10 +38,14 @@ export default async function NewTaskPage({ searchParams }: NewTaskPageProps) {
       {view.state === "project_unavailable" && <ProjectUnavailable allHref="/tasks/new" />}
 
       {view.state === "available" && view.target === "project_paused" && (
-        <EmptyState
-          description="Creating a new task for a paused project is unavailable. Resume the project, or create the task in another active project."
-          title="Project is paused"
-        />
+        <div className="max-w-4xl">
+          <EmptyState
+            actionHref={quickCreateHref(null)}
+            actionLabel="Choose an active project"
+            description="Creating a new task for a paused project is unavailable. Resume the project, or create the task in another active project."
+            title="Project is paused"
+          />
+        </div>
       )}
 
       {view.state === "available" && view.target !== "project_paused" && view.creatableProjects.length === 0 && (
@@ -49,8 +53,8 @@ export default async function NewTaskPage({ searchParams }: NewTaskPageProps) {
       )}
 
       {view.state === "available" && view.target !== "project_paused" && view.creatableProjects.length > 0 && (
-        <SectionCard description="Fields marked optional may stay unset; they are never defaulted." title="Task intent">
-          <div className="max-w-2xl">
+        <SectionCard className="max-w-4xl" description="One draft ProjectTask. The server re-checks Owner authority and the project on submit." title="Task intent">
+          <div>
             <QuickCreateForm
               action={quickCreateTaskAction}
               cancelHref={tasksHref}

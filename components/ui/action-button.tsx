@@ -8,8 +8,8 @@ type ActionButtonProps = {
 };
 
 const variants = {
-  primary: "border-accent/40 bg-accent/10 text-accent hover:bg-accent/20",
-  secondary: "border-line-strong bg-panel-2 text-ink-2 hover:bg-raised",
+  primary: "pac-control-accent",
+  secondary: "pac-control text-ink-2 hover:text-ink",
   danger: "border-bad/40 bg-bad/10 text-bad hover:bg-bad/20",
 };
 

@@ -38,32 +38,34 @@ export default async function ApprovalsPage({ searchParams }: ApprovalsPageProps
           {view.mode === "all" ? (
             <SectionCard
               className="xl:col-span-9"
+              count={`${view.pendingApprovals}${view.queueTruncated ? "+" : ""}`}
+              flush
+              tone="attention"
               description={`${view.pendingApprovals}${view.queueTruncated ? "+" : ""} pending · ${view.highRiskApprovals} high/critical · workspace-wide`}
               title="Workspace approval queue"
             >
               {view.approvals.length === 0 ? (
-                <EmptyState description="There are no pending runtime approvals in this workspace." title="Queue is clear" />
+                <EmptyState description="There are no pending runtime approvals in this workspace." title="Queue is clear" variant="inline" />
               ) : (
-                <div className="-mx-4 -my-4">
-                  <ApprovalQueue approvals={view.approvals} />
-                </div>
+                <ApprovalQueue approvals={view.approvals} />
               )}
             </SectionCard>
           ) : (
             <SectionCard
               className="xl:col-span-9"
+              count={view.projectApprovals.pendingApprovals}
+              flush
+              tone="attention"
               description={`${view.projectApprovals.pendingApprovals} pending · ${view.projectApprovals.highRiskApprovals} high/critical · this project`}
               title="Project approval queue"
             >
               {view.projectApprovals.approvals.length === 0 ? (
-                <EmptyState description="No pending runtime approval belongs to this project." title="Project queue is clear" />
+                <EmptyState description="No pending runtime approval belongs to this project." title="Project queue is clear" variant="inline" />
               ) : (
-                <div className="-mx-4 -my-4">
-                  <ApprovalQueue approvals={view.projectApprovals.approvals} selectedProjectId={view.scope.project.projectId} />
-                </div>
+                <ApprovalQueue approvals={view.projectApprovals.approvals} selectedProjectId={view.scope.project.projectId} />
               )}
               {view.projectApprovals.unresolvedApprovals > 0 && (
-                <p className="mt-3 rounded-pac border border-warn/40 bg-warn/5 px-3 py-2 text-xs text-ink-3">
+                <p className="border-t border-line bg-warn/5 px-4 py-2 text-xs text-ink-3">
                   {view.projectApprovals.unresolvedApprovals} workspace approval(s) could not be attributed to a project and are not shown here.
                   See <Link className="text-accent hover:underline" href="/approvals">All Projects</Link>.
                 </p>
