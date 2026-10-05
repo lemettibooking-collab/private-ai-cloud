@@ -183,7 +183,10 @@ test("O. dependency direction: UI → Server Action → server composition → o
   for (const path of clientFiles) {
     assert.ok(!/owner-task-create|owner-task-mutations|owner-console-read|lib\/db\/|lib\/auth\/|next-auth|lib\/tasks\//u.test(source(path)), `${path} imports server code`);
   }
-  assert.deepEqual([...code("components/domain/owner-console/quick-create-form.tsx").matchAll(/from\s+["']([^"']+)["']/gu)].map((match) => match[1]).sort(), ["next/link", "react"]);
+  // AI-038.6: localized labels arrive as props; the dictionary is imported as a TYPE only (nothing
+  // server-side or runtime i18n is bundled into the form).
+  assert.deepEqual([...code("components/domain/owner-console/quick-create-form.tsx").matchAll(/from\s+["']([^"']+)["']/gu)].map((match) => match[1]).sort(), ["@/lib/i18n/messages", "next/link", "react"]);
+  assert.match(code("components/domain/owner-console/quick-create-form.tsx"), /^import type \{ Messages \} from "@\/lib\/i18n\/messages";$/mu);
   // The read backend and Owner Console read composition stay unbound.
   for (const path of ["lib/composition/owner-read-runtime.ts", "lib/composition/owner-console-read.ts", "lib/composition/owner-console-read.server.ts",
     "lib/composition/authenticated-owner-read-runtime.ts", "lib/composition/github-owner-read-runtime.ts", "lib/workflows/workflow-runtime-access.ts"]) {

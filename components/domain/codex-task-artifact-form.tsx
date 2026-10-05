@@ -17,7 +17,13 @@ import {
   buildEffectiveCodexTaskInput,
   type PathSelectionMode,
 } from "@/lib/codex-task-form-policy";
+import { format } from "@/lib/i18n/locale";
+import type { PrototypePages } from "@/lib/i18n/prototype-pages";
 
+type CodexFormCopy = PrototypePages["codexForm"];
+
+// Executor payload defaults: these values flow verbatim into the generated artifact, so they
+// stay identical in every UI locale (UI language != executor payload language).
 const initialInput: CodexTaskArtifactInput = {
   goal: "",
   context: "",
@@ -58,120 +64,60 @@ const initialInput: CodexTaskArtifactInput = {
 
 type FieldDefinition = {
   name: CodexTaskArtifactField;
-  label: string;
-  description: string;
-  placeholder: string;
   required: boolean;
   rows: number;
+  // Paths and commands are technical examples, identical in every locale.
+  technicalPlaceholder?: string;
 };
 
 const primaryTaskFieldDefinitions: readonly FieldDefinition[] = [
-  {
-    name: "goal",
-    label: "Что нужно сделать?",
-    description:
-      "Опишите конкретный результат, который должен получить Codex.",
-    placeholder: "Например: улучшить форму подготовки задания для Codex.",
-    required: true,
-    rows: 3,
-  },
-  {
-    name: "context",
-    label: "Почему это нужно?",
-    description:
-      "Опишите проблему и важный контекст текущего проекта.",
-    placeholder: "Опишите текущее состояние и проблему Owner.",
-    required: true,
-    rows: 4,
-  },
-  {
-    name: "scope",
-    label: "Что разрешено изменить?",
-    description:
-      "Укажите границы задачи: страницу, модуль или часть продукта.",
-    placeholder: "Например: только страница и компонент Codex Task.",
-    required: true,
-    rows: 3,
-  },
+  { name: "goal", required: true, rows: 3 },
+  { name: "context", required: true, rows: 4 },
+  { name: "scope", required: true, rows: 3 },
 ];
 
 const allowedPathsFieldDefinition: FieldDefinition = {
   name: "allowedPaths",
-  label: "Какие файлы или папки можно менять?",
-  description:
-    "Один путь или правило на строку. Используйте этот режим, только если точные пути уже известны.",
-  placeholder: "app/workflows/codex-task/run/page.tsx\ncomponents/domain/",
   required: true,
   rows: 4,
+  technicalPlaceholder: "app/workflows/codex-task/run/page.tsx\ncomponents/domain/",
 };
 
 const acceptanceCriteriaFieldDefinition: FieldDefinition = {
   name: "acceptanceCriteria",
-  label: "Как понять, что задача выполнена?",
-  description: "Один проверяемый результат на строку.",
-  placeholder: "Форма использует введённые данные\nВсе проверки проходят",
   required: true,
   rows: 5,
 };
 
 const technicalFieldDefinitions: readonly FieldDefinition[] = [
-  {
-    name: "nonGoals",
-    label: "Что точно не делать",
-    description: "Одно ограничение на строку.",
-    placeholder: "Не менять несвязанные функции и страницы",
-    required: true,
-    rows: 5,
-  },
-  {
-    name: "allowedCommands",
-    label: "Разрешённые команды",
-    description: "Одна разрешённая команда на строку.",
-    placeholder: "npm run lint\nnpm run build",
-    required: true,
-    rows: 7,
-  },
+  { name: "nonGoals", required: true, rows: 5 },
+  { name: "allowedCommands", required: true, rows: 7, technicalPlaceholder: "npm run lint\nnpm run build" },
   {
     name: "verificationCommands",
-    label: "Команды проверки",
-    description: "Одна обязательная команда проверки на строку.",
-    placeholder: "npm run lint\nnpm run build\ngit diff --check",
     required: true,
     rows: 6,
+    technicalPlaceholder: "npm run lint\nnpm run build\ngit diff --check",
   },
-  {
-    name: "expectedHandoff",
-    label: "Какой отчёт должен вернуть Codex",
-    description: "Перечислите обязательные части итогового отчёта.",
-    placeholder: "Краткое описание результата\nРезультаты проверок",
-    required: true,
-    rows: 7,
-  },
-  {
-    name: "additionalForbiddenActions",
-    label: "Дополнительные запреты",
-    description:
-      "Необязательные дополнительные запреты, по одному на строку. Системные ограничения сохраняются всегда.",
-    placeholder: "Не менять тексты публичного интерфейса",
-    required: false,
-    rows: 4,
-  },
+  { name: "expectedHandoff", required: true, rows: 7 },
+  { name: "additionalForbiddenActions", required: false, rows: 4 },
 ];
 
 type CopyStatus = "idle" | "success" | "error";
 
-function getValidationMessage(error: CodexTaskValidationError): string {
+function getValidationMessage(c: CodexFormCopy, error: CodexTaskValidationError): string {
   switch (error.code) {
     case "required":
-      return "Заполните обязательное поле.";
+      return c.validationRequired;
     case "too_long":
-      return `Используйте не более ${codexTaskFieldLimits[error.field]} символов.`;
+      return format(c.validationTooLong, { limit: codexTaskFieldLimits[error.field] });
     case "control_characters":
-      return "Удалите NUL и неподдерживаемые управляющие символы.";
+      return c.validationControl;
   }
 }
 
-export function CodexTaskArtifactForm() {
+// UI copy follows the Owner's locale. The pre-filled field values above and the generated
+// artifact (executor payload) are intentionally locale-independent.
+export function CodexTaskArtifactForm({ copy: c }: Readonly<{ copy: CodexFormCopy }>) {
   const [input, setInput] = useState<CodexTaskArtifactInput>(initialInput);
   const [errors, setErrors] = useState<CodexTaskValidationErrors>({});
   const [artifact, setArtifact] = useState<CodexTaskArtifact | null>(null);
@@ -271,7 +217,7 @@ export function CodexTaskArtifactForm() {
     anchor.click();
     anchor.remove();
     URL.revokeObjectURL(objectUrl);
-    setDownloadStatus(`Файл ${artifact.filename} скачан.`);
+    setDownloadStatus(format(c.downloaded, { filename: artifact.filename }));
   }
 
   function renderField(field: FieldDefinition) {
@@ -279,6 +225,7 @@ export function CodexTaskArtifactForm() {
     const fieldId = `codex-task-${field.name}`;
     const descriptionId = `${fieldId}-description`;
     const errorId = `${fieldId}-error`;
+    const [label, description, placeholder] = c.fields[field.name] as readonly string[];
 
     return (
       <div className="min-w-0" key={field.name}>
@@ -287,10 +234,10 @@ export function CodexTaskArtifactForm() {
             className="text-sm font-medium text-slate-200"
             htmlFor={fieldId}
           >
-            {field.label}
+            {label}
             {field.required && (
               <span className="ml-1 text-xs font-normal text-slate-400">
-                (обязательное)
+                {c.required}
               </span>
             )}
           </label>
@@ -302,7 +249,7 @@ export function CodexTaskArtifactForm() {
           className="mt-1 text-xs leading-5 text-slate-500"
           id={descriptionId}
         >
-          {field.description}
+          {description}
         </p>
         <textarea
           aria-describedby={`${descriptionId}${fieldErrors.length > 0 ? ` ${errorId}` : ""}`}
@@ -313,13 +260,13 @@ export function CodexTaskArtifactForm() {
           maxLength={codexTaskFieldLimits[field.name] + 1}
           name={field.name}
           onChange={(event) => updateField(field.name, event.target.value)}
-          placeholder={field.placeholder}
+          placeholder={field.technicalPlaceholder ?? placeholder}
           rows={field.rows}
           value={input[field.name]}
         />
         {fieldErrors.length > 0 && (
           <p className="mt-2 text-xs text-rose-300" id={errorId}>
-            {fieldErrors.map(getValidationMessage).join(" ")}
+            {fieldErrors.map((error) => getValidationMessage(c, error)).join(" ")}
           </p>
         )}
       </div>
@@ -330,17 +277,17 @@ export function CodexTaskArtifactForm() {
     <div className="grid min-w-0 grid-cols-[repeat(auto-fit,minmax(min(100%,32rem),1fr))] gap-6">
       <SectionCard
         className="min-w-0"
-        title="Задание для Codex"
-        description="Сформируйте проверяемое задание для Codex. Ничего не сохраняется и не запускается."
+        title={c.formTitle}
+        description={c.formDescription}
       >
         <form className="min-w-0 space-y-5" onSubmit={generateArtifact}>
           {primaryTaskFieldDefinitions.map(renderField)}
 
           <fieldset className="min-w-0 space-y-3">
             <legend className="text-sm font-medium text-slate-200">
-              Как определить область кода?
+              {c.pathLegend}
               <span className="ml-1 text-xs font-normal text-slate-400">
-                (обязательное)
+                {c.required}
               </span>
             </legend>
             <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-slate-800 bg-slate-900/50 p-4 transition has-checked:border-cyan-400/40 has-checked:bg-cyan-400/10">
@@ -354,11 +301,10 @@ export function CodexTaskArtifactForm() {
               />
               <span className="min-w-0">
                 <span className="block text-sm font-medium text-slate-200">
-                  Определить по репозиторию — рекомендуется
+                  {c.discoverTitle}
                 </span>
                 <span className="mt-1 block text-xs leading-5 text-slate-500">
-                  Codex сначала изучит структуру проекта и предложит минимальный
-                  список файлов. На этом этапе код изменяться не будет.
+                  {c.discoverDescription}
                 </span>
               </span>
             </label>
@@ -373,10 +319,10 @@ export function CodexTaskArtifactForm() {
               />
               <span className="min-w-0">
                 <span className="block text-sm font-medium text-slate-200">
-                  Указать пути вручную
+                  {c.manualTitle}
                 </span>
                 <span className="mt-1 block text-xs leading-5 text-slate-500">
-                  Для разработчика, который уже знает точные файлы или папки.
+                  {c.manualDescription}
                 </span>
               </span>
             </label>
@@ -387,8 +333,7 @@ export function CodexTaskArtifactForm() {
               className="rounded-lg border border-amber-400/30 bg-amber-400/10 p-4 text-sm leading-6 text-amber-100"
               role="status"
             >
-              Будет создано задание только на анализ репозитория. Codex
-              предложит файлы и остановится до подтверждения Owner.
+              {c.discoverNote}
             </div>
           ) : (
             renderField(allowedPathsFieldDefinition)
@@ -404,11 +349,10 @@ export function CodexTaskArtifactForm() {
             open={technicalSettingsOpen}
           >
             <summary className="cursor-pointer text-sm font-semibold text-slate-200 outline-none ring-cyan-400/40 focus-visible:rounded focus-visible:ring-2">
-              Технические настройки
+              {c.technicalSettings}
             </summary>
             <p className="mt-2 text-xs leading-5 text-slate-500">
-              Стандартные ограничения и проверки уже заполнены. При
-              необходимости их можно изменить до генерации задания.
+              {c.technicalSettingsDescription}
             </p>
             <div className="mt-5 min-w-0 space-y-5">
               {technicalFieldDefinitions.map(renderField)}
@@ -421,22 +365,20 @@ export function CodexTaskArtifactForm() {
               type="submit"
             >
               {pathSelectionMode === "discover"
-                ? "Подготовить анализ репозитория"
-                : "Подготовить задание"}
+                ? c.prepareAnalysis
+                : c.prepareTask}
             </button>
-            <StatusBadge tone="locked">без внешних действий</StatusBadge>
+            <StatusBadge tone="locked">{c.noExternalActions}</StatusBadge>
           </div>
 
           {artifactInvalidated && (
             <p className="text-xs text-amber-300" role="status">
-              Поля изменены. Предыдущее задание удалено — подготовьте его
-              заново перед копированием или скачиванием.
+              {c.invalidated}
             </p>
           )}
 
           <p className="text-xs leading-5 text-slate-500">
-            Codex не запущен. Скопируйте или скачайте задание, затем Owner
-            запускает Codex вручную.
+            {c.notStartedNote}
           </p>
         </form>
       </SectionCard>
@@ -454,18 +396,18 @@ export function CodexTaskArtifactForm() {
           >
             {artifact && pathSelectionMode === "discover" ? (
               <span className="max-w-48 text-center leading-4">
-                Только анализ — изменения запрещены
+                {c.analysisOnly}
               </span>
             ) : artifact ? (
-              "задание готово"
+              c.taskReady
             ) : (
-              "не подготовлено"
+              c.notPrepared
             )}
           </StatusBadge>
         }
         className="min-w-0"
-        title="Готовое задание"
-        description={`Скопируйте точный текст задания или скачайте ${codexTaskArtifactFilename}. Предпросмотр, скопированный текст и содержимое файла полностью совпадают.`}
+        title={c.resultTitle}
+        description={format(c.resultDescription, { filename: codexTaskArtifactFilename })}
       >
         <div className="min-w-0 space-y-4">
           <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
@@ -475,7 +417,7 @@ export function CodexTaskArtifactForm() {
               onClick={copyPrompt}
               type="button"
             >
-              Скопировать задание
+              {c.copyTask}
             </button>
             <button
               className="inline-flex h-9 w-full items-center justify-center rounded-md border border-slate-600/80 bg-slate-900/80 px-3 text-sm font-medium text-slate-200 transition enabled:hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
@@ -483,18 +425,17 @@ export function CodexTaskArtifactForm() {
               onClick={downloadMarkdown}
               type="button"
             >
-              Скачать Markdown
+              {c.downloadMarkdown}
             </button>
           </div>
 
           <div aria-live="polite" className="min-h-5 text-xs">
             {copyStatus === "success" && (
-              <p className="text-emerald-300">Задание скопировано.</p>
+              <p className="text-emerald-300">{c.copied}</p>
             )}
             {copyStatus === "error" && (
               <p className="text-rose-300">
-                Не удалось получить доступ к буферу обмена. Скопируйте текст
-                из предпросмотра вручную.
+                {c.copyFailed}
               </p>
             )}
             {downloadStatus && (
@@ -509,11 +450,10 @@ export function CodexTaskArtifactForm() {
           ) : (
             <div className="rounded-lg border border-dashed border-slate-800 bg-slate-900/30 p-6 text-center sm:p-8">
               <p className="text-sm font-medium text-slate-300">
-                Задание ещё не подготовлено
+                {c.emptyTitle}
               </p>
               <p className="mt-2 text-sm leading-6 text-slate-500">
-                Заполните все обязательные поля и подготовьте детерминированный
-                предпросмотр.
+                {c.emptyDescription}
               </p>
             </div>
           )}

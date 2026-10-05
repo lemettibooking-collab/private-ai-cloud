@@ -2,8 +2,13 @@ import { DevelopmentExecutionSimulator } from "@/components/domain/development-e
 import { AppShell } from "@/components/shell/app-shell";
 import { ActionButton } from "@/components/ui/action-button";
 import { PageHeader } from "@/components/ui/page-header";
+import { getI18n } from "@/lib/i18n/locale.server";
+import { prototypePages } from "@/lib/i18n/prototype-pages";
 
-export default function DevelopmentExecutionRunPage() {
+export default async function DevelopmentExecutionRunPage() {
+  const { locale } = await getI18n();
+  const c = prototypePages[locale].devExec;
+
   return (
     <AppShell>
       <PageHeader
@@ -12,14 +17,14 @@ export default function DevelopmentExecutionRunPage() {
             href="/workflows/development-plan/run"
             variant="secondary"
           >
-            Вернуться к плану фичи
+            {c.backToPlan}
           </ActionButton>
         }
-        description="Пошаговая frontend-only демонстрация разработки, проверок, review, исправлений и безопасной остановки по правилам AI-011."
-        eyebrow="Учебный цикл разработки"
-        title="Симулятор разработки и исправлений"
+        description={c.description}
+        eyebrow={c.eyebrow}
+        title={c.title}
       />
-      <DevelopmentExecutionSimulator />
+      <DevelopmentExecutionSimulator copy={c} />
     </AppShell>
   );
 }

@@ -1,4 +1,4 @@
-import { toneDot, toneText, type Tone } from "@/components/ui/tone";
+import { toneText, type Tone } from "@/components/ui/tone";
 
 // AI-038.5 instrument strip: compact factual readouts separated by thin dividers (not cards).
 // Every value shown here must already exist in the page's read model; nothing is synthesized.
@@ -26,8 +26,7 @@ export function Instrument({ label, value, detail, tone = "neutral", state }: In
       <dt className="flex items-center justify-between gap-2">
         <span className="pac-label truncate">{label}</span>
         {state && (
-          <span className={`flex items-center gap-1 font-mono text-[9.5px] uppercase tracking-[0.1em] ${toneText[tone]}`}>
-            <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${toneDot[tone]}`} />
+          <span className={`text-[10.5px] font-medium uppercase tracking-[0.06em] ${toneText[tone]}`}>
             {state}
           </span>
         )}

@@ -4,10 +4,7 @@ import { useMemo, useState } from "react";
 
 import {
   createDevelopmentExecutionDemoScenario,
-  developmentExecutionDemoNextActionLabels,
-  developmentExecutionDemoReasonLabels,
   developmentExecutionDemoScenarios,
-  developmentExecutionDemoStatusLabels,
   getDevelopmentExecutionDemoCurrentAttemptFailure,
   getDevelopmentExecutionDemoHistoricalFailures,
   type DevelopmentExecutionDemoCategory,
@@ -15,7 +12,11 @@ import {
 } from "@/lib/development-execution-demo";
 import { SectionCard } from "@/components/ui/section-card";
 import { StatusBadge } from "@/components/ui/status-badge";
+import { format } from "@/lib/i18n/locale";
+import type { PrototypePages } from "@/lib/i18n/prototype-pages";
 import type { StatusTone } from "@/types/app";
+
+type ExecCopy = PrototypePages["devExec"];
 
 const categoryStyles: Readonly<
   Record<
@@ -55,59 +56,27 @@ const categoryStyles: Readonly<
   },
 };
 
-const reviewLabels = {
-  not_started: "Ещё не начат",
-  pending: "Ожидается результат review",
-  passed: "Успешно пройден",
-  failed: "Найдена ошибка",
-} as const;
-
-const attemptKindLabels = {
-  initial: "первая попытка",
-  corrective: "корректирующая попытка",
-} as const;
-
-const attemptStatusLabels = {
-  in_progress: "в процессе",
-  failed: "завершилась ошибкой",
-  passed: "успешно завершена",
-} as const;
-
-const closureKindLabels = {
-  none: "попытка ещё открыта",
-  domain_failure: "исправимая ошибка",
-  policy_block: "остановлено политикой",
-  cancelled: "отменено владельцем",
-  successful_completion: "успешное завершение",
-} as const;
-
-function getOwnerResult(status: string): string {
-  switch (status) {
-    case "reviewing":
-      return "Проверки пройдены — идёт review";
-    case "awaiting_correction":
-      return "Нужно исправление";
-    case "completed":
-      return "Задача успешно завершена";
-    case "blocked":
-      return "Автоматический цикл остановлен";
-    case "awaiting_owner_decision":
-      return "Требуется решение владельца проекта";
-    default:
-      return "Задача выполняется";
-  }
+function getOwnerResult(c: ExecCopy, status: string): string {
+  return (c.ownerResult as Readonly<Record<string, string>>)[status] ?? c.ownerResult.default;
 }
 
-function getAttemptLabel(attemptNumber: number): string {
+function getAttemptLabel(c: ExecCopy, attemptNumber: number): string {
   return attemptNumber === 0
-    ? "Попытки ещё не начаты"
-    : `Попытка ${attemptNumber} из 3`;
+    ? c.attemptsNotStarted
+    : format(c.attemptOf, { n: attemptNumber });
+}
+
+// Demo step and build-error strings are produced in Russian by the AI-011 demo library;
+// they are presented through the locale's exact-string map, falling back to the source.
+function text(c: ExecCopy, value: string): string {
+  return (c.stepText as Readonly<Record<string, string>>)[value] ?? value;
 }
 
 function TechnicalList({
+  emptyLabel,
   title,
   values,
-}: Readonly<{ title: string; values: readonly string[] }>) {
+}: Readonly<{ emptyLabel: string; title: string; values: readonly string[] }>) {
   return (
     <div className="min-w-0">
       <dt className="text-xs font-medium text-slate-500">{title}</dt>
@@ -121,14 +90,14 @@ function TechnicalList({
             ))}
           </ul>
         ) : (
-          <span className="text-slate-500">нет данных</span>
+          <span className="text-slate-500">{emptyLabel}</span>
         )}
       </dd>
     </div>
   );
 }
 
-export function DevelopmentExecutionSimulator() {
+export function DevelopmentExecutionSimulator({ copy: c }: Readonly<{ copy: ExecCopy }>) {
   const [scenarioId, setScenarioId] =
     useState<DevelopmentExecutionDemoScenarioId>("success_first_attempt");
   const [stepIndex, setStepIndex] = useState(0);
@@ -149,10 +118,10 @@ export function DevelopmentExecutionSimulator() {
         className="min-w-0 rounded-xl border border-rose-400/40 bg-rose-400/10 p-5"
       >
         <h2 className="text-lg font-semibold text-rose-100">
-          Демонстрация безопасно остановлена
+          {c.stoppedTitle}
         </h2>
         <p className="mt-2 text-sm leading-6 text-rose-100/80">
-          {result.error.message}
+          {text(c, result.error.message)}
         </p>
       </section>
     );
@@ -191,17 +160,10 @@ export function DevelopmentExecutionSimulator() {
           className="text-lg font-semibold text-slate-50"
           id="development-cycle-explanation-title"
         >
-          Как работает цикл разработки
+          {c.howTitle}
         </h2>
         <ol className="mt-4 grid min-w-0 gap-3 text-sm leading-6 text-slate-300 md:grid-cols-2 xl:grid-cols-3">
-          {[
-            "Агент подготавливает изменения.",
-            "Система запускает обязательные проверки.",
-            "Отдельный review проверяет результат.",
-            "Если найдена исправимая ошибка — создаётся новая попытка.",
-            "После успешных проверок и review задача завершается.",
-            "После повторной ошибки, запрещённого действия или трёх попыток система останавливается.",
-          ].map((item, index) => (
+          {c.howSteps.map((item, index) => (
             <li className="flex min-w-0 gap-3" key={item}>
               <span className="flex size-7 shrink-0 items-center justify-center rounded-full border border-cyan-400/30 bg-cyan-400/10 text-xs font-semibold text-cyan-200">
                 {index + 1}
@@ -211,21 +173,21 @@ export function DevelopmentExecutionSimulator() {
           ))}
         </ol>
         <p className="mt-5 rounded-lg border border-amber-400/30 bg-amber-400/10 p-4 text-sm leading-6 text-amber-100">
-          Это учебная демонстрация правил AI-011. Сейчас модели не подключены,
-          команды не выполняются, файлы и Git не изменяются.
+          {c.demoNote}
         </p>
       </section>
 
       <SectionCard
-        title="Примеры работы цикла"
-        description="Выберите ситуацию. Новый сценарий всегда начинается с первого шага и ничего не запускает во внешних системах."
+        title={c.examplesTitle}
+        description={c.examplesDescription}
       >
         <fieldset className="min-w-0">
-          <legend className="sr-only">Выбор примера цикла разработки</legend>
+          <legend className="sr-only">{c.examplesLegend}</legend>
           <div className="grid min-w-0 gap-3 sm:grid-cols-2 xl:grid-cols-4">
             {developmentExecutionDemoScenarios.map((scenario) => {
               const selected = scenario.id === scenarioId;
               const controlId = `development-execution-scenario-${scenario.id}`;
+              const [scenarioTitle, scenarioDescription] = c.scenarios[scenario.id];
 
               return (
                 <label
@@ -245,15 +207,15 @@ export function DevelopmentExecutionSimulator() {
                     />
                     <span className="min-w-0">
                       <span className="block break-words text-sm font-semibold text-slate-100">
-                        {scenario.title}
+                        {scenarioTitle}
                       </span>
                       <span className="mt-1 block text-xs leading-5 text-slate-500">
-                        {scenario.description}
+                        {scenarioDescription}
                       </span>
                     </span>
                   </span>
                   <span className="mt-3 text-xs font-medium text-cyan-200">
-                    {selected ? "Сценарий выбран" : "Показать сценарий"}
+                    {selected ? c.scenarioSelected : c.showScenario}
                   </span>
                 </label>
               );
@@ -269,21 +231,21 @@ export function DevelopmentExecutionSimulator() {
         <div className="flex min-w-0 flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0">
             <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
-              Результат для владельца проекта
+              {c.ownerResultTitle}
             </p>
             <h2 className={`mt-2 break-words text-2xl font-semibold ${currentStyle.text}`}>
-              {getOwnerResult(run.status)}
+              {getOwnerResult(c, run.status)}
             </h2>
             <p className="mt-2 text-sm leading-6 text-slate-300">
-              {currentStep.description}
+              {text(c, currentStep.description)}
             </p>
           </div>
           <div className="flex shrink-0 flex-wrap items-center gap-2">
             <StatusBadge tone={currentStyle.tone}>
-              {getAttemptLabel(run.currentAttemptNumber)}
+              {getAttemptLabel(c, run.currentAttemptNumber)}
             </StatusBadge>
             <StatusBadge tone="neutral">
-              Шаг {currentStep.number} из {timeline.steps.length}
+              {format(c.stepOf, { n: currentStep.number, total: timeline.steps.length })}
             </StatusBadge>
           </div>
         </div>
@@ -296,21 +258,21 @@ export function DevelopmentExecutionSimulator() {
           onClick={() => setStepIndex((index) => Math.min(index + 1, timeline.steps.length - 1))}
           type="button"
         >
-          Следующий шаг
+          {c.nextStep}
         </button>
         <button
           className="inline-flex min-h-10 items-center justify-center rounded-md border border-slate-600/80 bg-slate-900/80 px-4 text-sm font-medium text-slate-200 transition hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300"
           onClick={() => setStepIndex(timeline.steps.length - 1)}
           type="button"
         >
-          Показать весь цикл
+          {c.showWholeCycle}
         </button>
         <button
           className="inline-flex min-h-10 items-center justify-center rounded-md border border-slate-600/80 bg-slate-900/80 px-4 text-sm font-medium text-slate-200 transition hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300"
           onClick={() => setStepIndex(0)}
           type="button"
         >
-          Начать сначала
+          {c.startOver}
         </button>
       </div>
 
@@ -318,35 +280,35 @@ export function DevelopmentExecutionSimulator() {
         <div className="min-w-0 space-y-6">
           <SectionCard
             className="min-w-0"
-            title="Что происходит сейчас"
-            description={currentStep.title}
-            action={<StatusBadge tone={currentStyle.tone}>текущий шаг</StatusBadge>}
+            title={c.nowTitle}
+            description={text(c, currentStep.title)}
+            action={<StatusBadge tone={currentStyle.tone}>{c.currentStep}</StatusBadge>}
           >
             <dl className="grid min-w-0 gap-3 sm:grid-cols-2">
               <div className="min-w-0 rounded-lg border border-slate-800 bg-slate-900/50 p-4">
-                <dt className="text-xs font-medium text-slate-500">Что проверено</dt>
+                <dt className="text-xs font-medium text-slate-500">{c.whatChecked}</dt>
                 <dd className="mt-2 text-sm leading-6 text-slate-200">
-                  {currentStep.checkedSummary}
+                  {text(c, currentStep.checkedSummary)}
                 </dd>
               </div>
               <div className="min-w-0 rounded-lg border border-slate-800 bg-slate-900/50 p-4">
-                <dt className="text-xs font-medium text-slate-500">Будет ли новая попытка</dt>
+                <dt className="text-xs font-medium text-slate-500">{c.newAttempt}</dt>
                 <dd className="mt-2 text-sm leading-6 text-slate-200">
-                  {currentStep.retryExplanation}
+                  {text(c, currentStep.retryExplanation)}
                 </dd>
               </div>
               {currentStep.failureReason && (
                 <div className="min-w-0 rounded-lg border border-rose-400/30 bg-rose-400/10 p-4 sm:col-span-2">
-                  <dt className="text-xs font-medium text-rose-200">Почему возникла остановка или исправление</dt>
+                  <dt className="text-xs font-medium text-rose-200">{c.whyStopped}</dt>
                   <dd className="mt-2 text-sm leading-6 text-rose-100">
-                    {currentStep.failureReason}
+                    {text(c, currentStep.failureReason)}
                   </dd>
                 </div>
               )}
               <div className="min-w-0 rounded-lg border border-cyan-400/20 bg-cyan-400/5 p-4 sm:col-span-2">
-                <dt className="text-xs font-medium text-cyan-200">Что произойдёт дальше</dt>
+                <dt className="text-xs font-medium text-cyan-200">{c.whatNext}</dt>
                 <dd className="mt-2 text-sm leading-6 text-slate-200">
-                  {currentStep.nextDescription}
+                  {text(c, currentStep.nextDescription)}
                 </dd>
               </div>
             </dl>
@@ -354,11 +316,11 @@ export function DevelopmentExecutionSimulator() {
 
           <SectionCard
             className="min-w-0"
-            title="Проверки и review"
-            description="Здесь показаны только данные, сохранённые в выбранном snapshot. Команды в действительности не выполнялись."
+            title={c.checksTitle}
+            description={c.checksDescription}
           >
             <p className="mb-4 text-xs font-medium text-amber-200">
-              Результат в демонстрационном сценарии
+              {c.demoResult}
             </p>
             <div className="min-w-0 space-y-3">
               {run.requiredVerificationCommands.map((command) => {
@@ -374,7 +336,7 @@ export function DevelopmentExecutionSimulator() {
                       {command}
                     </code>
                     <span className={`shrink-0 text-xs font-medium ${check ? "text-emerald-300" : "text-slate-500"}`}>
-                      {check ? "Успешный результат сохранён" : "Результат ещё не сохранён"}
+                      {check ? c.resultSaved : c.resultNotSaved}
                     </span>
                   </div>
                 );
@@ -382,14 +344,14 @@ export function DevelopmentExecutionSimulator() {
             </div>
             <div className="mt-4 flex min-w-0 flex-col gap-2 rounded-lg border border-slate-800 bg-slate-900/50 p-4 sm:flex-row sm:items-center sm:justify-between">
               <div className="min-w-0">
-                <p className="text-xs font-medium text-slate-500">Состояние review</p>
+                <p className="text-xs font-medium text-slate-500">{c.reviewState}</p>
                 <p className="mt-1 text-sm font-semibold text-slate-100">
-                  {reviewLabels[currentAttempt?.reviewStatus ?? "not_started"]}
+                  {c.review[currentAttempt?.reviewStatus ?? "not_started"]}
                 </p>
               </div>
               {isStoppedOnCurrentVerificationFailure && (
                 <span className="text-xs text-amber-200">
-                  Сначала требуется исправить проверку
+                  {c.fixCheckFirst}
                 </span>
               )}
             </div>
@@ -398,8 +360,8 @@ export function DevelopmentExecutionSimulator() {
 
         <SectionCard
           className="min-w-0 self-start"
-          title="История шагов"
-          description={`${completedStepCount} из ${timeline.steps.length - 1} переходов уже показано.`}
+          title={c.historyTitle}
+          description={format(c.historyDescription, { done: completedStepCount, total: timeline.steps.length - 1 })}
         >
           <ol className="min-w-0 space-y-0">
             {timeline.steps.map((step, index) => {
@@ -422,18 +384,18 @@ export function DevelopmentExecutionSimulator() {
                   <div className={`min-w-0 flex-1 ${index > safeStepIndex ? "opacity-45" : ""}`}>
                     <div className="flex min-w-0 flex-wrap items-center gap-2">
                       <p className={`min-w-0 break-words text-sm font-semibold ${isPast || isCurrent ? style.text : "text-slate-400"}`}>
-                        {step.title}
+                        {text(c, step.title)}
                       </p>
                       <span className="text-[0.68rem] font-semibold uppercase tracking-wider text-slate-500">
                         {isCurrent
-                          ? "текущий шаг"
+                          ? c.stepCurrent
                           : isPast
-                            ? "завершён"
-                            : "будущий шаг"}
+                            ? c.stepDone
+                            : c.stepFuture}
                       </span>
                     </div>
                     <p className="mt-1 text-xs leading-5 text-slate-500">
-                      Шаг {step.number} · {getAttemptLabel(step.attemptNumber)}
+                      {format(c.stepLine, { n: step.number, attempt: getAttemptLabel(c, step.attemptNumber) })}
                     </p>
                   </div>
                 </li>
@@ -445,30 +407,30 @@ export function DevelopmentExecutionSimulator() {
 
       <details className="min-w-0 rounded-xl border border-slate-800/80 bg-slate-950/70 p-5 open:border-slate-700">
         <summary className="cursor-pointer text-sm font-semibold text-slate-200 outline-none focus-visible:rounded focus-visible:ring-2 focus-visible:ring-cyan-300">
-          Технические детали AI-011
+          {c.technicalTitle}
         </summary>
         <p className="mt-2 text-xs leading-5 text-slate-500">
-          Canonical значения для проверки контракта. Они не нужны для понимания основного результата.
+          {c.technicalDescription}
         </p>
         <dl className="mt-5 grid min-w-0 gap-5 sm:grid-cols-2 xl:grid-cols-3">
           <div className="min-w-0">
             <dt className="text-xs font-medium text-slate-500">status</dt>
             <dd className="mt-1 break-all font-mono text-xs text-slate-300">{run.status}</dd>
-            <dd className="mt-1 text-xs text-slate-500">{developmentExecutionDemoStatusLabels[run.status]}</dd>
+            <dd className="mt-1 text-xs text-slate-500">{c.statuses[run.status]}</dd>
           </div>
           <div className="min-w-0">
             <dt className="text-xs font-medium text-slate-500">nextAction</dt>
             <dd className="mt-1 break-all font-mono text-xs text-slate-300">{run.nextAction}</dd>
-            <dd className="mt-1 text-xs text-slate-500">{developmentExecutionDemoNextActionLabels[run.nextAction]}</dd>
+            <dd className="mt-1 text-xs text-slate-500">{c.nextActions[run.nextAction]}</dd>
           </div>
           <div className="min-w-0">
-            <dt className="text-xs font-medium text-slate-500">attempt kind / status</dt>
+            <dt className="text-xs font-medium text-slate-500">{c.attemptKindStatus}</dt>
             <dd className="mt-1 break-all font-mono text-xs text-slate-300">
               {currentAttempt ? `${currentAttempt.kind} / ${currentAttempt.status}` : "none / none"}
             </dd>
             {currentAttempt && (
               <dd className="mt-1 text-xs text-slate-500">
-                {attemptKindLabels[currentAttempt.kind]}, {attemptStatusLabels[currentAttempt.status]}
+                {c.attemptKind[currentAttempt.kind]}, {c.attemptStatus[currentAttempt.status]}
               </dd>
             )}
           </div>
@@ -476,7 +438,7 @@ export function DevelopmentExecutionSimulator() {
             <dt className="text-xs font-medium text-slate-500">closureKind</dt>
             <dd className="mt-1 break-all font-mono text-xs text-slate-300">{currentAttempt?.closureKind ?? "none"}</dd>
             <dd className="mt-1 text-xs text-slate-500">
-              {closureKindLabels[currentAttempt?.closureKind ?? "none"]}
+              {c.closureKind[currentAttempt?.closureKind ?? "none"]}
             </dd>
           </div>
           <div className="min-w-0">
@@ -484,25 +446,27 @@ export function DevelopmentExecutionSimulator() {
             <dd className="mt-1 break-all font-mono text-xs text-slate-300">{currentAttempt?.reviewStatus ?? "not_started"}</dd>
           </div>
           <TechnicalList
-            title="failure fingerprint текущей попытки"
+            emptyLabel={c.noData}
+            title={c.failureFingerprint}
             values={
               currentAttemptFailure ? [currentAttemptFailure.fingerprint] : []
             }
           />
           <TechnicalList
-            title="raw reason codes"
+            emptyLabel={c.noData}
+            title={c.rawReasonCodes}
             values={[
               ...run.blockingReasons.map((reason) => reason.code),
               ...(currentAttemptFailure ? [currentAttemptFailure.code] : []),
             ]}
           />
-          <TechnicalList title="admitted paths" values={run.admittedAllowedPaths} />
-          <TechnicalList title="changed paths" values={currentAttempt?.changedPaths ?? []} />
+          <TechnicalList emptyLabel={c.noData} title={c.admittedPaths} values={run.admittedAllowedPaths} />
+          <TechnicalList emptyLabel={c.noData} title={c.changedPaths} values={currentAttempt?.changedPaths ?? []} />
         </dl>
         {historicalFailures.length > 0 && (
           <div className="mt-5 min-w-0 rounded-lg border border-slate-800 bg-slate-900/50 p-4">
             <p className="text-xs font-medium text-slate-400">
-              История ошибок предыдущих попыток
+              {c.failureHistory}
             </p>
             <ul className="mt-3 min-w-0 space-y-3">
               {historicalFailures.map((failure) => (
@@ -511,7 +475,7 @@ export function DevelopmentExecutionSimulator() {
                   key={`${failure.attemptNumber}-${failure.phase}-${failure.fingerprint}`}
                 >
                   <p className="text-xs font-medium text-slate-300">
-                    Попытка {failure.attemptNumber} · phase: {failure.phase}
+                    {format(c.attemptPhase, { n: failure.attemptNumber, phase: failure.phase })}
                   </p>
                   <code className="mt-1 block min-w-0 break-all text-xs text-slate-500">
                     fingerprint: {failure.fingerprint}
@@ -523,11 +487,11 @@ export function DevelopmentExecutionSimulator() {
         )}
         {run.blockingReasons.length > 0 && (
           <div className="mt-5 min-w-0 rounded-lg border border-slate-800 bg-slate-900/50 p-4">
-            <p className="text-xs font-medium text-slate-500">Пояснения reason codes</p>
+            <p className="text-xs font-medium text-slate-500">{c.reasonCodeNotes}</p>
             <ul className="mt-2 min-w-0 space-y-2">
               {run.blockingReasons.map((reason, index) => (
                 <li className="min-w-0 text-xs leading-5 text-slate-300" key={`${reason.code}-${index}`}>
-                  <code className="break-all text-slate-400">{reason.code}</code>: {developmentExecutionDemoReasonLabels[reason.code]}
+                  <code className="break-all text-slate-400">{reason.code}</code>: {c.reasons[reason.code]}
                 </li>
               ))}
             </ul>

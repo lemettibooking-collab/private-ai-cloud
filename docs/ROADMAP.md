@@ -159,7 +159,8 @@ The census recorded the current hardening debt and moved development to mileston
 - **AI-038.3.1 Trusted Project Registry + Run Discovery Foundation — DONE** (commit `d7d1ca0`; passed independent re-gate; see §9)
 - **AI-038.3.2 Trusted Project Context Routing + All Projects + Real Project Switcher — DONE** (commit `50cfed1`; passed independent re-gate; see §9)
 - **AI-038.4 Owner Tasks — DONE**: **AI-038.4a Project Task Foundation + Read Surfaces — DONE** (`4a55f5b`); **AI-038.4b Quick Create + audited Task Mutation Binding — DONE** (`60b563b`) (see §9)
-- **AI-038.5 Mission Control Visual Refinement — ACTIVE / IN REVIEW**
+- **AI-038.5 Mission Control Visual Refinement — DONE** (`c7d9b26`)
+- **AI-038.6 RU/EN Owner Console Localization — IN REVIEW**
 - **Roadmap Rebase v1.4 — vendor-neutral control plane — documentation only** (this version; `docs/ROADMAP_REBASE_V1.4.md`)
 
 AI-037.1.1 passed independent re-gate and was committed/pushed through the Owner-approved repository workflow.
@@ -560,9 +561,9 @@ Implemented and passed the independent re-gate (committed `60b563b`). It is the 
   - otherwise a generic `invalid_input` / `conflict` / `unavailable` / `unauthenticated` message.
 - `attachRun` stays unbound (no UI, action or route). Task ↔ Run binding is for a later orchestrator task (AI-039+).
 
-#### AI-038.5 — Mission Control Visual Refinement — IN REVIEW (deferred from the AI-038.3 Owner checkpoint)
+#### AI-038.5 — Mission Control Visual Refinement — DONE (`c7d9b26`; deferred from the AI-038.3 Owner checkpoint)
 
-Author implementation is complete and awaits independent re-gate. The AI-038.3 foundation is accepted but less refined than the approved Mission Control reference. Scope:
+Implemented, accepted by the Owner and passed the independent re-gate (committed `c7d9b26`). The AI-038.3 foundation is accepted but less refined than the approved Mission Control reference. Scope:
 - a stronger Mission Control character and a more distinctive panel hierarchy;
 - tighter premium typography and spacing, and a better information-density rhythm;
 - telemetry- or instrument-like presentation where useful, and less of a generic card-grid feel;
@@ -578,6 +579,30 @@ Implementation notes:
 - control-plane sidebar and top bar (workspace context, project context selector, workspace-global approval indicators, `+ New Task`, session);
 - an attention-first Dashboard instrument strip; My Attention grouped by severity; inspection-style Task and Run detail; grouped Quick Create form;
 - every value is existing factual read data; there is no new telemetry.
+
+#### AI-038.6 — RU/EN Owner Console Localization — IN REVIEW
+
+Author implementation is complete and awaits independent re-gate. This is presentation only: no domain, storage, auth, routing or write-semantics change.
+
+- **Locales:** `ru` (default) and `en` only.
+  - The `pac_locale` cookie holds exactly `ru` / `en` (Path=/, SameSite=Lax, ~1 year, Secure on HTTPS, not HttpOnly).
+  - Anything else falls back to `ru`.
+  - No locale routing (`/ru/...`), no locale query, no browser-language detection.
+- **Resolution:**
+  - `lib/i18n/locale.server.ts` is the one canonical server-side resolver (`cookies()`, cached per request);
+  - `<html lang>` follows it;
+  - Geist / Geist Mono request the `cyrillic` subset.
+- **Dictionaries** (`lib/i18n/messages.ts`):
+  - typed RU / EN with exact key parity and no per-key fallback;
+  - exhaustive label maps for task / run / approval / project status, risk, task type, capability and model-invocation status;
+  - domain values stay canonical English tokens; identifiers, stored content and brand names are never translated.
+  - Prototype Roadmap / Settings copy is mirrored 1:1 in `lib/i18n/prototype-content.ts`.
+- **Switcher:**
+  - a small client component `components/shell/locale-switcher.tsx` in the top bar, just before the account block (`🇷🇺 RU` / `🇬🇧 EN`);
+  - it writes only the cookie and calls `router.refresh()`, so the path and `?project=` context are unchanged;
+  - no route, Server Action or DB write.
+- **The locale never takes part in** auth, tenancy, Project Registry trust, reads, Quick Create payload / idempotency, audit or approvals.
+- **Corrective L10N-1:** every human-facing `app/**/page.tsx` is covered by a test-enforced inventory: Owner pages, prototype pages via `lib/i18n/prototype-{pages,mock,content}.ts`, and Russian-native simulators with their English remnants localized. Internal links from localized pages (for example Settings → `/knowledge`) reach only covered routes.
 
 ### AI-037.7 — Tenant-bound facade + pre-auth limits — DONE
 
@@ -1013,7 +1038,7 @@ Roadmap does not imply strictly serial development. Parallel work is allowed onl
 
 ### A. Current operational line (unchanged by the rebase)
 
-While M2.2 is deferred: `AI-037.7 DONE → AI-038.0 DONE → AI-038.1 DONE → AI-038.2a DONE → AI-038.2b DONE → AI-038.3 DONE → AI-038.3.1 DONE → AI-038.3.2 DONE → AI-038.4a Project Task Foundation + read surfaces DONE → AI-038.4b Quick Create / task mutation binding DONE → AI-038.5 Mission Control Visual Refinement (IN REVIEW) → AI-039 Development Workflow Browser` (M3 Owner path, §9). AI-038.2 passed; the Owner Console reads real runtime data through AI-038.3, read-only. The rebase does not cancel or skip any unfinished AI-038 work.
+While M2.2 is deferred: `AI-037.7 DONE → AI-038.0 DONE → AI-038.1 DONE → AI-038.2a DONE → AI-038.2b DONE → AI-038.3 DONE → AI-038.3.1 DONE → AI-038.3.2 DONE → AI-038.4a Project Task Foundation + read surfaces DONE → AI-038.4b Quick Create / task mutation binding DONE → AI-038.5 Mission Control Visual Refinement DONE → AI-038.6 RU/EN Owner Console Localization (IN REVIEW) → AI-039 Development Workflow Browser` (M3 Owner path, §9). AI-038.2 passed; the Owner Console reads real runtime data through AI-038.3, read-only. The rebase does not cancel or skip any unfinished AI-038 work.
 
 ### B. First new architecture implementation introduced by v1.4
 

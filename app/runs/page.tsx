@@ -5,6 +5,8 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { SectionCard } from "@/components/ui/section-card";
 import { loadOwnerRuns } from "@/lib/composition/owner-console-read.server";
+import { format } from "@/lib/i18n/locale";
+import { getI18n } from "@/lib/i18n/locale.server";
 
 type RunsPageProps = {
   // `project` is an untrusted selector, validated by the loader against the authenticated registry.
@@ -13,17 +15,17 @@ type RunsPageProps = {
 
 export default async function RunsPage({ searchParams }: RunsPageProps) {
   const view = await loadOwnerRuns((await searchParams).project);
+  const { t } = await getI18n();
+  const r = t.runs;
   const selected = view.state === "available" && view.scope.mode === "project" ? view.scope.project : null;
 
   return (
     <AppShell selectedProject={selected}>
       <PageHeader
         action={view.state === "available" ? <ScopeBadge project={selected} /> : undefined}
-        description={selected
-          ? "Runs of the selected project, newest first."
-          : "Recent runs of registered projects, newest first. Each run keeps its factual project."}
-        eyebrow="Runs"
-        title={selected ? `${selected.displayName} runs` : "Recent project runs"}
+        description={selected ? r.descriptionProject : r.descriptionAll}
+        eyebrow={r.eyebrow}
+        title={selected ? format(r.titleProject, { project: selected.displayName }) : r.titleAll}
       />
 
       {view.state === "unauthenticated" && <SignInRequired />}
@@ -38,24 +40,24 @@ export default async function RunsPage({ searchParams }: RunsPageProps) {
             <SectionCard
               count={aggregate.runs.length}
               flush
-              description={`Registered-project runs (up to ${aggregate.runsPerProjectLimit} newest per project, ${aggregate.displayLimit} shown).`}
-              title="All Projects"
+              description={format(r.panelAllDescription, { perProject: aggregate.runsPerProjectLimit, shown: aggregate.displayLimit })}
+              title={t.common.allProjects}
             >
               {view.projects.length === 0 ? (
-                <EmptyState description="Runs appear here once projects are registered in this workspace." title="No projects registered" variant="inline" />
+                <EmptyState description={r.noProjectsBody} title={r.noProjectsTitle} variant="inline" />
               ) : aggregate.runs.length === 0 ? (
-                <EmptyState description="The registered projects have no runs yet." title="No runs" variant="inline" />
+                <EmptyState description={r.noRunsBody} title={r.noRunsTitle} variant="inline" />
               ) : (
                 <ProjectRunTable projectNames={names} runs={aggregate.runs} selectedProjectId={null} showProject />
               )}
             </SectionCard>
             {(aggregate.runsTruncated || aggregate.projectsNotConsidered > 0 || aggregate.projectsUnavailable.length > 0) && (
               <div className={`pac-inset mt-4 px-4 py-3 ${aggregate.projectsUnavailable.length > 0 ? "!border-warn/35" : ""}`}>
-                <p className="pac-label">Coverage</p>
+                <p className="pac-label">{r.coverage}</p>
                 <p className="mt-1.5 text-xs leading-5 text-ink-3">
-                  This is a bounded view, not complete run history.
-                  {aggregate.projectsNotConsidered > 0 && ` ${aggregate.projectsNotConsidered} more project(s) are not included; select a project to see its runs.`}
-                  {aggregate.projectsUnavailable.length > 0 && ` Runs unavailable for: ${aggregate.projectsUnavailable.join(", ")}.`}
+                  {r.coverageBody}
+                  {aggregate.projectsNotConsidered > 0 && ` ${format(r.coverageNotConsidered, { count: aggregate.projectsNotConsidered })}`}
+                  {aggregate.projectsUnavailable.length > 0 && ` ${format(r.coverageUnavailable, { projects: aggregate.projectsUnavailable.join(", ") })}`}
                 </p>
               </div>
             )}
@@ -64,9 +66,9 @@ export default async function RunsPage({ searchParams }: RunsPageProps) {
       })()}
 
       {view.state === "available" && view.mode === "project" && (
-        <SectionCard count={`${view.runs.length}${view.runsTruncated ? "+" : ""}`} description={view.runsTruncated ? `Newest ${view.runsLimit} runs shown.` : "Newest first."} flush title={`${view.scope.project.displayName} runs`}>
+        <SectionCard count={`${view.runs.length}${view.runsTruncated ? "+" : ""}`} description={view.runsTruncated ? format(r.projectTruncated, { limit: view.runsLimit }) : r.projectNewest} flush title={format(r.titleProject, { project: view.scope.project.displayName })}>
           {view.runs.length === 0 ? (
-            <EmptyState description="No run has been recorded for this project." title="No project runs" variant="inline" />
+            <EmptyState description={r.noProjectRunsBody} title={r.noProjectRunsTitle} variant="inline" />
           ) : (
             <ProjectRunTable runs={view.runs} selectedProjectId={view.scope.project.projectId} showProject={false} />
           )}

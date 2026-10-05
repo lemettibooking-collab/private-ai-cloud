@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { LockIcon, navIcons } from "@/components/shell/icons";
+import type { Messages } from "@/lib/i18n/messages";
 import { ownerNavigation } from "@/lib/navigation";
 import { projectScopedHref, type ProjectScopedPath } from "@/lib/projects/project-context";
 
@@ -11,19 +12,20 @@ type SidebarProps = {
   pendingApprovals: number | null;
   // The page's validated selected project (never parsed from the URL here); null = All Projects.
   selectedProjectId: string | null;
+  // Localized navigation chrome (server dictionary); hrefs and structure come from lib/navigation.
+  labels: Messages["nav"];
 };
-
-// Presentational group names for the existing navigation sections (labels and links are unchanged).
-const sectionLabels: Readonly<Record<string, string>> = { overview: "Overview", work: "Work", platform: "Platform" };
 
 // Project context is preserved on Dashboard / My Attention / Tasks / Runs / Approvals. Projects,
 // Roadmap and Settings are not project-scoped and navigate without a selector.
-export function Sidebar({ pendingApprovals, selectedProjectId }: SidebarProps) {
+export function Sidebar({ pendingApprovals, selectedProjectId, labels }: SidebarProps) {
+  const sectionLabels = labels.sections as Readonly<Record<string, string>>;
+  const itemLabels = labels.items as Readonly<Record<string, string>>;
   const pathname = usePathname();
 
   return (
     <aside className="pac-shell sticky top-12 hidden h-[calc(100vh-3rem)] w-56 shrink-0 flex-col border-r border-line md:flex">
-      <nav aria-label="Owner Console" className="flex flex-1 flex-col gap-4 overflow-y-auto px-2.5 py-4">
+      <nav aria-label={labels.ariaLabel} className="flex flex-1 flex-col gap-4 overflow-y-auto px-2.5 py-4">
         {ownerNavigation.map((section) => (
           <div key={section.id}>
             <p className="pac-label px-2.5 pb-1.5 !text-[9.5px] !text-ink-3/80">{sectionLabels[section.id] ?? section.id}</p>
@@ -36,11 +38,11 @@ export function Sidebar({ pendingApprovals, selectedProjectId }: SidebarProps) {
                       <div
                         aria-disabled="true"
                         className="flex h-8 cursor-default items-center gap-2.5 rounded-[7px] border border-transparent px-2.5 text-[13px] text-ink-3/55"
-                        title="Not available yet"
+                        title={labels.notAvailableYet}
                       >
                         {Icon && <Icon className="h-4 w-4 shrink-0" />}
-                        <span className="flex-1">{item.label}</span>
-                        <span className="font-mono text-[9px] uppercase tracking-[0.12em]">soon</span>
+                        <span className="flex-1">{itemLabels[item.href] ?? item.label}</span>
+                        <span className="text-[10px] uppercase tracking-[0.06em]">{labels.soon}</span>
                       </div>
                     </li>
                   );
@@ -58,14 +60,14 @@ export function Sidebar({ pendingApprovals, selectedProjectId }: SidebarProps) {
                     >
                       {active && <span aria-hidden className="absolute inset-y-1.5 -left-2.5 w-[2px] rounded-r-full bg-accent" />}
                       {Icon && <Icon className={`h-4 w-4 shrink-0 ${active ? "text-accent" : "text-ink-3 group-hover:text-ink-2"}`} />}
-                      <span className="flex-1 truncate">{item.label}</span>
+                      <span className="flex-1 truncate">{itemLabels[item.href] ?? item.label}</span>
                       {item.attentionCount && pendingApprovals !== null && pendingApprovals > 0 && (
                         <span
-                          className="rounded-[3px] border border-warn/30 bg-warn/10 px-1.5 font-mono text-[10.5px] leading-4 text-warn"
-                          title="Pending approvals across all projects"
+                          className="rounded-[3px] border border-warn/30 bg-warn/10 px-1.5 font-mono text-[11px] leading-4 text-warn"
+                          title={labels.pendingApprovalsTitle}
                         >
                           {pendingApprovals}
-                          <span className="sr-only"> pending approvals</span>
+                          <span className="sr-only"> {labels.pendingApprovalsSr}</span>
                         </span>
                       )}
                     </Link>
@@ -78,15 +80,15 @@ export function Sidebar({ pendingApprovals, selectedProjectId }: SidebarProps) {
       </nav>
 
       <div className="pac-inset mx-3 mb-3 px-3 py-2.5">
-        <p className="pac-label !text-[9.5px]">Control plane</p>
+        <p className="pac-label truncate !text-[9.5px]">{labels.controlPlane}</p>
         <dl className="mt-2 space-y-1.5 text-[11.5px]">
           <div className="flex items-center justify-between gap-2">
-            <dt className="text-ink-3">External actions</dt>
-            <dd className="flex items-center gap-1 font-mono text-[10.5px] uppercase tracking-[0.08em] text-ink-2"><LockIcon className="h-3 w-3" />locked</dd>
+            <dt className="text-ink-3">{labels.externalActions}</dt>
+            <dd className="flex items-center gap-1 text-[11.5px] text-ink-2"><LockIcon className="h-3 w-3" />{labels.locked}</dd>
           </div>
           <div className="flex items-center justify-between gap-2">
-            <dt className="text-ink-3">Owner writes</dt>
-            <dd className="font-mono text-[10.5px] uppercase tracking-[0.08em] text-ink-2">draft intent</dd>
+            <dt className="text-ink-3">{labels.ownerWrites}</dt>
+            <dd className="text-[11.5px] text-ink-2">{labels.draftIntent}</dd>
           </div>
         </dl>
       </div>

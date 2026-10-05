@@ -15,6 +15,10 @@ This version has breaking changes - APIs, conventions, and file structure may al
   - Do not build PAC-owned generic agent loops, context compaction, sandboxes, or browser or subagent runtimes unless the roadmap explicitly calls for them.
   - Canonical roadmap: `docs/ROADMAP.md`. Document authority: `docs/README.md`. Treat v0.3/v0.4/v0.5 strategy documents as historical.
 - **UI** (`app/`, `components/`): Owner Console pages (Dashboard, Projects, Runs, Run Detail, Approvals) read real runtime data **read-only** through the server-only loader `lib/composition/owner-console-read.server.ts` (AI-038.3), called from React Server Components. There is no business HTTP API. The only write path is one Owner-facing Quick Create Server Action (`app/tasks/new/actions.ts`, AI-038.4b). It creates only a draft ProjectTask intent, through the audited Owner task mutation boundary (`lib/composition/owner-task-create*.ts` → `lib/tasks/owner-task-mutations.ts` `createTask`). It starts no execution and no model or GitHub action. Other prototype pages are still on mocked data.
+- **UI locales** (AI-038.6): `ru` (default) and `en`, chosen by the Owner via the `pac_locale` preference cookie (`lib/i18n/`). Localization is presentation-only:
+  - domain / storage enum values stay canonical and locale-neutral;
+  - identifiers and stored content are never translated;
+  - the locale never takes part in auth, tenancy, reads, writes or audit.
 - **Auth:** Auth.js with GitHub as the only provider (AI-038.2a), wired to the server-only Owner identity boundary (`lib/auth/`, `lib/composition/*owner-read*`).
   - The only HTTP route is the Auth.js route `app/api/auth/[...nextauth]`. There is no business API.
   - The real GitHub OAuth smoke (AI-038.2b) passed; AI-038.2 is DONE.

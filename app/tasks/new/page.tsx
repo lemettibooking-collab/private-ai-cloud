@@ -8,6 +8,8 @@ import { loadOwnerQuickCreate } from "@/lib/composition/owner-console-read.serve
 import { issueQuickCreateFormKey } from "@/lib/composition/owner-task-create.server";
 import { developmentPriorities } from "@/lib/contracts/development-plan";
 import { riskLevels } from "@/lib/contracts/domain";
+import { format } from "@/lib/i18n/locale";
+import { getI18n } from "@/lib/i18n/locale.server";
 import { projectScopedHref, quickCreateHref } from "@/lib/projects/project-context";
 import { projectTaskLimits, projectTaskTypes } from "@/lib/tasks/project-task";
 import { quickCreateTaskAction } from "./actions";
@@ -21,6 +23,8 @@ type NewTaskPageProps = {
 // form idempotency key; the server re-checks Owner authority and the project on submit.
 export default async function NewTaskPage({ searchParams }: NewTaskPageProps) {
   const view = await loadOwnerQuickCreate((await searchParams).project);
+  const { t } = await getI18n();
+  const q = t.quickCreate;
   const selected = view.state === "available" && view.scope.mode === "project" ? view.scope.project : null;
   const tasksHref = projectScopedHref("/tasks", selected?.projectId ?? null);
 
@@ -28,9 +32,9 @@ export default async function NewTaskPage({ searchParams }: NewTaskPageProps) {
     <AppShell selectedProject={selected}>
       <PageHeader
         action={view.state === "available" ? <ScopeBadge project={selected} /> : undefined}
-        description="Record what needs to be done. The task is created as a draft Owner intent; no run, model, executor or repository action starts."
-        eyebrow="Tasks / Quick Create"
-        title={selected ? `New task · ${selected.displayName}` : "New task"}
+        description={q.description}
+        eyebrow={q.eyebrow}
+        title={selected ? format(q.titleProject, { project: selected.displayName }) : q.title}
       />
 
       {view.state === "unauthenticated" && <SignInRequired />}
@@ -41,31 +45,34 @@ export default async function NewTaskPage({ searchParams }: NewTaskPageProps) {
         <div className="max-w-4xl">
           <EmptyState
             actionHref={quickCreateHref(null)}
-            actionLabel="Choose an active project"
-            description="Creating a new task for a paused project is unavailable. Resume the project, or create the task in another active project."
-            title="Project is paused"
+            actionLabel={q.chooseActive}
+            description={q.pausedBody}
+            title={q.pausedTitle}
           />
         </div>
       )}
 
       {view.state === "available" && view.target !== "project_paused" && view.creatableProjects.length === 0 && (
-        <EmptyState description="No active project is available to receive a new task." title="No active project" />
+        <EmptyState description={q.noActiveBody} title={q.noActiveTitle} />
       )}
 
       {view.state === "available" && view.target !== "project_paused" && view.creatableProjects.length > 0 && (
-        <SectionCard className="max-w-4xl" description="One draft ProjectTask. The server re-checks Owner authority and the project on submit." title="Task intent">
+        <SectionCard className="max-w-4xl" description={q.panelDescription} title={q.panelTitle}>
           <div>
             <QuickCreateForm
               action={quickCreateTaskAction}
               cancelHref={tasksHref}
               fixed={view.target === "project"}
               formKey={issueQuickCreateFormKey()}
+              labels={q.form}
               maxGoalLength={projectTaskLimits.maxGoalLength}
               maxTitleLength={projectTaskLimits.maxTitleLength}
               newFormHref={quickCreateHref(selected?.projectId ?? null)}
               priorities={developmentPriorities}
               projects={view.creatableProjects.map((project) => ({ projectId: project.projectId, displayName: project.displayName }))}
+              riskLabels={t.risk}
               risks={riskLevels}
+              typeLabels={t.taskType}
               types={projectTaskTypes}
             />
           </div>

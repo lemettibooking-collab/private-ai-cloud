@@ -8,6 +8,8 @@ import { AppShell } from "@/components/shell/app-shell";
 import { EmptyState } from "@/components/ui/empty-state";
 import { SectionCard } from "@/components/ui/section-card";
 import { loadOwnerTask } from "@/lib/composition/owner-console-read.server";
+import { format } from "@/lib/i18n/locale";
+import { getI18n } from "@/lib/i18n/locale.server";
 import { projectScopedHref } from "@/lib/projects/project-context";
 
 type TaskDetailPageProps = {
@@ -27,13 +29,15 @@ function Meta({ label, children }: { label: string; children: React.ReactNode })
   );
 }
 
-const unset = <span className="font-mono text-ink-3">not set</span>;
 
 // Inspection hierarchy: identity / status → objective → operational metadata → runs (attempts) →
 // factual result. Nothing here is an agent report.
 export default async function TaskDetailPage({ params, searchParams }: TaskDetailPageProps) {
   const { taskId } = await params;
   const view = await loadOwnerTask(taskId, (await searchParams).project);
+  const { t } = await getI18n();
+  const k = t.taskDetail;
+  const unset = <span className="text-ink-3">{t.common.notSet}</span>;
   const selected = view.state === "available" && view.scope.mode === "project" ? view.scope.project : null;
   const tasksHref = projectScopedHref("/tasks", selected?.projectId ?? null);
   const detail = view.state === "available" && view.task.state === "available" ? view.task.detail : null;
@@ -46,9 +50,9 @@ export default async function TaskDetailPage({ params, searchParams }: TaskDetai
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3 border-b border-line pb-4">
         <div className="min-w-0">
           <p className="pac-label">
-            <Link className="!text-accent hover:underline" href={tasksHref}>Tasks</Link> / Task detail
+            <Link className="!text-accent hover:underline" href={tasksHref}>{k.breadcrumbTasks}</Link> / {k.breadcrumbDetail}
           </p>
-          <h1 className="mt-1 truncate text-[20px] font-semibold leading-7 tracking-tight text-ink">{detail ? detail.task.title : "Task"}</h1>
+          <h1 className="mt-1 truncate text-[20px] font-semibold leading-7 tracking-tight text-ink">{detail ? detail.task.title : k.task}</h1>
           {detail && (
             <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
               <TaskStatusBadge status={detail.task.status} />
@@ -69,13 +73,13 @@ export default async function TaskDetailPage({ params, searchParams }: TaskDetai
 
       {view.state === "available" && view.task.state === "unavailable" && (
         <div className="pac-surface px-6 py-9 text-center">
-          <p className="pac-label">Task</p>
-          <p className="mt-2 text-[15px] font-semibold text-ink">Task unavailable</p>
+          <p className="pac-label">{k.task}</p>
+          <p className="mt-2 text-[15px] font-semibold text-ink">{k.unavailableTitle}</p>
           <p className="mx-auto mt-1.5 max-w-md text-[12.5px] leading-5 text-ink-3">
-            {selected ? "This task cannot be shown in this project context." : "This task cannot be shown."}
+            {selected ? k.unavailableInProject : k.unavailable}
           </p>
           <Link className="pac-control mt-5 inline-flex h-8 items-center px-3 text-[13px] text-ink-2" href={tasksHref}>
-            Back to tasks
+            {k.backToTasks}
           </Link>
         </div>
       )}
@@ -84,42 +88,42 @@ export default async function TaskDetailPage({ params, searchParams }: TaskDetai
         const { task, runs, runsTruncated, result } = detail;
         return (
           <div className="grid gap-4 xl:grid-cols-12">
-            <SectionCard className="xl:col-span-8" title="Objective">
+            <SectionCard className="xl:col-span-8" title={k.objective}>
               {task.goal ? (
                 <p className="max-w-[72ch] whitespace-pre-wrap text-[13.5px] leading-6 text-ink">{task.goal}</p>
               ) : (
-                <p className="text-[13px] text-ink-3">No goal recorded for this task.</p>
+                <p className="text-[13px] text-ink-3">{k.noGoal}</p>
               )}
             </SectionCard>
 
-            <SectionCard className="xl:col-span-4" title="Task metadata">
+            <SectionCard className="xl:col-span-4" title={k.metadata}>
               <dl className="-my-2 divide-y divide-line">
-                <Meta label="Project">{projectName} <span className="ml-1 font-mono text-[10.5px] text-ink-3">{task.projectId}</span></Meta>
-                <Meta label="Type"><TaskTypeLabel type={task.type} /></Meta>
-                <Meta label="Priority"><span className="font-mono">{task.priority ?? unset}</span></Meta>
-                <Meta label="Risk level"><span className="font-mono">{task.riskLevel ?? unset}</span></Meta>
-                <Meta label="Created"><span className="font-mono text-[11.5px]">{formatTimestamp(task.createdAt)}</span></Meta>
-                <Meta label="Updated"><span className="font-mono text-[11.5px]">{formatTimestamp(task.updatedAt)}</span></Meta>
-                <Meta label="Completed"><span className="font-mono text-[11.5px]">{formatTimestamp(task.completedAt)}</span></Meta>
+                <Meta label={k.project}>{projectName} <span className="ml-1 font-mono text-[10.5px] text-ink-3">{task.projectId}</span></Meta>
+                <Meta label={k.type}><TaskTypeLabel type={task.type} /></Meta>
+                <Meta label={k.priority}>{task.priority ?? unset}</Meta>
+                <Meta label={k.riskLevel}>{task.riskLevel ? t.risk[task.riskLevel] : unset}</Meta>
+                <Meta label={k.created}><span className="font-mono text-[11.5px]">{formatTimestamp(task.createdAt)}</span></Meta>
+                <Meta label={k.updated}><span className="font-mono text-[11.5px]">{formatTimestamp(task.updatedAt)}</span></Meta>
+                <Meta label={k.completed}><span className="font-mono text-[11.5px]">{formatTimestamp(task.completedAt)}</span></Meta>
               </dl>
             </SectionCard>
 
             <SectionCard
               className="xl:col-span-8"
               count={task.linkedRunCount}
-              description="Runs are execution attempts linked to this task, newest first."
+              description={k.linkedRunsDescription}
               flush
-              title="Linked runs"
+              title={k.linkedRuns}
             >
               {runs.length === 0 ? (
-                <EmptyState description="No runs are linked to this task yet — no execution has been recorded for it." title="No linked runs" variant="inline" />
+                <EmptyState description={k.noLinkedRunsBody} title={k.noLinkedRunsTitle} variant="inline" />
               ) : (
                 <ProjectRunTable runs={runs} selectedProjectId={selected?.projectId ?? null} showProject={false} />
               )}
-              {runsTruncated && <p className="border-t border-line px-4 py-2 text-[11px] text-ink-3">Showing the newest {runs.length} of {task.linkedRunCount} linked runs.</p>}
+              {runsTruncated && <p className="border-t border-line px-4 py-2 text-[11px] text-ink-3">{format(k.runsTruncated, { shown: runs.length, total: task.linkedRunCount })}</p>}
             </SectionCard>
 
-            <SectionCard className="xl:col-span-4" title="Task result">
+            <SectionCard className="xl:col-span-4" title={k.taskResult}>
               <TaskResultPanel result={result} />
             </SectionCard>
           </div>

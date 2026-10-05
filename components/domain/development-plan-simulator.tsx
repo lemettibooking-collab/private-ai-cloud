@@ -4,25 +4,14 @@ import { useState } from "react";
 import { SectionCard } from "@/components/ui/section-card";
 import { StatusBadge } from "@/components/ui/status-badge";
 import {
-  developmentPlanDemoReasonLabels,
   developmentPlanDemoScenarios,
-  developmentPlanDemoVerdictLabels,
   evaluateDevelopmentPlanDemoScenario,
   type DevelopmentPlanDemoScenarioId,
 } from "@/lib/development-plan-demo";
+import { format } from "@/lib/i18n/locale";
+import type { PrototypePages } from "@/lib/i18n/prototype-pages";
 import type { DevelopmentTask } from "@/lib/contracts/development-plan";
 import type { DevelopmentTaskAdmissionVerdict } from "@/lib/contracts/development-task-policy";
-
-const verdictExplanations: Readonly<
-  Record<DevelopmentTaskAdmissionVerdict, string>
-> = {
-  allow:
-    "Все обязательные проверки пройдены. Это ещё не запуск агента — задача только готова к передаче следующему слою системы.",
-  require_approval:
-    "Система остановилась и ждёт решения Owner. До подтверждения задача не будет передана дальше.",
-  deny:
-    "Система заблокировала переход. Подтверждение Owner не должно обходить технические и системные запреты.",
-};
 
 const verdictPanelClass: Readonly<
   Record<DevelopmentTaskAdmissionVerdict, string>
@@ -32,60 +21,25 @@ const verdictPanelClass: Readonly<
   deny: "border-rose-400/30 bg-rose-400/10 text-rose-100",
 };
 
-const developmentProcessSteps = [
-  {
-    title: "Вы описываете фичу",
-    description:
-      "Например: добавить управление разработкой через Telegram.",
-  },
-  {
-    title: "Система составляет план",
-    description:
-      "Определяет связанные файлы, зависимости, риски и проверки.",
-  },
-  {
-    title: "Правила проверяют следующий этап",
-    description:
-      "Незавершённые зависимости, конфликты файлов и опасные пути блокируются.",
-  },
-  {
-    title: "Owner принимает решение",
-    description:
-      "Безопасный этап можно передать дальше, а рискованный требует подтверждения.",
-  },
-] as const;
+// AI-038.6 L10N-2: all copy comes from lib/i18n/prototype-pages (devPlan); the simulator, its demo
+// data and the domain decisions are unchanged. Ids, paths, reason codes and raw contract messages are
+// shown as they are.
+type PlanCopy = PrototypePages["devPlan"];
 
-const planStatusLabels = {
-  draft: "Черновик",
-  awaiting_approval: "Ожидает утверждения",
-  approved: "Утверждён",
-  in_progress: "В работе",
-  blocked: "Заблокирован",
-  completed: "Завершён",
-  cancelled: "Отменён",
-} as const;
-
-const riskLabels = {
-  low: "низкий",
-  medium: "средний",
-  high: "высокий",
-  critical: "критический",
-} as const;
-
-function BooleanValue({ value }: { value: boolean }) {
+function BooleanValue({ value, c }: { value: boolean; c: PlanCopy }) {
   return (
     <span className={value ? "text-emerald-300" : "text-slate-400"}>
-      {value ? "Да" : "Нет"}
+      {value ? c.yes : c.no}
     </span>
   );
 }
 
 function TokenList({
   values,
-  emptyLabel = "нет",
+  emptyLabel,
 }: {
   values: readonly string[];
-  emptyLabel?: string;
+  emptyLabel: string;
 }) {
   if (values.length === 0) {
     return <span className="text-sm text-slate-500">{emptyLabel}</span>;
@@ -105,20 +59,21 @@ function TokenList({
   );
 }
 
-function TaskCard({ task }: { task: DevelopmentTask }) {
+function TaskCard({ task, c }: { task: DevelopmentTask; c: PlanCopy }) {
+  const tasks = c.tasks as Readonly<Record<string, string>>;
   return (
     <article className="min-w-0 rounded-lg border border-slate-800 bg-slate-900/50 p-4">
       <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-            Порядок в плане: {task.sequence}
+            {format(c.orderInPlan, { n: task.sequence })}
           </p>
           <h4 className="mt-1 break-words text-sm font-semibold text-slate-100">
-            {task.title}
+            {tasks[task.id] ?? task.title}
           </h4>
         </div>
         <div className="flex flex-wrap gap-2">
-          <StatusBadge tone="info">приоритет: {task.priority}</StatusBadge>
+          <StatusBadge tone="info">{format(c.priority, { value: task.priority })}</StatusBadge>
           <StatusBadge
             tone={
               task.riskLevel === "high" || task.riskLevel === "critical"
@@ -126,7 +81,7 @@ function TaskCard({ task }: { task: DevelopmentTask }) {
                 : "neutral"
             }
           >
-            риск: {riskLabels[task.riskLevel]}
+            {format(c.risk, { value: c.riskLevels[task.riskLevel] })}
           </StatusBadge>
         </div>
       </div>
@@ -134,26 +89,26 @@ function TaskCard({ task }: { task: DevelopmentTask }) {
       <dl className="mt-4 min-w-0 space-y-3 text-sm">
         <div>
           <dt className="text-xs font-medium text-slate-500">
-            Что должно быть готово до начала
+            {c.dependsOn}
           </dt>
           <dd className="mt-1">
-            <TokenList values={task.dependencyIds} />
+            <TokenList emptyLabel={c.none} values={task.dependencyIds} />
           </dd>
         </div>
         <div>
           <dt className="text-xs font-medium text-slate-500">
-            Какие файлы может менять агент
+            {c.agentFiles}
           </dt>
           <dd className="mt-1">
-            <TokenList values={task.allowedPaths} />
+            <TokenList emptyLabel={c.none} values={task.allowedPaths} />
           </dd>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <dt className="text-xs font-medium text-slate-500">
-            Нужно отдельное решение Owner:
+            {c.ownerDecisionNeeded}
           </dt>
           <dd className="text-sm">
-            <BooleanValue value={task.requiresOwnerApproval} />
+            <BooleanValue c={c} value={task.requiresOwnerApproval} />
           </dd>
         </div>
       </dl>
@@ -161,7 +116,9 @@ function TaskCard({ task }: { task: DevelopmentTask }) {
   );
 }
 
-export function DevelopmentPlanSimulator() {
+export function DevelopmentPlanSimulator({ copy: c }: { copy: PlanCopy }) {
+  const tasks = c.tasks as Readonly<Record<string, string>>;
+  const scenarioText = c.scenarios as Readonly<Record<string, readonly string[]>>;
   const initialScenario = developmentPlanDemoScenarios[0];
   const [scenarioId, setScenarioId] =
     useState<DevelopmentPlanDemoScenarioId>(initialScenario.id);
@@ -190,31 +147,29 @@ export function DevelopmentPlanSimulator() {
   return (
     <div className="min-w-0 space-y-6">
       <SectionCard
-        title="Как будет работать модуль разработки"
-        description="В рабочей версии вы описываете фичу обычными словами. Система изучает репозиторий, разделяет работу на небольшие задачи, проверяет их порядок и безопасность, а затем предлагает следующий разрешённый этап."
+        title={c.howTitle}
+        description={c.howDescription}
       >
         <ol className="grid min-w-0 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          {developmentProcessSteps.map((step, index) => (
+          {c.steps.map(([title, description], index) => (
             <li
               className="min-w-0 rounded-lg border border-slate-800 bg-slate-900/50 p-4"
-              key={step.title}
+              key={title}
             >
               <span className="inline-flex size-8 items-center justify-center rounded-full border border-cyan-400/40 bg-cyan-400/10 text-sm font-semibold text-cyan-200">
                 {index + 1}
               </span>
               <h3 className="mt-3 text-sm font-semibold text-slate-100">
-                {step.title}
+                {title}
               </h3>
               <p className="mt-2 text-xs leading-5 text-slate-400">
-                {step.description}
+                {description}
               </p>
             </li>
           ))}
         </ol>
         <p className="mt-5 rounded-lg border border-cyan-400/30 bg-cyan-400/10 p-4 text-sm leading-6 text-cyan-100">
-          На этой странице используется готовый демонстрационный план. Ввод
-          собственной фичи и запуск агентов будут подключены на следующих
-          этапах.
+          {c.demoPlanNote}
         </p>
       </SectionCard>
 
@@ -226,22 +181,20 @@ export function DevelopmentPlanSimulator() {
           className="text-sm font-semibold text-fuchsia-100"
           id="development-plan-instruction-title"
         >
-          Что сделать сейчас
+          {c.nowTitle}
         </h2>
         <p className="mt-2 text-sm leading-6 text-fuchsia-100/80">
-          Выберите один из примеров ниже и посмотрите, какое решение примет
-          система. В реальной работе эти ситуации будут определяться
-          автоматически.
+          {c.nowBody}
         </p>
       </section>
 
       <SectionCard
-        title="Примеры решений системы"
-        description="Это готовые примеры для знакомства с правилами безопасности. Пользователю не придётся выбирать такие режимы при реальной разработке."
+        title={c.examplesTitle}
+        description={c.examplesDescription}
       >
         <fieldset className="min-w-0">
           <legend className="sr-only">
-            Выбор готового примера решения системы
+            {c.examplesLegend}
           </legend>
           <div className="grid min-w-0 gap-3 sm:grid-cols-2 xl:grid-cols-5">
             {developmentPlanDemoScenarios.map((scenario) => {
@@ -263,15 +216,15 @@ export function DevelopmentPlanSimulator() {
                     />
                     <span className="min-w-0">
                       <span className="block break-words text-sm font-semibold text-slate-100">
-                        {scenario.title}
+                        {scenarioText[scenario.id]?.[0] ?? scenario.title}
                       </span>
                       <span className="mt-1 block text-xs leading-5 text-slate-500">
-                        {scenario.description}
+                        {scenarioText[scenario.id]?.[1] ?? scenario.description}
                       </span>
                     </span>
                   </span>
                   <span className="mt-3 text-xs font-medium text-cyan-200">
-                    {selected ? "Пример выбран" : "Посмотреть пример"}
+                    {selected ? c.exampleSelected : c.viewExample}
                   </span>
                 </label>
               );
@@ -292,12 +245,12 @@ export function DevelopmentPlanSimulator() {
             />
             <span className="min-w-0">
               <span className="block text-sm font-semibold text-amber-100">
-                Подтверждение Owner предоставлено
+                {c.ownerApproved}
               </span>
               <span className="mt-1 block text-xs leading-5 text-amber-100/70">
                 {scenarioId === "forbidden-active-path"
-                  ? "Проверка deny-by-default: подтверждение Owner не может разрешить системно запрещённый путь."
-                  : "Локальный переключатель повторно проверяет пример и ничего не сохраняет."}
+                  ? c.denyByDefaultNote
+                  : c.toggleNote}
               </span>
             </span>
           </label>
@@ -307,65 +260,65 @@ export function DevelopmentPlanSimulator() {
       <div className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <SectionCard
           className="min-w-0"
-          title="Пример плана фичи"
-          description="Готовый учебный план, на котором система показывает свои решения."
-          action={<StatusBadge tone="success">план проверен</StatusBadge>}
+          title={c.planTitle}
+          description={c.planDescription}
+          action={<StatusBadge tone="success">{c.planVerified}</StatusBadge>}
         >
           <dl className="min-w-0 space-y-4 text-sm">
             <div>
-              <dt className="text-xs font-medium text-slate-500">Фича</dt>
+              <dt className="text-xs font-medium text-slate-500">{c.feature}</dt>
               <dd className="mt-1 font-semibold text-slate-100">
-                {result.plan.title}
+                {result.plan.id === "development-plan-simulator" ? c.planText[0] : result.plan.title}
               </dd>
             </div>
             <div>
-              <dt className="text-xs font-medium text-slate-500">Цель</dt>
+              <dt className="text-xs font-medium text-slate-500">{c.goal}</dt>
               <dd className="mt-1 leading-6 text-slate-300">
-                {result.plan.goal}
+                {result.plan.id === "development-plan-simulator" ? c.planText[1] : result.plan.goal}
               </dd>
             </div>
             <div className="grid min-w-0 gap-3 sm:grid-cols-3">
               <div className="rounded-lg border border-slate-800 bg-slate-900/40 p-3">
-                <dt className="text-xs text-slate-500">Статус</dt>
+                <dt className="text-xs text-slate-500">{c.status}</dt>
                 <dd className="mt-1 text-slate-200">
-                  {planStatusLabels[result.plan.status]}
+                  {c.planStatus[result.plan.status]}
                 </dd>
               </div>
               <div className="rounded-lg border border-slate-800 bg-slate-900/40 p-3">
-                <dt className="text-xs text-slate-500">Этапов в плане</dt>
+                <dt className="text-xs text-slate-500">{c.stagesInPlan}</dt>
                 <dd className="mt-1 text-slate-200">
                   {result.plan.tasks.length}
                 </dd>
               </div>
               <div className="min-w-0 rounded-lg border border-slate-800 bg-slate-900/40 p-3">
-                <dt className="text-xs text-slate-500">Проверяемый этап</dt>
+                <dt className="text-xs text-slate-500">{c.checkedStage}</dt>
                 <dd className="mt-1 break-words text-slate-200">
-                  {selectedTask?.title ?? result.input.taskId}
+                  {selectedTask ? (tasks[selectedTask.id] ?? selectedTask.title) : result.input.taskId}
                 </dd>
               </div>
             </div>
             <div>
               <dt className="text-xs font-medium text-slate-500">
-                Что уже завершено
+                {c.alreadyCompleted}
               </dt>
               <dd className="mt-2">
-                <TokenList values={result.input.completedTaskIds} />
+                <TokenList emptyLabel={c.none} values={result.input.completedTaskIds} />
               </dd>
             </div>
             <div>
               <dt className="text-xs font-medium text-slate-500">
-                Что выполняется сейчас
+                {c.runningNow}
               </dt>
               <dd className="mt-2">
-                <TokenList values={result.input.activeTaskIds} />
+                <TokenList emptyLabel={c.none} values={result.input.activeTaskIds} />
               </dd>
             </div>
             <div>
               <dt className="text-xs font-medium text-slate-500">
-                Какие файлы разрешено изменять
+                {c.allowedFiles}
               </dt>
               <dd className="mt-2">
-                <TokenList values={result.input.repositoryAllowlist} />
+                <TokenList emptyLabel={c.none} values={result.input.repositoryAllowlist} />
               </dd>
             </div>
           </dl>
@@ -373,8 +326,8 @@ export function DevelopmentPlanSimulator() {
 
         <SectionCard
           className="min-w-0"
-          title="Можно ли переходить к следующему этапу?"
-          description="Система проверяет, можно ли безопасно передать этот этап дальше."
+          title={c.decisionTitle}
+          description={c.decisionDescription}
         >
           <div className="min-w-0 space-y-4">
             <div
@@ -382,20 +335,20 @@ export function DevelopmentPlanSimulator() {
               className={`rounded-lg border p-5 ${verdictPanelClass[result.decision.verdict]}`}
             >
               <p className="text-xs font-semibold uppercase tracking-[0.18em] opacity-70">
-                Решение системы
+                {c.systemDecision}
               </p>
               <p className="mt-2 text-xl font-semibold leading-7">
-                {developmentPlanDemoVerdictLabels[result.decision.verdict]}
+                {c.verdicts[result.decision.verdict]}
               </p>
               <p className="mt-3 text-sm leading-6 opacity-80">
-                {verdictExplanations[result.decision.verdict]}
+                {c.verdictExplanations[result.decision.verdict]}
               </p>
             </div>
 
             {result.decision.reasons.length > 0 ? (
               <div>
                 <h3 className="text-sm font-semibold text-slate-100">
-                  Причины решения
+                  {c.reasonsTitle}
                 </h3>
                 <ul className="mt-3 min-w-0 space-y-3">
                   {result.decision.reasons.map((reason, index) => (
@@ -404,7 +357,7 @@ export function DevelopmentPlanSimulator() {
                       key={`${reason.code}-${reason.path}-${reason.relatedTaskId ?? "none"}-${index}`}
                     >
                       <p className="text-sm leading-6 text-slate-200">
-                        {developmentPlanDemoReasonLabels[reason.code]}
+                        {c.reasons[reason.code]}
                       </p>
                     </li>
                   ))}
@@ -412,18 +365,18 @@ export function DevelopmentPlanSimulator() {
               </div>
             ) : (
               <p className="rounded-lg border border-emerald-400/30 bg-emerald-400/10 p-4 text-sm leading-6 text-emerald-100">
-                Блокирующие причины отсутствуют.
+                {c.noBlocking}
               </p>
             )}
 
             <details className="group min-w-0 rounded-lg border border-slate-800 bg-slate-900/40">
               <summary className="cursor-pointer rounded-lg px-4 py-3 text-sm font-medium text-slate-300 marker:text-cyan-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/60">
-                Технические подробности решения
+                {c.technicalTitle}
               </summary>
               <div className="min-w-0 space-y-4 border-t border-slate-800 p-4">
                 <div>
                   <p className="text-xs font-medium text-slate-500">
-                    Каноническое значение решения
+                    {c.canonicalVerdict}
                   </p>
                   <code className="mt-1 block break-all text-sm font-semibold text-slate-200">
                     {result.decision.verdict}
@@ -438,7 +391,7 @@ export function DevelopmentPlanSimulator() {
                         key={`${reason.code}-${reason.path}-${reason.relatedTaskId ?? "none"}-technical-${index}`}
                       >
                         <div>
-                          <dt className="text-slate-500">Код причины</dt>
+                          <dt className="text-slate-500">{c.reasonCode}</dt>
                           <dd>
                             <code className="break-all text-rose-200">
                               {reason.code}
@@ -446,14 +399,14 @@ export function DevelopmentPlanSimulator() {
                           </dd>
                         </div>
                         <div>
-                          <dt className="text-slate-500">Исходное сообщение</dt>
+                          <dt className="text-slate-500">{c.rawMessage}</dt>
                           <dd className="break-words leading-5 text-slate-300">
                             {reason.message}
                           </dd>
                         </div>
                         {reason.path && (
                           <div>
-                            <dt className="text-slate-500">Путь проверки</dt>
+                            <dt className="text-slate-500">{c.checkPath}</dt>
                             <dd>
                               <code className="break-all text-slate-300">
                                 {reason.path}
@@ -464,7 +417,7 @@ export function DevelopmentPlanSimulator() {
                         {reason.relatedTaskId && (
                           <div>
                             <dt className="text-slate-500">
-                              Связанная задача
+                              {c.relatedTask}
                             </dt>
                             <dd>
                               <code className="break-all text-slate-300">
@@ -481,40 +434,44 @@ export function DevelopmentPlanSimulator() {
                 <dl className="grid min-w-0 gap-3 sm:grid-cols-2">
                   <div className="min-w-0 rounded-lg border border-slate-800 bg-slate-950/40 p-3">
                     <dt className="text-xs text-slate-500">
-                      Нормализованные пути
+                      {c.normalizedPaths}
                     </dt>
                     <dd className="mt-2">
                       <TokenList
+                        emptyLabel={c.none}
                         values={result.decision.normalizedAllowedPaths}
                       />
                     </dd>
                   </div>
                   <div className="min-w-0 rounded-lg border border-slate-800 bg-slate-950/40 p-3">
                     <dt className="text-xs text-slate-500">
-                      Конфликтующие задачи
+                      {c.conflictingTasks}
                     </dt>
                     <dd className="mt-2">
                       <TokenList
+                        emptyLabel={c.none}
                         values={result.decision.conflictingTaskIds}
                       />
                     </dd>
                   </div>
                   <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
                     <dt className="text-xs text-slate-500">
-                      Подтверждение Owner требуется
+                      {c.approvalRequired}
                     </dt>
                     <dd className="mt-1 text-sm">
                       <BooleanValue
+                        c={c}
                         value={result.decision.ownerApprovalRequired}
                       />
                     </dd>
                   </div>
                   <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
                     <dt className="text-xs text-slate-500">
-                      Подтверждение Owner учтено
+                      {c.approvalSatisfied}
                     </dt>
                     <dd className="mt-1 text-sm">
                       <BooleanValue
+                        c={c}
                         value={result.decision.ownerApprovalSatisfied}
                       />
                     </dd>
@@ -524,31 +481,30 @@ export function DevelopmentPlanSimulator() {
             </details>
 
             <div className="rounded-lg border border-fuchsia-400/30 bg-fuchsia-400/10 p-4 text-sm leading-6 text-fuchsia-100">
-              Сейчас это только демонстрация: Codex не запускается, файлы не
-              изменяются, Git-команды не выполняются.
+              {c.demoOnly}
             </div>
           </div>
         </SectionCard>
       </div>
 
       <SectionCard
-        title="Порядок выполнения этапов"
-        description="Этап 2 начинается после необходимых результатов этапа 1. Независимые задачи могут находиться на одном уровне, но конфликтующие файлы всё равно блокируют параллельную работу."
+        title={c.orderTitle}
+        description={c.orderDescription}
       >
         <div className="min-w-0 space-y-5">
           {result.waves.map((wave, index) => (
             <section className="min-w-0" key={`wave-${index + 1}`}>
               <div className="mb-3 flex flex-wrap items-center gap-3">
                 <h3 className="text-sm font-semibold text-slate-100">
-                  Этап {index + 1}
+                  {format(c.stageTitle, { n: index + 1 })}
                 </h3>
                 <StatusBadge tone="neutral">
-                  этапов на уровне: {wave.length}
+                  {format(c.stagesAtLevel, { n: wave.length })}
                 </StatusBadge>
               </div>
               <div className="grid min-w-0 gap-3 md:grid-cols-2">
                 {wave.map((task) => (
-                  <TaskCard key={task.id} task={task} />
+                  <TaskCard c={c} key={task.id} task={task} />
                 ))}
               </div>
             </section>

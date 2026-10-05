@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { createContext, useContext, useMemo, useState } from "react";
 
 import { SectionCard } from "@/components/ui/section-card";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -15,14 +15,32 @@ import {
   type ProjectOperationsRunningRow,
   type ProjectOperationsScope,
 } from "@/lib/project-operations-demo";
+import { format } from "@/lib/i18n/locale";
+import type { PrototypePages } from "@/lib/i18n/prototype-pages";
 import type { StatusTone } from "@/types/app";
 
+// AI-038.6 L10N-1: the English UI remnants of this Russian-native page are localized; the labels come
+// from the server dictionary (lib/i18n/prototype-pages) through the page. Technical identifiers
+// (reason.code, projectId, bindingId, maxConcurrentRuns…) stay as they are.
+type OperationsLabels = PrototypePages["operations"];
+const LabelsContext = createContext<OperationsLabels | null>(null);
+// Owner-facing blocked message by canonical reason code (the code itself is shown under technical data).
+function ownerMessage(l: OperationsLabels, code: string): string {
+  return (l.ownerMessages as Readonly<Record<string, string>>)[code] ?? l.ownerMessages.fallback;
+}
+
+function useLabels(): OperationsLabels {
+  const labels = useContext(LabelsContext);
+  if (!labels) throw new Error("Operations labels are missing.");
+  return labels;
+}
+
 const sections = [
-  { id: "overview", label: "Обзор" },
-  { id: "departments", label: "Отделы" },
-  { id: "agents", label: "Агенты" },
-  { id: "workflows", label: "Workflows" },
-  { id: "runs", label: "Очередь и запуски" },
+  { id: "overview" },
+  { id: "departments" },
+  { id: "agents" },
+  { id: "workflows" },
+  { id: "runs" },
 ] as const;
 
 type SectionId = (typeof sections)[number]["id"];
@@ -30,24 +48,6 @@ type RunRow =
   | ProjectOperationsQueueRow
   | ProjectOperationsRunningRow
   | ProjectOperationsDispatchRow;
-
-const statusLabels = {
-  active: "Активен",
-  draft: "Draft",
-  paused: "Приостановлен",
-  archived: "Архив",
-} as const;
-
-const bindingKindLabels = {
-  agent: "Agent",
-  workflow: "Workflow",
-} as const;
-
-const runStatusLabels = {
-  running: "Running now",
-  planned: "Запланирован",
-  blocked: "Остаётся в очереди",
-} as const;
 
 function Metric({
   label,
@@ -94,6 +94,8 @@ function BindingCard({
   row: ProjectOperationsBindingRow;
   kind: "Agent" | "Workflow";
 }>) {
+  const l = useLabels();
+  const kindLabel = kind === "Agent" ? l.agent : l.workflow;
   return (
     <article className="min-w-0 rounded-xl border border-slate-800 bg-slate-900/45 p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -106,20 +108,20 @@ function BindingCard({
           </h3>
         </div>
         <StatusBadge tone={row.status === "active" ? "success" : "warning"}>
-          {kind} · {row.status}
+          {kindLabel} · {l.statuses[row.status as keyof OperationsLabels["statuses"]] ?? row.status}
         </StatusBadge>
       </div>
       <dl className="mt-4 grid min-w-0 gap-3 text-sm sm:grid-cols-2">
         <div className="min-w-0">
-          <dt className="text-xs text-slate-500">Binding</dt>
+          <dt className="text-xs text-slate-500">{l.binding}</dt>
           <dd className="mt-1"><Identifier>{row.bindingId}</Identifier></dd>
         </div>
         <div>
-          <dt className="text-xs text-slate-500">Concurrency ceiling</dt>
+          <dt className="text-xs text-slate-500">{l.concurrencyCeiling}</dt>
           <dd className="mt-1 text-slate-200">{row.effectiveMaxConcurrentRuns}</dd>
         </div>
         <div className="min-w-0 sm:col-span-2">
-          <dt className="text-xs text-slate-500">Model Profiles</dt>
+          <dt className="text-xs text-slate-500">{l.modelProfiles}</dt>
           <dd className="mt-1 flex min-w-0 flex-wrap gap-2">
             {row.modelProfileIds.map((modelId) => (
               <Identifier key={modelId}>{modelId}</Identifier>
@@ -139,6 +141,8 @@ function RunCard({
   tone: StatusTone;
 }>) {
   const identifier = "runId" in row ? row.runId : row.requestId;
+  const l = useLabels();
+  const runLabel = l.runStatus[row.factualStatus];
   return (
     <article className="min-w-0 rounded-xl border border-slate-800 bg-slate-900/45 p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -150,20 +154,20 @@ function RunCard({
         </div>
         <div className="flex flex-wrap gap-2">
           <StatusBadge tone="info">{row.priority}</StatusBadge>
-          <StatusBadge tone={tone}>{runStatusLabels[row.factualStatus]}</StatusBadge>
+          <StatusBadge tone={tone}>{runLabel}</StatusBadge>
         </div>
       </div>
       <dl className="mt-4 grid min-w-0 gap-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
         <div className="min-w-0">
-          <dt className="text-xs text-slate-500">{bindingKindLabels[row.bindingKind]}</dt>
+          <dt className="text-xs text-slate-500">{row.bindingKind === "agent" ? l.agent : l.workflow}</dt>
           <dd className="mt-1 break-all text-slate-200">{row.subjectId}</dd>
         </div>
         <div className="min-w-0">
-          <dt className="text-xs text-slate-500">Binding</dt>
+          <dt className="text-xs text-slate-500">{l.binding}</dt>
           <dd className="mt-1"><Identifier>{row.bindingId}</Identifier></dd>
         </div>
         <div className="min-w-0">
-          <dt className="text-xs text-slate-500">Model Profile</dt>
+          <dt className="text-xs text-slate-500">{l.modelProfile}</dt>
           <dd className="mt-1"><Identifier>{row.modelProfileId}</Identifier></dd>
         </div>
       </dl>
@@ -172,34 +176,35 @@ function RunCard({
 }
 
 function Overview({ view }: Readonly<{ view: AvailableProjectOperationsView }>) {
+  const l = useLabels();
   return (
     <div className="grid min-w-0 gap-4 lg:grid-cols-2">
       <SectionCard
-        title="Фактическое решение Scheduler"
-        description="Decision вычислен один раз по полному Workspace state до применения UI-фильтра."
+        title={l.schedulerDecision}
+        description={l.schedulerDecisionDescription}
       >
         <dl className="grid gap-3 sm:grid-cols-2">
-          <Metric label="Verdict" value={view.summary.schedulerVerdict} />
-          <Metric label="Status" value={view.summary.schedulerStatus} />
+          <Metric label={l.verdict} value={view.summary.schedulerVerdict} />
+          <Metric label={l.status} value={view.summary.schedulerStatus} />
           <Metric
-            label="Last cursor"
-            value={view.summary.lastRoundRobinProjectId ?? "не задан"}
+            label={l.lastCursor}
+            value={view.summary.lastRoundRobinProjectId ?? l.notSet}
           />
           <Metric
-            label="Next cursor"
-            value={view.summary.nextRoundRobinProjectId ?? "не задан"}
+            label={l.nextCursor}
+            value={view.summary.nextRoundRobinProjectId ?? l.notSet}
           />
         </dl>
       </SectionCard>
       <SectionCard
-        title="Границы Operations Center"
-        description="Workspace → Project → Department → Agent / Workflow → Run"
+        title={l.boundariesTitle}
+        description={l.hierarchy}
       >
         <ul className="space-y-3 text-sm leading-6 text-slate-300">
-          <li>Project scope группирует данные, но не управляет runtime.</li>
-          <li>Running и queued rows остаются разными фактическими состояниями.</li>
-          <li>Blocked reasons получены из полного AI‑017 dispatch plan.</li>
-          <li>Publish, send, deploy и реальные model calls отсутствуют.</li>
+          <li>{l.scopeNote}</li>
+          <li>{l.rowsNote}</li>
+          <li>{l.blockedNote}</li>
+          <li>{l.noActionsNote}</li>
         </ul>
       </SectionCard>
     </div>
@@ -207,7 +212,8 @@ function Overview({ view }: Readonly<{ view: AvailableProjectOperationsView }>) 
 }
 
 function Departments({ view }: Readonly<{ view: AvailableProjectOperationsView }>) {
-  if (view.departments.length === 0) return <EmptyState>В выбранном scope нет отделов.</EmptyState>;
+  const l = useLabels();
+  if (view.departments.length === 0) return <EmptyState>{l.noDepartments}</EmptyState>;
   return (
     <div className="grid min-w-0 gap-4 md:grid-cols-2 xl:grid-cols-3">
       {view.departments.map((row) => (
@@ -222,15 +228,15 @@ function Departments({ view }: Readonly<{ view: AvailableProjectOperationsView }
               <div className="mt-1"><Identifier>{row.departmentId}</Identifier></div>
             </div>
             <StatusBadge tone={row.status === "active" ? "success" : "warning"}>
-              {row.status}
+              {l.statuses[row.status as keyof OperationsLabels["statuses"]] ?? row.status}
             </StatusBadge>
           </div>
           <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
-            <div><dt className="text-xs text-slate-500">Code</dt><dd className="mt-1 text-slate-200">{row.code}</dd></div>
-            <div><dt className="text-xs text-slate-500">Mode</dt><dd className="mt-1 break-words text-slate-200">{row.operatingMode}</dd></div>
-            <div><dt className="text-xs text-slate-500">Agents</dt><dd className="mt-1 text-slate-200">{row.agentsCount}</dd></div>
-            <div><dt className="text-xs text-slate-500">Workflows</dt><dd className="mt-1 text-slate-200">{row.workflowsCount}</dd></div>
-            <div className="col-span-2"><dt className="text-xs text-slate-500">Effective maxConcurrentRuns</dt><dd className="mt-1 text-slate-200">{row.effectiveMaxConcurrentRuns}</dd></div>
+            <div><dt className="text-xs text-slate-500">{l.code}</dt><dd className="mt-1 text-slate-200">{row.code}</dd></div>
+            <div><dt className="text-xs text-slate-500">{l.mode}</dt><dd className="mt-1 break-words text-slate-200">{row.operatingMode}</dd></div>
+            <div><dt className="text-xs text-slate-500">{l.agents}</dt><dd className="mt-1 text-slate-200">{row.agentsCount}</dd></div>
+            <div><dt className="text-xs text-slate-500">{l.workflows}</dt><dd className="mt-1 text-slate-200">{row.workflowsCount}</dd></div>
+            <div className="col-span-2"><dt className="text-xs text-slate-500">{l.effectiveMax}</dt><dd className="mt-1 text-slate-200">{row.effectiveMaxConcurrentRuns}</dd></div>
           </dl>
         </article>
       ))}
@@ -245,7 +251,8 @@ function Bindings({
   rows: readonly ProjectOperationsBindingRow[];
   kind: "Agent" | "Workflow";
 }>) {
-  if (rows.length === 0) return <EmptyState>В выбранном scope нет {kind} bindings.</EmptyState>;
+  const l = useLabels();
+  if (rows.length === 0) return <EmptyState>{format(l.noBindings, { kind: kind === "Agent" ? l.agent : l.workflow })}</EmptyState>;
   return (
     <div className="grid min-w-0 gap-4 md:grid-cols-2 xl:grid-cols-3">
       {rows.map((row) => (
@@ -257,30 +264,31 @@ function Bindings({
 
 function Runs({ view }: Readonly<{ view: AvailableProjectOperationsView }>) {
   const retained = view.queued.filter((row) => row.factualStatus === "blocked");
+  const l = useLabels();
   return (
     <div className="min-w-0 space-y-6">
-      <SectionCard title="Running now" description="Только фактические runningRuns общего Workspace state.">
+      <SectionCard title={l.runningNow} description={l.runningDescription}>
         <div className="grid min-w-0 gap-3 lg:grid-cols-2">
           {view.running.length > 0
             ? view.running.map((row) => <RunCard key={row.runId} row={row} tone="success" />)
-            : <EmptyState>Сейчас нет running runs в выбранном scope.</EmptyState>}
+            : <EmptyState>{l.noRunning}</EmptyState>}
         </div>
       </SectionCard>
-      <SectionCard title="Planned dispatches" description="Заявки, выбранные фактическим AI‑017 plan.">
+      <SectionCard title={l.plannedDispatches} description={l.plannedDescription}>
         <div className="grid min-w-0 gap-3 lg:grid-cols-2">
           {view.dispatches.length > 0
             ? view.dispatches.map((row) => <RunCard key={row.requestId} row={row} tone="info" />)
-            : <EmptyState>Нет planned dispatches в выбранном scope.</EmptyState>}
+            : <EmptyState>{l.noPlanned}</EmptyState>}
         </div>
       </SectionCard>
-      <SectionCard title="Queued / retained" description="Заявки, которые Scheduler сохранил в очереди.">
+      <SectionCard title={l.queuedRetained} description={l.queuedDescription}>
         <div className="grid min-w-0 gap-3 lg:grid-cols-2">
           {retained.length > 0
             ? retained.map((row) => <RunCard key={row.requestId} row={row} tone="warning" />)
-            : <EmptyState>Нет retained requests в выбранном scope.</EmptyState>}
+            : <EmptyState>{l.noRetained}</EmptyState>}
         </div>
       </SectionCard>
-      <SectionCard title="Blocked reasons" description="Owner-facing объяснение и фактические технические diagnostics.">
+      <SectionCard title={l.blockedReasons} description={l.blockedDescription}>
         <div className="min-w-0 space-y-3">
           {view.blocked.length > 0
             ? view.blocked.map((row: ProjectOperationsBlockedRow) => (
@@ -290,14 +298,14 @@ function Runs({ view }: Readonly<{ view: AvailableProjectOperationsView }>) {
                       <p className="text-xs text-slate-500">{row.projectName} · {row.departmentName}</p>
                       <div className="mt-1"><Identifier>{row.requestId}</Identifier></div>
                     </div>
-                    <StatusBadge tone="warning">Остаётся в очереди</StatusBadge>
+                    <StatusBadge tone="warning">{l.remainsQueued}</StatusBadge>
                   </div>
                   <ul className="mt-3 space-y-2 text-sm leading-6 text-amber-100/90">
-                    {row.reasons.map((reason) => <li key={`${reason.code}:${reason.path}`}>{reason.ownerMessage}</li>)}
+                    {row.reasons.map((reason) => <li key={`${reason.code}:${reason.path}`}>{ownerMessage(l, reason.code)}</li>)}
                   </ul>
                   <details className="mt-4 rounded-lg border border-slate-800 bg-slate-950/60 p-3">
                     <summary className="cursor-pointer text-sm font-medium text-slate-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/40">
-                      Технические данные
+                      {l.technicalData}
                     </summary>
                     <div className="mt-3 space-y-3">
                       {row.reasons.map((reason) => (
@@ -313,14 +321,23 @@ function Runs({ view }: Readonly<{ view: AvailableProjectOperationsView }>) {
                   </details>
                 </article>
               ))
-            : <EmptyState>Нет blocked reasons в выбранном scope.</EmptyState>}
+            : <EmptyState>{l.noBlocked}</EmptyState>}
         </div>
       </SectionCard>
     </div>
   );
 }
 
-export function ProjectOperationsCenter() {
+export function ProjectOperationsCenter({ labels }: Readonly<{ labels: OperationsLabels }>) {
+  return (
+    <LabelsContext.Provider value={labels}>
+      <OperationsCenterBody />
+    </LabelsContext.Provider>
+  );
+}
+
+function OperationsCenterBody() {
+  const l = useLabels();
   const [demo] = useState(createProjectOperationsDemo);
   const [scope, setScope] = useState<ProjectOperationsScope>({ kind: "workspace" });
   const [activeSection, setActiveSection] = useState<SectionId>("overview");
@@ -331,8 +348,8 @@ export function ProjectOperationsCenter() {
       : [];
   const scopeLabel =
     scope.kind === "workspace"
-      ? "Все проекты"
-      : scopeProjects.find((project) => project.projectId === scope.projectId)?.name ?? "Недоступный проект";
+      ? l.allProjects
+      : scopeProjects.find((project) => project.projectId === scope.projectId)?.name ?? l.unavailableProject;
 
   function selectScope(nextScope: ProjectOperationsScope) {
     setScope(nextScope);
@@ -342,10 +359,10 @@ export function ProjectOperationsCenter() {
   return (
     <div className="min-w-0 space-y-6" data-testid="project-operations-center">
       <SectionCard
-        title="Project scope"
-        description="Выберите Workspace или точный Project Context для отображения."
+        title={l.projectScope}
+        description={l.scopeDescription}
       >
-        <div className="flex min-w-0 flex-wrap gap-2" role="group" aria-label="Project scope">
+        <div className="flex min-w-0 flex-wrap gap-2" role="group" aria-label={l.projectScope}>
           <button
             aria-pressed={scope.kind === "workspace"}
             className={`rounded-lg border px-3 py-2 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/50 ${scope.kind === "workspace" ? "border-cyan-400/50 bg-cyan-400/10 text-cyan-100" : "border-slate-700 bg-slate-900/60 text-slate-300 hover:border-slate-600"}`}
@@ -353,7 +370,7 @@ export function ProjectOperationsCenter() {
             onClick={() => selectScope({ kind: "workspace" })}
             type="button"
           >
-            Все проекты
+            {l.allProjects}
           </button>
           {scopeProjects.map((project) => (
             <button
@@ -369,21 +386,21 @@ export function ProjectOperationsCenter() {
           ))}
         </div>
         <p className="mt-4 rounded-lg border border-cyan-500/20 bg-cyan-500/5 px-4 py-3 text-sm leading-6 text-cyan-100/90">
-          Переключатель меняет только отображение. Scheduler продолжает учитывать все активные проекты, общую очередь и общие лимиты.
+          {l.scopeSwitchNote}
         </p>
         <p className="mt-3 text-sm text-slate-400" aria-live="polite" data-testid="scope-context">
-          Workspace → <span className="font-medium text-slate-200">{scopeLabel}</span>
+          {l.scopeRoot} → <span className="font-medium text-slate-200">{scopeLabel}</span>
         </p>
       </SectionCard>
 
       <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-sm leading-6 text-amber-100/90" role="note">
-        Данные демонстрационные и хранятся только в памяти страницы. Внешние действия, persistence и реальные model/workflow execution отсутствуют.
+        {l.demoNote}
       </div>
 
       {!view.available ? (
-        <SectionCard title={view.title} description="Fail-closed: частичные данные и fallback project не показываются.">
+        <SectionCard title={l.unavailableTitles[view.title as keyof OperationsLabels["unavailableTitles"]] ?? view.title} description={l.failClosed}>
           <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 p-4">
-            <StatusBadge tone="danger">Недоступно</StatusBadge>
+            <StatusBadge tone="danger">{l.unavailable}</StatusBadge>
             <div className="mt-4 space-y-3">
               {view.reasons.map((reason) => (
                 <dl className="grid min-w-0 gap-2 text-xs sm:grid-cols-2" key={`${reason.source}:${reason.code}:${reason.path}`}>
@@ -398,22 +415,22 @@ export function ProjectOperationsCenter() {
         <>
           <section aria-labelledby="operations-totals" className="min-w-0">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-              <h2 className="text-base font-semibold text-slate-100" id="operations-totals">{view.totalsLabel}</h2>
+              <h2 className="text-base font-semibold text-slate-100" id="operations-totals">{view.totalsLabel === "Workspace totals" ? l.workspaceTotals : l.projectTotals}</h2>
               <StatusBadge tone={view.summary.schedulerVerdict === "allow" ? "success" : "danger"}>
-                Scheduler {view.summary.schedulerVerdict}
+                {format(l.schedulerBadge, { verdict: view.summary.schedulerVerdict })}
               </StatusBadge>
             </div>
             <dl className="grid min-w-0 gap-3 sm:grid-cols-2 xl:grid-cols-5">
-              <Metric label="Проекты" value={view.summary.projects} />
-              <Metric label="Queued" value={view.summary.queued} />
-              <Metric label="Running" value={view.summary.running} />
-              <Metric label="Planned" value={view.summary.planned} />
-              <Metric label="Blocked / retained" value={view.summary.blocked} />
+              <Metric label={l.projects} value={view.summary.projects} />
+              <Metric label={l.queued} value={view.summary.queued} />
+              <Metric label={l.running} value={view.summary.running} />
+              <Metric label={l.planned} value={view.summary.planned} />
+              <Metric label={l.blockedRetained} value={view.summary.blocked} />
             </dl>
           </section>
 
           <section aria-labelledby="visible-projects" className="min-w-0">
-            <h2 className="mb-3 text-base font-semibold text-slate-100" id="visible-projects">Проекты</h2>
+            <h2 className="mb-3 text-base font-semibold text-slate-100" id="visible-projects">{l.projects}</h2>
             <div className="grid min-w-0 gap-4 xl:grid-cols-2">
               {view.projects.map((project) => (
                 <article className="min-w-0 rounded-xl border border-slate-800 bg-slate-950/70 p-5" data-project-card={project.projectId} key={project.projectId}>
@@ -422,30 +439,30 @@ export function ProjectOperationsCenter() {
                       <h3 className="text-base font-semibold text-slate-100">{project.name}</h3>
                       <div className="mt-1"><Identifier>{project.projectId}</Identifier></div>
                     </div>
-                    <StatusBadge tone={project.status === "active" ? "success" : "warning"}>{statusLabels[project.status]}</StatusBadge>
+                    <StatusBadge tone={project.status === "active" ? "success" : "warning"}>{l.statuses[project.status as keyof OperationsLabels["statuses"]] ?? project.status}</StatusBadge>
                   </div>
                   <dl className="mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
-                    <div><dt className="text-xs text-slate-500">Departments</dt><dd className="mt-1 text-slate-200">{project.departmentsCount}</dd></div>
-                    <div><dt className="text-xs text-slate-500">Agents</dt><dd className="mt-1 text-slate-200">{project.agentsCount}</dd></div>
-                    <div><dt className="text-xs text-slate-500">Workflows</dt><dd className="mt-1 text-slate-200">{project.workflowsCount}</dd></div>
-                    <div><dt className="text-xs text-slate-500">Queued</dt><dd className="mt-1 text-slate-200">{project.queuedCount}</dd></div>
-                    <div><dt className="text-xs text-slate-500">Running</dt><dd className="mt-1 text-slate-200">{project.runningCount}</dd></div>
-                    <div><dt className="text-xs text-slate-500">Planned</dt><dd className="mt-1 text-slate-200">{project.plannedCount}</dd></div>
-                    <div><dt className="text-xs text-slate-500">Blocked</dt><dd className="mt-1 text-slate-200">{project.blockedCount}</dd></div>
+                    <div><dt className="text-xs text-slate-500">{l.departments}</dt><dd className="mt-1 text-slate-200">{project.departmentsCount}</dd></div>
+                    <div><dt className="text-xs text-slate-500">{l.agents}</dt><dd className="mt-1 text-slate-200">{project.agentsCount}</dd></div>
+                    <div><dt className="text-xs text-slate-500">{l.workflows}</dt><dd className="mt-1 text-slate-200">{project.workflowsCount}</dd></div>
+                    <div><dt className="text-xs text-slate-500">{l.queued}</dt><dd className="mt-1 text-slate-200">{project.queuedCount}</dd></div>
+                    <div><dt className="text-xs text-slate-500">{l.running}</dt><dd className="mt-1 text-slate-200">{project.runningCount}</dd></div>
+                    <div><dt className="text-xs text-slate-500">{l.planned}</dt><dd className="mt-1 text-slate-200">{project.plannedCount}</dd></div>
+                    <div><dt className="text-xs text-slate-500">{l.blocked}</dt><dd className="mt-1 text-slate-200">{project.blockedCount}</dd></div>
                   </dl>
                   <button
                     className="mt-5 rounded-lg border border-slate-700 px-3 py-2 text-sm font-medium text-slate-200 transition hover:border-cyan-400/40 hover:text-cyan-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/50"
                     onClick={() => selectScope({ kind: "project", projectId: project.projectId })}
                     type="button"
                   >
-                    Открыть контекст проекта
+                    {l.openProjectContext}
                   </button>
                 </article>
               ))}
             </div>
           </section>
 
-          <nav aria-label="Operations sections" className="flex min-w-0 flex-wrap gap-2 border-b border-slate-800 pb-3">
+          <nav aria-label={l.sectionsLabel} className="flex min-w-0 flex-wrap gap-2 border-b border-slate-800 pb-3">
             {sections.map((section) => (
               <button
                 aria-pressed={activeSection === section.id}
@@ -455,7 +472,7 @@ export function ProjectOperationsCenter() {
                 onClick={() => setActiveSection(section.id)}
                 type="button"
               >
-                {section.label}
+                {l.sections[section.id]}
               </button>
             ))}
           </nav>

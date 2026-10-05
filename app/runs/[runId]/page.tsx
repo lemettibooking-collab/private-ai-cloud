@@ -7,6 +7,8 @@ import { AppShell } from "@/components/shell/app-shell";
 import { SectionCard } from "@/components/ui/section-card";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { loadOwnerRun } from "@/lib/composition/owner-console-read.server";
+import { format } from "@/lib/i18n/locale";
+import { getI18n } from "@/lib/i18n/locale.server";
 import { projectScopedHref } from "@/lib/projects/project-context";
 
 type RunDetailPageProps = {
@@ -41,7 +43,7 @@ function UsageRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-baseline justify-between gap-3 py-2">
       <dt className="text-xs text-ink-3">{label}</dt>
-      <dd className="font-mono text-[12.5px] text-ink">{value}</dd>
+      <dd className="text-[12.5px] tabular-nums text-ink">{value}</dd>
     </div>
   );
 }
@@ -49,6 +51,9 @@ function UsageRow({ label, value }: { label: string; value: string }) {
 export default async function RunDetailPage({ params, searchParams }: RunDetailPageProps) {
   const { runId } = await params;
   const view = await loadOwnerRun(runId, (await searchParams).project);
+  const { t } = await getI18n();
+  const k = t.runDetail;
+  const capabilities = t.capability as Readonly<Record<string, string>>;
   const selected = view.state === "available" && view.scope.mode === "project" ? view.scope.project : null;
   const runsHref = projectScopedHref("/runs", selected?.projectId ?? null);
 
@@ -57,15 +62,15 @@ export default async function RunDetailPage({ params, searchParams }: RunDetailP
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3 border-b border-line pb-4">
         <div className="min-w-0">
           <p className="pac-label">
-            <Link className="!text-accent hover:underline" href={runsHref}>Runs</Link> / Run detail
+            <Link className="!text-accent hover:underline" href={runsHref}>{k.breadcrumbRuns}</Link> / {k.breadcrumbDetail}
           </p>
           <h1 className="mt-1 truncate font-mono text-[18px] font-medium leading-7 text-ink">
-            {view.state === "available" && view.run.state === "available" ? view.run.detail.run.runId : "Run"}
+            {view.state === "available" && view.run.state === "available" ? view.run.detail.run.runId : k.run}
           </h1>
           {view.state === "available" && view.run.state === "available" && (
             <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
               <RunStatusBadge status={view.run.detail.run.status} />
-              <span className="text-[12px] text-ink-3">Execution attempt</span>
+              <span className="text-[12px] text-ink-3">{k.executionAttempt}</span>
               <span className="text-ink-3">·</span>
               <span className="font-mono text-[11.5px] text-ink-2">{view.run.detail.run.projectId}</span>
               <span className="text-ink-3">·</span>
@@ -82,13 +87,13 @@ export default async function RunDetailPage({ params, searchParams }: RunDetailP
 
       {view.state === "available" && view.run.state === "unavailable" && (
         <div className="pac-surface px-6 py-9 text-center">
-          <p className="pac-label">Run</p>
-          <p className="mt-2 text-[15px] font-semibold text-ink">Run unavailable</p>
+          <p className="pac-label">{k.run}</p>
+          <p className="mt-2 text-[15px] font-semibold text-ink">{k.unavailableTitle}</p>
           <p className="mx-auto mt-1.5 max-w-md text-[13px] leading-5 text-ink-3">
-            {selected ? "This run cannot be shown in this project context." : "This run cannot be shown."}
+            {selected ? k.unavailableInProject : k.unavailable}
           </p>
           <Link className="pac-control mt-5 inline-flex h-8 items-center px-3 text-[13px] text-ink-2" href={runsHref}>
-            Back to runs
+            {k.backToRuns}
           </Link>
         </div>
       )}
@@ -98,51 +103,51 @@ export default async function RunDetailPage({ params, searchParams }: RunDetailP
         return (
           <>
             <dl className="pac-surface grid grid-cols-2 divide-line overflow-hidden md:grid-cols-3 xl:grid-cols-6 xl:divide-x">
-              <Field label="Project ID">{run.projectId}</Field>
-              <Field label="Workflow ID">{run.workflowId}</Field>
-              <Field label="Revision">{run.revision}</Field>
-              <Field label="Created">{formatTimestamp(run.createdAt)}</Field>
-              <Field label="Started">{formatTimestamp(run.startedAt)}</Field>
-              <Field label="Completed">{formatTimestamp(run.completedAt)}</Field>
+              <Field label={k.projectId}>{run.projectId}</Field>
+              <Field label={k.workflowId}>{run.workflowId}</Field>
+              <Field label={k.revision}>{run.revision}</Field>
+              <Field label={k.created}>{formatTimestamp(run.createdAt)}</Field>
+              <Field label={k.started}>{formatTimestamp(run.startedAt)}</Field>
+              <Field label={k.completed}>{formatTimestamp(run.completedAt)}</Field>
             </dl>
 
             <div className="mt-4 grid gap-4 xl:grid-cols-12">
               <div className="flex flex-col gap-4 xl:col-span-8">
-                <SectionCard title="Steps">
+                <SectionCard title={k.steps}>
                   <div className="grid gap-4 md:grid-cols-2">
                     <div>
-                      <p className="pac-label">Current steps</p>
+                      <p className="pac-label">{k.currentSteps}</p>
                       <div className="mt-2"><StepList ids={run.currentStepIds} /></div>
                     </div>
                     <div>
-                      <p className="pac-label">Ready steps</p>
+                      <p className="pac-label">{k.readySteps}</p>
                       <div className="mt-2"><StepList ids={run.readyStepIds} /></div>
                     </div>
                   </div>
                 </SectionCard>
 
-                <SectionCard description="Read-only. Decisions require the future write boundary." title="Approval" tone={run.approval ? approvalTone[run.approval.status] : undefined}>
+                <SectionCard description={k.approvalDescription} title={k.approval} tone={run.approval ? approvalTone[run.approval.status] : undefined}>
                   {run.approval ? (
                     <div className="flex flex-wrap items-center gap-2">
                       <ApprovalStatusBadge status={run.approval.status} />
                       <RiskBadge risk={run.approval.riskLevel} />
-                      <span className="text-[13px] text-ink">{humanize(run.approval.requestedCapability)}</span>
-                      <span className="font-mono text-[11px] text-ink-3">step {run.approval.stepId}</span>
+                      <span className="text-[13px] text-ink">{capabilities[run.approval.requestedCapability] ?? humanize(run.approval.requestedCapability)}</span>
+                      <span className="font-mono text-[11px] text-ink-3">{format(k.stepLabel, { step: run.approval.stepId })}</span>
                     </div>
                   ) : (
-                    <p className="text-[13px] text-ink-3">No approval is attached to this run.</p>
+                    <p className="text-[13px] text-ink-3">{k.noApproval}</p>
                   )}
                 </SectionCard>
 
                 <SectionCard
                   count={audit.state === "available" ? audit.items.length : undefined}
-                  description={audit.state === "available" ? `Latest ${audit.limit} events at most` : undefined}
-                  title="Audit timeline"
+                  description={audit.state === "available" ? format(k.auditLimit, { limit: audit.limit }) : undefined}
+                  title={k.auditTimeline}
                 >
                   {audit.state === "unavailable" ? (
-                    <p className="text-[13px] text-ink-3">Audit timeline unavailable.</p>
+                    <p className="text-[13px] text-ink-3">{k.auditUnavailable}</p>
                   ) : audit.items.length === 0 ? (
-                    <p className="text-[13px] text-ink-3">No audit events recorded for this run.</p>
+                    <p className="text-[13px] text-ink-3">{k.noAudit}</p>
                   ) : (
                     <ol className="relative ml-1.5 border-l border-line">
                       {audit.items.map((item, index) => (
@@ -161,34 +166,34 @@ export default async function RunDetailPage({ params, searchParams }: RunDetailP
               </div>
 
               <div className="flex flex-col gap-4 xl:col-span-4">
-                <SectionCard title="Usage & cost">
+                <SectionCard title={k.usageCost}>
                   <p className="font-mono text-[26px] font-medium leading-none text-ink">{formatUsdMicros(usage.totalCostUsdMicros)}</p>
-                  <p className="mt-1.5 text-[11.5px] text-ink-3">Recorded provider cost for this run</p>
+                  <p className="mt-1.5 text-[11.5px] text-ink-3">{k.recordedCost}</p>
                   <dl className="mt-3 divide-y divide-line border-t border-line">
-                    <UsageRow label="Total tokens" value={formatCount(usage.totalTokens)} />
-                    <UsageRow label="Input / output" value={`${formatCount(usage.inputTokens)} / ${formatCount(usage.outputTokens)}`} />
-                    <UsageRow label="Invocations" value={formatCount(usage.invocationCount)} />
-                    <UsageRow label="Succeeded / failed" value={`${usage.succeededCount} / ${usage.failedCount}`} />
-                    <UsageRow label="Outcome unknown" value={String(usage.ambiguousCount)} />
+                    <UsageRow label={k.totalTokens} value={formatCount(usage.totalTokens)} />
+                    <UsageRow label={k.inputOutput} value={`${formatCount(usage.inputTokens)} / ${formatCount(usage.outputTokens)}`} />
+                    <UsageRow label={k.invocations} value={formatCount(usage.invocationCount)} />
+                    <UsageRow label={k.succeededFailed} value={`${usage.succeededCount} / ${usage.failedCount}`} />
+                    <UsageRow label={k.outcomeUnknown} value={String(usage.ambiguousCount)} />
                   </dl>
                   {usage.ambiguousCount > 0 && (
-                    <p className="mt-2"><StatusBadge tone="warning">ambiguous outcome held</StatusBadge></p>
+                    <p className="mt-2"><StatusBadge tone="warning">{k.ambiguousHeld}</StatusBadge></p>
                   )}
                 </SectionCard>
 
-                <SectionCard title="Latest model invocation">
+                <SectionCard title={k.latestInvocation}>
                   {latestModelInvocation ? (
                     <dl className="-my-2 divide-y divide-line">
-                      <UsageRow label="Status" value={latestModelInvocation.status.replaceAll("_", " ")} />
-                      <UsageRow label="Step / attempt" value={`${latestModelInvocation.stepId} · #${latestModelInvocation.attemptNumber}`} />
-                      <UsageRow label="Provider" value={latestModelInvocation.providerId} />
-                      <UsageRow label="Model" value={latestModelInvocation.providerModelId} />
-                      <UsageRow label="Version" value={latestModelInvocation.providerModelVersion} />
-                      <UsageRow label="Started" value={formatTimestamp(latestModelInvocation.createdAt)} />
-                      <UsageRow label="Completed" value={formatTimestamp(latestModelInvocation.completedAt)} />
+                      <UsageRow label={k.status} value={t.invocationStatus[latestModelInvocation.status] ?? latestModelInvocation.status} />
+                      <UsageRow label={k.stepAttempt} value={`${latestModelInvocation.stepId} · #${latestModelInvocation.attemptNumber}`} />
+                      <UsageRow label={k.provider} value={latestModelInvocation.providerId} />
+                      <UsageRow label={k.model} value={latestModelInvocation.providerModelId} />
+                      <UsageRow label={k.version} value={latestModelInvocation.providerModelVersion} />
+                      <UsageRow label={k.started} value={formatTimestamp(latestModelInvocation.createdAt)} />
+                      <UsageRow label={k.completed} value={formatTimestamp(latestModelInvocation.completedAt)} />
                     </dl>
                   ) : (
-                    <p className="text-[13px] text-ink-3">No model invocation recorded.</p>
+                    <p className="text-[13px] text-ink-3">{k.noInvocation}</p>
                   )}
                 </SectionCard>
               </div>

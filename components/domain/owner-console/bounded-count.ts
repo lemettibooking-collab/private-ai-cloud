@@ -25,3 +25,9 @@ export function attentionReading(observed: number, parentTruncated: boolean): Ca
 export function observedCount(observed: number): string {
   return String(observed);
 }
+
+// AI-038.6: localize only the displayed state word of a reading (the semantic decision above is
+// unchanged; "clear" is still never produced for a truncated view).
+export function withStateLabel(reading: CategoryReading, labels: Readonly<Record<string, string>>): CategoryReading {
+  return Object.freeze({ ...reading, state: reading.state === undefined ? undefined : labels[reading.state] ?? reading.state });
+}

@@ -37,7 +37,8 @@ test("primary Owner navigation is unchanged (labels, order, availability, projec
 test("no new client components or write paths in the Owner Console", () => {
   const clientFiles = [...walk("components/shell"), ...walk("components/domain/owner-console"), ...walk("components/ui"), ...ownerPages]
     .filter((path) => /^\s*["']use client["']/mu.test(source(path))).sort();
-  assert.deepEqual(clientFiles, ["components/domain/owner-console/quick-create-form.tsx", "components/shell/project-switcher.tsx", "components/shell/sidebar.tsx"]);
+  // AI-038.6 adds exactly one small client component: the interface-language selector.
+  assert.deepEqual(clientFiles, ["components/domain/owner-console/quick-create-form.tsx", "components/shell/locale-switcher.tsx", "components/shell/project-switcher.tsx", "components/shell/sidebar.tsx"]);
   const serverActions = [...walk("app"), ...walk("components"), ...walk("lib")].filter((path) => /\.(tsx?|mts)$/u.test(path) && /["']use server["']/u.test(code(path)));
   assert.deepEqual(serverActions, ["app/tasks/new/actions.ts"]);
   for (const path of consoleUi) {

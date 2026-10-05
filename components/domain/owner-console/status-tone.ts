@@ -50,11 +50,11 @@ export const riskTone: Record<OwnerConsoleApproval["riskLevel"], Tone> = {
   critical: "danger",
 };
 
-// My Attention severity order (most urgent first is decided by the page; this is the tone only).
+// My Attention severity groups (tone + statuses; labels come from the locale dictionary).
 export const attentionGroups = [
-  { id: "waiting_owner", label: "Waiting on Owner", statuses: ["waiting_owner"], tone: "attention" },
-  { id: "blocked", label: "Blocked · recovery required", statuses: ["blocked", "recovery_required"], tone: "danger" },
-  { id: "failed", label: "Failed", statuses: ["failed"], tone: "danger" },
-] as const satisfies readonly { id: string; label: string; statuses: readonly OwnerConsoleTaskStatus[]; tone: Tone }[];
+  { id: "waiting_owner", statuses: ["waiting_owner"], tone: "attention" },
+  { id: "blocked", statuses: ["blocked", "recovery_required"], tone: "danger" },
+  { id: "failed", statuses: ["failed"], tone: "danger" },
+] as const satisfies readonly { id: string; statuses: readonly OwnerConsoleTaskStatus[]; tone: Tone }[];
 
 export const attentionStatuses: ReadonlySet<OwnerConsoleTaskStatus> = new Set(attentionGroups.flatMap((group) => group.statuses));

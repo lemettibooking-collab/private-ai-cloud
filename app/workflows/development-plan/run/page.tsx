@@ -2,21 +2,26 @@ import { DevelopmentPlanSimulator } from "@/components/domain/development-plan-s
 import { AppShell } from "@/components/shell/app-shell";
 import { ActionButton } from "@/components/ui/action-button";
 import { PageHeader } from "@/components/ui/page-header";
+import { getI18n } from "@/lib/i18n/locale.server";
+import { prototypePages } from "@/lib/i18n/prototype-pages";
 
-export default function DevelopmentPlanRunPage() {
+// Bilingual (AI-038.6 L10N-2): copy from lib/i18n/prototype-pages (devPlan), passed to the simulator.
+export default async function DevelopmentPlanRunPage() {
+  const { locale } = await getI18n();
+  const c = prototypePages[locale].devPlan;
   return (
     <AppShell>
       <PageHeader
         action={
           <ActionButton href="/workflows/development-execution/run">
-            Посмотреть цикл разработки и исправлений
+            {c.openExecution}
           </ActionButton>
         }
-        description="Учебная демонстрация будущего модуля. Ничего не сохраняется, не запускается и не отправляется во внешние системы."
-        eyebrow="Знакомство с процессом"
-        title="Симулятор плана разработки"
+        description={c.description}
+        eyebrow={c.eyebrow}
+        title={c.title}
       />
-      <DevelopmentPlanSimulator />
+      <DevelopmentPlanSimulator copy={c} />
     </AppShell>
   );
 }

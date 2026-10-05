@@ -1,6 +1,7 @@
 import { Sidebar } from "@/components/shell/sidebar";
 import { Topbar } from "@/components/shell/topbar";
 import { loadOwnerShell, type OwnerConsoleProject } from "@/lib/composition/owner-console-read.server";
+import { getI18n } from "@/lib/i18n/locale.server";
 
 type AppShellProps = {
   children: React.ReactNode;
@@ -18,6 +19,7 @@ type AppShellProps = {
 // sits above the decorative ambient layer (globals.css `.pac-ambient`).
 export async function AppShell({ children, drawer, selectedProject = null }: AppShellProps) {
   const shell = await loadOwnerShell();
+  const { locale, t } = await getI18n();
   const pendingApprovals = shell.state === "available" ? shell.pendingApprovals : null;
   const selectedProjectId = selectedProject?.projectId ?? null;
 
@@ -30,9 +32,9 @@ export async function AppShell({ children, drawer, selectedProject = null }: App
         <span className="pac-ambient-field pac-ambient-field-c" />
         <span className="pac-ambient-field pac-ambient-field-d" />
       </div>
-      <Topbar selectedProject={selectedProject} shell={shell} />
+      <Topbar locale={locale} selectedProject={selectedProject} shell={shell} t={t} />
       <div className="relative z-[1] flex min-h-0 flex-1">
-        <Sidebar pendingApprovals={pendingApprovals} selectedProjectId={selectedProjectId} />
+        <Sidebar labels={t.nav} pendingApprovals={pendingApprovals} selectedProjectId={selectedProjectId} />
         <main className="min-w-0 flex-1 px-6 pb-10 pt-5 2xl:px-8">
           <div className="mx-auto w-full max-w-[1560px]">{children}</div>
         </main>

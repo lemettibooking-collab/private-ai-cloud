@@ -529,8 +529,14 @@ test("4a. Task Detail: opaque unknown / project mismatch; factual result; zero a
   assert.deepEqual(badView.task, { state: "unavailable" });
   const page = code("app/tasks/[taskId]/page.tsx");
   assert.match(page, /params: Promise<\{ taskId: string \}>/u);
-  assert.match(code("components/domain/owner-console/task-result.tsx").replace(/\s+/gu, " "), /not available yet \(AI-039\)/u);
-  assert.ok(!/implemented successfully|security passed|PR ready|changed \d+ files/iu.test(code("components/domain/owner-console/task-result.tsx") + page));
+  // AI-038.6: the factual-only note is a translation key now; the invariant holds in BOTH locales.
+  const result = code("components/domain/owner-console/task-result.tsx");
+  assert.match(result, /\{t\.taskResult\.factualNote\}/u);
+  const i18n = (await import(new URL("../lib/i18n/messages.ts", import.meta.url).href)) as typeof import("../lib/i18n/messages");
+  assert.match(i18n.messages.en.taskResult.factualNote, /not available yet \(AI-039\)/u);
+  assert.match(i18n.messages.ru.taskResult.factualNote, /пока недоступны \(AI-039\)/u);
+  const claims = /implemented successfully|security passed|PR ready|changed \d+ files|успешно реализован|безопасность пройдена|PR готов/iu;
+  assert.ok(!claims.test(result + page + JSON.stringify(i18n.messages.en.taskResult) + JSON.stringify(i18n.messages.ru.taskResult)));
 });
 
 test("4a. Dashboard current tasks and recently completed (global and project)", async () => {
@@ -546,10 +552,17 @@ test("4a. Dashboard current tasks and recently completed (global and project)", 
   assert.deepEqual(a.tasks.recentlyCompleted.tasks, []);
   const taskCalls = calls.filter((call) => /Tasks$/u.test(call.method)).map((call) => call.args.at(-1));
   assert.deepEqual(taskCalls, ["current", "completed", "current", "completed"], "one bounded backend read per task section");
+  // AI-038.6: section titles are translation keys; tasks and runs stay distinct in both locales.
   const dashboard = code("app/dashboard/page.tsx");
-  assert.match(dashboard, /Current tasks/u);
-  assert.match(dashboard, /Recently completed/u);
-  assert.match(dashboard, /Recent runs|Project runs/u, "runs stay labelled as runs");
+  assert.match(dashboard, /title=\{t\.dashboard\.currentTasks\}/u);
+  assert.match(dashboard, /title=\{t\.dashboard\.recentlyCompleted\}/u);
+  assert.match(dashboard, /title=\{d\.recentRuns\}/u);
+  assert.match(dashboard, /title=\{d\.projectRuns\}/u, "runs stay labelled as runs");
+  const i18n = (await import(new URL("../lib/i18n/messages.ts", import.meta.url).href)) as typeof import("../lib/i18n/messages");
+  assert.deepEqual([i18n.messages.en.dashboard.currentTasks, i18n.messages.en.dashboard.recentlyCompleted, i18n.messages.en.dashboard.recentRuns],
+    ["Current tasks", "Recently completed", "Recent runs"]);
+  assert.deepEqual([i18n.messages.ru.dashboard.currentTasks, i18n.messages.ru.dashboard.recentlyCompleted, i18n.messages.ru.dashboard.recentRuns],
+    ["Текущие задачи", "Недавно завершённые", "Недавние запуски"]);
 });
 
 test("4a. My Attention: attention statuses + pending approvals; project scope narrows both factually", async () => {

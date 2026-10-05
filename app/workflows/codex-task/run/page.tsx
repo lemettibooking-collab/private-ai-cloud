@@ -3,8 +3,13 @@ import { WorkflowLifecycle } from "@/components/domain/workflow-lifecycle";
 import { AppShell } from "@/components/shell/app-shell";
 import { ActionButton } from "@/components/ui/action-button";
 import { PageHeader } from "@/components/ui/page-header";
+import { getI18n } from "@/lib/i18n/locale.server";
+import { prototypePages } from "@/lib/i18n/prototype-pages";
 
-export default function CodexTaskRunPage() {
+export default async function CodexTaskRunPage() {
+  const { locale } = await getI18n();
+  const c = prototypePages[locale].codexForm;
+
   return (
     <AppShell>
       <PageHeader
@@ -14,17 +19,17 @@ export default function CodexTaskRunPage() {
               href="/workflows/development-plan/run"
               variant="secondary"
             >
-              Открыть симулятор плана разработки
+              {c.openPlanSimulator}
             </ActionButton>
           </div>
         }
-        description="Подготовьте точное задание с контекстом, ограничениями, критериями приёмки и командами проверки."
-        eyebrow="Запуск процесса"
-        title="Задание для Codex"
+        description={c.description}
+        eyebrow={c.eyebrow}
+        title={c.title}
       />
       <WorkflowLifecycle compact />
       <div className="mt-6">
-        <CodexTaskArtifactForm />
+        <CodexTaskArtifactForm copy={c} />
       </div>
     </AppShell>
   );

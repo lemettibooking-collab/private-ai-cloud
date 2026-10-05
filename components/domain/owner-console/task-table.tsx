@@ -5,6 +5,7 @@ import { taskTone } from "@/components/domain/owner-console/status-tone";
 import { TaskClassification, TaskStatusBadge, TaskTypeLabel } from "@/components/domain/owner-console/task-status";
 import { toneDot } from "@/components/ui/tone";
 import type { OwnerConsoleTask } from "@/lib/composition/owner-console-read.server";
+import { getI18n } from "@/lib/i18n/locale.server";
 import { projectScopedHref } from "@/lib/projects/project-context";
 
 type TaskTableProps = {
@@ -18,7 +19,8 @@ type TaskTableProps = {
 
 // Tasks are Owner objectives: the title is the primary field. Runs are secondary telemetry (linked
 // attempts and the latest one's factual status); a task may have none.
-export function TaskTable({ tasks, projectNames, selectedProjectId, showProject, dateColumn = "updated" }: TaskTableProps) {
+export async function TaskTable({ tasks, projectNames, selectedProjectId, showProject, dateColumn = "updated" }: TaskTableProps) {
+  const { t } = await getI18n();
   const scoped = projectScopedHref("/tasks", selectedProjectId);
   const taskHref = (taskId: string) => `/tasks/${encodeURIComponent(taskId)}${scoped.slice("/tasks".length)}`;
   return (
@@ -26,7 +28,7 @@ export function TaskTable({ tasks, projectNames, selectedProjectId, showProject,
       <table className="pac-table">
         <thead>
           <tr>
-            {["Task", ...(showProject ? ["Project"] : []), "Status", "Type", "Priority · Risk", "Runs", dateColumn === "completed" ? "Completed" : "Updated"].map((header) => (
+            {[t.table.task, ...(showProject ? [t.table.project] : []), t.table.status, t.table.type, t.table.priorityRisk, t.table.runs, dateColumn === "completed" ? t.table.completed : t.table.updated].map((header) => (
               <th key={header} scope="col">{header}</th>
             ))}
           </tr>
@@ -45,10 +47,10 @@ export function TaskTable({ tasks, projectNames, selectedProjectId, showProject,
               </td>
               {showProject && (
                 <td>
-                  <Link className="text-[12.5px] text-ink-2 hover:text-accent" href={projectScopedHref("/tasks", task.projectId)}>
+                  <Link className="whitespace-nowrap text-[12.5px] text-ink-2 hover:text-accent" href={projectScopedHref("/tasks", task.projectId)}>
                     {projectNames?.get(task.projectId) ?? task.projectId}
                   </Link>
-                  <p className="pac-id">{task.projectId}</p>
+                  <p className="pac-id whitespace-nowrap">{task.projectId}</p>
                 </td>
               )}
               <td><TaskStatusBadge status={task.status} /></td>
@@ -56,10 +58,10 @@ export function TaskTable({ tasks, projectNames, selectedProjectId, showProject,
               <td><TaskClassification task={task} /></td>
               <td className="whitespace-nowrap">
                 {task.linkedRunCount === 0 ? (
-                  <span className="font-mono text-[11px] text-ink-3">no runs</span>
+                  <span className="text-[12.5px] text-ink-3">{t.table.noRuns}</span>
                 ) : (
                   <div className="flex items-center gap-2">
-                    <span className="font-mono text-[11px] text-ink-2">{task.linkedRunCount}</span>
+                    <span className="font-mono text-[12px] text-ink-2">{task.linkedRunCount}</span>
                     {task.latestRun && <RunStatusBadge status={task.latestRun.status} />}
                   </div>
                 )}

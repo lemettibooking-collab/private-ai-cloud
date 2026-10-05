@@ -8,6 +8,8 @@ import { Instrument, InstrumentStrip } from "@/components/ui/instrument";
 import { PageHeader } from "@/components/ui/page-header";
 import { SectionCard } from "@/components/ui/section-card";
 import { loadOwnerTasks, type OwnerConsoleTaskStatus } from "@/lib/composition/owner-console-read.server";
+import { format } from "@/lib/i18n/locale";
+import { getI18n } from "@/lib/i18n/locale.server";
 import { quickCreateHref } from "@/lib/projects/project-context";
 
 type TasksPageProps = {
@@ -20,17 +22,17 @@ const activeStatuses: ReadonlySet<OwnerConsoleTaskStatus> = new Set(["ready", "p
 // Tasks are Owner objectives (persisted ProjectTasks). Runs are attempts linked to them.
 export default async function TasksPage({ searchParams }: TasksPageProps) {
   const view = await loadOwnerTasks((await searchParams).project);
+  const { t } = await getI18n();
+  const k = t.tasks;
   const selected = view.state === "available" && view.scope.mode === "project" ? view.scope.project : null;
 
   return (
     <AppShell selectedProject={selected}>
       <PageHeader
         action={view.state === "available" ? <ScopeBadge project={selected} /> : undefined}
-        description={selected
-          ? "Tasks of the selected project — what needs to be done. Runs are the execution attempts linked to a task."
-          : "Tasks across all registered projects — what needs to be done. Runs are the execution attempts linked to a task."}
-        eyebrow="Tasks"
-        title={selected ? `${selected.displayName} tasks` : "All Projects tasks"}
+        description={selected ? k.descriptionProject : k.descriptionAll}
+        eyebrow={k.eyebrow}
+        title={selected ? format(k.titleProject, { project: selected.displayName }) : k.titleAll}
       />
 
       {view.state === "unauthenticated" && <SignInRequired />}
@@ -42,31 +44,31 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
         // "+" when the bounded view is full.
         const shown = view.tasks;
         const total = totalReading(shown.length, view.truncated);
-        const within = view.truncated ? " · within shown tasks (bounded view)" : "";
+        const within = view.truncated ? k.withinShown : "";
         const count = (predicate: (status: OwnerConsoleTaskStatus) => boolean) => observedCount(shown.filter((task) => predicate(task.status)).length);
         return (
           <>
-            <InstrumentStrip label="Task summary">
-              <Instrument detail={`Ready, planning, approved, running or verifying${within}`} label="Active" tone="active" value={count((status) => activeStatuses.has(status))} />
-              <Instrument detail={`Waiting on Owner, blocked, recovery or failed${within}`} label="Needs attention" tone="attention" value={count((status) => attentionStatuses.has(status))} />
-              <Instrument detail={`Owner intent not yet started${within}`} label="Draft" tone="muted" value={count((status) => status === "draft")} />
-              <Instrument detail={`Status completed${within}`} label="Completed" tone="success" value={count((status) => status === "completed")} />
-              <Instrument detail={view.truncated ? "Most recently updated (bounded view)" : "Tasks in this scope"} label="Shown" value={total} />
+            <InstrumentStrip label={k.summary}>
+              <Instrument detail={`${k.activeDetail}${within}`} label={k.active} tone="active" value={count((status) => activeStatuses.has(status))} />
+              <Instrument detail={`${k.needsAttentionDetail}${within}`} label={k.needsAttention} tone="attention" value={count((status) => attentionStatuses.has(status))} />
+              <Instrument detail={`${k.draftDetail}${within}`} label={k.draft} tone="muted" value={count((status) => status === "draft")} />
+              <Instrument detail={`${k.completedDetail}${within}`} label={k.completed} tone="success" value={count((status) => status === "completed")} />
+              <Instrument detail={view.truncated ? k.shownDetailBounded : k.shownDetail} label={k.shown} value={total} />
             </InstrumentStrip>
 
             <SectionCard
               className="mt-4"
               count={total}
-              description={view.truncated ? "Most recently updated tasks shown (bounded view)." : "Most recently updated first."}
+              description={view.truncated ? k.listDescriptionBounded : k.listDescription}
               flush
-              title={selected ? "Project tasks" : "All tasks"}
+              title={selected ? k.listProject : k.listAll}
             >
               {shown.length === 0 ? (
                 <EmptyState
                   actionHref={quickCreateHref(selected?.projectId ?? null)}
-                  actionLabel="New task"
-                  description={selected ? "This project has no tasks yet." : "No tasks exist in the registered projects yet."}
-                  title="No tasks"
+                  actionLabel={k.newTask}
+                  description={selected ? k.noTasksProject : k.noTasksAll}
+                  title={k.noTasksTitle}
                   variant="inline"
                 />
               ) : (
@@ -81,7 +83,7 @@ export default async function TasksPage({ searchParams }: TasksPageProps) {
           </>
         );
       })()}
-      <p className="mt-3 text-[11px] text-ink-3">New tasks are created with + New Task as draft Owner intent; nothing runs automatically.</p>
+      <p className="mt-3 text-[11px] text-ink-3">{k.footnote}</p>
     </AppShell>
   );
 }

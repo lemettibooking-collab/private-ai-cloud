@@ -10,6 +10,8 @@ import { Instrument, InstrumentStrip } from "@/components/ui/instrument";
 import { PageHeader } from "@/components/ui/page-header";
 import { SectionCard } from "@/components/ui/section-card";
 import { loadOwnerAttention } from "@/lib/composition/owner-console-read.server";
+import { format } from "@/lib/i18n/locale";
+import { getI18n } from "@/lib/i18n/locale.server";
 
 type AttentionPageProps = {
   // `project` is an untrusted selector, validated by the loader against the authenticated registry.
@@ -21,15 +23,18 @@ type AttentionPageProps = {
 // narrows both factually. Read-only.
 export default async function AttentionPage({ searchParams }: AttentionPageProps) {
   const view = await loadOwnerAttention((await searchParams).project);
+  const { t } = await getI18n();
+  const a = t.attention;
+  const states = t.instrumentState;
   const selected = view.state === "available" && view.scope.mode === "project" ? view.scope.project : null;
 
   return (
     <AppShell selectedProject={selected}>
       <PageHeader
         action={view.state === "available" ? <ScopeBadge project={selected} /> : undefined}
-        description="Decisions, blockers and interventions: tasks waiting on you, blocked, needing recovery or failed — and pending approvals. Read-only."
-        eyebrow="My Attention"
-        title={selected ? `${selected.displayName} — my attention` : "My attention"}
+        description={a.description}
+        eyebrow={a.eyebrow}
+        title={selected ? format(a.titleProject, { project: selected.displayName }) : a.title}
       />
 
       {view.state === "unauthenticated" && <SignInRequired />}
@@ -43,35 +48,35 @@ export default async function AttentionPage({ searchParams }: AttentionPageProps
         const highRisk = view.mode === "all" ? view.highRiskApprovals : view.projectApprovals.highRiskApprovals;
         // Severity groups show OBSERVED counts within the loaded attention tasks; only the attention
         // total carries "+" when the bounded view is full (see the footnote).
-        const within = view.attentionTasks.truncated ? " · within shown tasks (bounded view)" : "";
+        const within = view.attentionTasks.truncated ? a.withinShown : "";
         const groups = attentionGroups.map((group) => ({
           ...group,
           tasks: view.attentionTasks.tasks.filter((task) => (group.statuses as readonly string[]).includes(task.status)),
         }));
         return (
           <>
-            <InstrumentStrip label="Attention summary">
+            <InstrumentStrip label={a.summary}>
               {groups.map((group) => (
                 <Instrument
-                  detail={`${group.id === "waiting_owner" ? "Needs an Owner response" : group.id === "blocked" ? "Cannot proceed without intervention" : "Ended with status failed"}${within}`}
+                  detail={`${a.groupDetail[group.id]}${within}`}
                   key={group.id}
-                  label={group.label}
-                  state={group.tasks.length > 0 ? (group.tone === "danger" ? "intervene" : "action") : undefined}
+                  label={a.groups[group.id]}
+                  state={group.tasks.length > 0 ? (group.tone === "danger" ? states.intervene : states.action) : undefined}
                   tone={group.tasks.length > 0 ? group.tone : "neutral"}
                   value={observedCount(group.tasks.length)}
                 />
               ))}
               <Instrument
-                detail={selected ? "Runtime approvals · this project" : "Runtime approvals · workspace-wide"}
-                label="Pending approvals"
-                state={pending > 0 ? "decide" : undefined}
+                detail={selected ? a.pendingProject : a.pendingWorkspace}
+                label={a.pendingApprovals}
+                state={pending > 0 ? states.decide : undefined}
                 tone={pending > 0 ? "attention" : "neutral"}
                 value={pending}
               />
               <Instrument
-                detail="High or critical pending approvals"
-                label="High / critical"
-                state={highRisk > 0 ? "risk" : undefined}
+                detail={a.highCriticalDetail}
+                label={a.highCritical}
+                state={highRisk > 0 ? states.risk : undefined}
                 tone={highRisk > 0 ? "danger" : "neutral"}
                 value={highRisk}
               />
@@ -80,19 +85,19 @@ export default async function AttentionPage({ searchParams }: AttentionPageProps
             <div className="mt-4 grid gap-4 xl:grid-cols-12">
               <div className="flex min-w-0 flex-col gap-4 xl:col-span-7">
                 {view.attentionTasks.tasks.length === 0 ? (
-                  <SectionCard count={0} flush title="Tasks needing attention">
-                    <EmptyState description="No task is waiting on you, blocked, in recovery or failed in this scope." title="No task needs attention" variant="inline" />
+                  <SectionCard count={0} flush title={a.tasksNeedingAttention}>
+                    <EmptyState description={a.noTaskBody} title={a.noTaskTitle} variant="inline" />
                   </SectionCard>
                 ) : (
                   groups.filter((group) => group.tasks.length > 0).map((group) => (
-                    <SectionCard count={observedCount(group.tasks.length)} flush key={group.id} title={group.label} tone={group.tone}>
+                    <SectionCard count={observedCount(group.tasks.length)} flush key={group.id} title={a.groups[group.id]} tone={group.tone}>
                       <AttentionTaskList projectNames={names} selectedProjectId={selected?.projectId ?? null} showProject={!selected} tasks={group.tasks} />
                     </SectionCard>
                   ))
                 )}
                 {view.attentionTasks.truncated && (
                   <p className="text-[11px] text-ink-3">
-                    Bounded view: the {view.attentionTasks.tasks.length} most recently updated attention tasks are shown and more may exist; group counts cover the shown tasks only.
+                    {format(a.boundedFootnote, { count: view.attentionTasks.tasks.length })}
                   </p>
                 )}
               </div>
@@ -100,20 +105,20 @@ export default async function AttentionPage({ searchParams }: AttentionPageProps
               <SectionCard
                 className="xl:col-span-5"
                 count={approvals.length}
-                description={selected ? "Pending approvals whose run belongs to this project, highest risk first." : "Pending approvals across all projects, highest risk first."}
+                description={selected ? a.approvalsDescriptionProject : a.approvalsDescriptionAll}
                 flush
-                title="Pending approvals"
+                title={a.pendingApprovals}
                 tone="attention"
               >
                 {approvals.length === 0 ? (
-                  <EmptyState description="No pending runtime approval in this scope." title="Approval queue is clear" variant="inline" />
+                  <EmptyState description={a.queueClearBody} title={a.queueClearTitle} variant="inline" />
                 ) : (
                   <ApprovalQueue approvals={approvals} compact selectedProjectId={selected?.projectId ?? null} />
                 )}
                 {view.mode === "project" && view.projectApprovals.unresolvedApprovals > 0 && (
                   <p className="border-t border-line bg-warn/5 px-4 py-2 text-xs text-ink-3">
-                    {view.projectApprovals.unresolvedApprovals} workspace approval(s) could not be attributed to a project. See{" "}
-                    <Link className="text-accent hover:underline" href="/attention">All Projects</Link>.
+                    {format(a.unresolved, { count: view.projectApprovals.unresolvedApprovals })}{" "}
+                    <Link className="text-accent hover:underline" href="/attention">{t.common.allProjects}</Link>.
                   </p>
                 )}
               </SectionCard>

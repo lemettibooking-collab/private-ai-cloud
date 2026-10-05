@@ -6,19 +6,23 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { SectionCard } from "@/components/ui/section-card";
 import { loadOwnerProjects } from "@/lib/composition/owner-console-read.server";
+import { format } from "@/lib/i18n/locale";
+import { getI18n } from "@/lib/i18n/locale.server";
 import { projectScopedHref } from "@/lib/projects/project-context";
 
 // Registered projects of the trusted workspace (authenticated registry read). The workspace comes
 // only from server configuration; selecting a project here only opens its project-scoped view.
 export default async function ProjectsPage() {
   const view = await loadOwnerProjects();
+  const { t } = await getI18n();
+  const k = t.projects;
 
   return (
     <AppShell>
       <PageHeader
-        description="Projects registered in this workspace. Open one to scope Dashboard, Runs and Approvals to it."
-        eyebrow="Projects"
-        title="Projects"
+        description={k.description}
+        eyebrow={k.eyebrow}
+        title={k.title}
       />
 
       {view.state === "unauthenticated" && <SignInRequired />}
@@ -31,26 +35,26 @@ export default async function ProjectsPage() {
             href={projectScopedHref("/dashboard", null)}
           >
             <div>
-              <p className="text-[14px] font-semibold text-ink">All Projects</p>
-              <p className="text-xs text-ink-3">Workspace-wide Mission Control across every registered project</p>
+              <p className="text-[14px] font-semibold text-ink">{t.common.allProjects}</p>
+              <p className="text-xs text-ink-3">{k.allProjectsBody}</p>
             </div>
-            <span className="text-xs text-accent">Open →</span>
+            <span className="text-xs text-accent">{k.open}</span>
           </Link>
 
           <SectionCard
             count={view.projects.length}
             flush
-            description={view.projectsTruncated ? "Showing the first 100 registered projects." : `${view.projects.length} registered project(s). Archived projects are not listed.`}
-            title="Registered projects"
+            description={view.projectsTruncated ? k.first100 : format(k.registeredCount, { count: view.projects.length })}
+            title={k.registered}
           >
             {view.projects.length === 0 ? (
-              <EmptyState description="Projects appear here once they are registered in this workspace's Project Registry." title="No projects registered" variant="inline" />
+              <EmptyState description={k.noProjectsBody} title={k.noProjectsTitle} variant="inline" />
             ) : (
               <div className="overflow-x-auto">
                 <table className="pac-table">
                   <thead>
                     <tr>
-                      {["Project", "Status", "Repository", "Default branch", ""].map((header) => (
+                      {[k.headProject, k.headStatus, k.headRepository, k.headBranch, ""].map((header) => (
                         <th key={header || "open"} scope="col">{header}</th>
                       ))}
                     </tr>
@@ -63,10 +67,10 @@ export default async function ProjectsPage() {
                           <p className="pac-id">{project.projectId}</p>
                         </td>
                         <td><ProjectStatusBadge status={project.status} /></td>
-                        <td className="font-mono text-[11.5px] text-ink-2">{project.repository ? project.repository.url : <span className="text-ink-3">not configured</span>}</td>
+                        <td className="font-mono text-[11.5px] text-ink-2">{project.repository ? project.repository.url : <span className="text-ink-3">{k.notConfigured}</span>}</td>
                         <td className="font-mono text-[11.5px] text-ink-2">{project.repository?.defaultBranch ?? <span className="text-ink-3">—</span>}</td>
                         <td className="text-right">
-                          <Link className="text-xs text-accent hover:underline" href={projectScopedHref("/dashboard", project.projectId)}>Open dashboard →</Link>
+                          <Link className="text-xs text-accent hover:underline" href={projectScopedHref("/dashboard", project.projectId)}>{k.openDashboard}</Link>
                         </td>
                       </tr>
                     ))}
@@ -75,7 +79,7 @@ export default async function ProjectsPage() {
               </div>
             )}
           </SectionCard>
-          <p className="mt-3 text-[11.5px] text-ink-3">Project creation and onboarding are not available yet.</p>
+          <p className="mt-3 text-[11.5px] text-ink-3">{k.footnote}</p>
         </>
       )}
     </AppShell>
