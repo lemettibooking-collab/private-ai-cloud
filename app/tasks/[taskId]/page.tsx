@@ -8,6 +8,7 @@ import { AppShell } from "@/components/shell/app-shell";
 import { EmptyState } from "@/components/ui/empty-state";
 import { SectionCard } from "@/components/ui/section-card";
 import { loadOwnerTask } from "@/lib/composition/owner-console-read.server";
+import { developmentHref } from "@/lib/development/feature-plan-model";
 import { format } from "@/lib/i18n/locale";
 import { getI18n } from "@/lib/i18n/locale.server";
 import { projectScopedHref } from "@/lib/projects/project-context";
@@ -64,7 +65,17 @@ export default async function TaskDetailPage({ params, searchParams }: TaskDetai
             </div>
           )}
         </div>
-        {view.state === "available" && <ScopeBadge project={selected} />}
+        {view.state === "available" && (
+          <div className="flex items-center gap-2">
+            {/* AI-039: the Development Workflow lives inside the task (no new top-level navigation). */}
+            {detail && (
+              <Link className="pac-control-accent flex h-8 items-center px-3 text-xs font-semibold" href={developmentHref(detail.task.taskId, selected?.projectId ?? null)}>
+                {k.developmentPlan}
+              </Link>
+            )}
+            <ScopeBadge project={selected} />
+          </div>
+        )}
       </div>
 
       {view.state === "unauthenticated" && <SignInRequired />}

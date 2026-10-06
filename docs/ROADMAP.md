@@ -161,7 +161,8 @@ The census recorded the current hardening debt and moved development to mileston
 - **AI-038.4 Owner Tasks — DONE**: **AI-038.4a Project Task Foundation + Read Surfaces — DONE** (`4a55f5b`); **AI-038.4b Quick Create + audited Task Mutation Binding — DONE** (`60b563b`) (see §9)
 - **AI-038.5 Mission Control Visual Refinement — DONE** (`c7d9b26`)
 - **AI-038.6 RU/EN Owner Console Localization — DONE** (`5af9f50`)
-- **AI-038.7 Dynamic Ambient Shader Background — IN REVIEW**
+- **AI-038.7 Dynamic Ambient Shader Background — DONE** (`4cb0dc0`)
+- **AI-039 Development Workflow Browser — IN REVIEW**
 - **Roadmap Rebase v1.4 — vendor-neutral control plane — documentation only** (this version; `docs/ROADMAP_REBASE_V1.4.md`)
 
 AI-037.1.1 passed independent re-gate and was committed/pushed through the Owner-approved repository workflow.
@@ -560,7 +561,7 @@ Implemented and passed the independent re-gate (committed `60b563b`). It is the 
 - **Outcome:**
   - created / replayed → redirect to the factual Task Detail (`/tasks/<taskId>?project=<projectId>`), read again through the existing read path;
   - otherwise a generic `invalid_input` / `conflict` / `unavailable` / `unauthenticated` message.
-- `attachRun` stays unbound (no UI, action or route). Task ↔ Run binding is for a later orchestrator task (AI-039+).
+- `attachRun` stays unbound (no UI, action or route). Task ↔ Run binding is for a later orchestrator task (AI-040+).
 
 #### AI-038.5 — Mission Control Visual Refinement — DONE (`c7d9b26`; deferred from the AI-038.3 Owner checkpoint)
 
@@ -605,9 +606,9 @@ Implemented and passed the independent re-gate (committed `5af9f50`). This is pr
 - **The locale never takes part in** auth, tenancy, Project Registry trust, reads, Quick Create payload / idempotency, audit or approvals.
 - **Corrective L10N-1:** every human-facing `app/**/page.tsx` is covered by a test-enforced inventory: Owner pages, prototype pages via `lib/i18n/prototype-{pages,mock,content}.ts`, and Russian-native simulators with their English remnants localized. Internal links from localized pages (for example Settings → `/knowledge`) reach only covered routes.
 
-#### AI-038.7 — Dynamic Ambient Shader Background — IN REVIEW
+#### AI-038.7 — Dynamic Ambient Shader Background — DONE (`4cb0dc0`)
 
-Author implementation awaits the Owner visual checkpoint and the independent re-gate. Visual-only Mission Control refinement: no product, runtime, data or i18n semantics.
+Implemented, accepted by the Owner and passed the independent re-gate (committed `4cb0dc0`). Visual-only Mission Control refinement: no product, runtime, data or i18n semantics.
 
 - **Renderer:** a native WebGL 1 ambient shader (`components/shell/ambient-renderer.ts`, no library) behind one small prop-less client component (`components/shell/ambient-shader-background.tsx`). `AppShell` stays a Server Component.
 - **Look:** a fluid luminous band that bends, widens and narrows through the middle-lower viewport over a deeper ocean / teal field, inspired by the React Bits HeroBand motion (own shader, not a copy). PAC palette only; no status colors.
@@ -640,9 +641,37 @@ Runtime command/write wiring remains deferred to a later write boundary.
 - pre-auth body/shape/resource limits
 - Proxy rejection and cheap structural gate
 
-### AI-039 — Development Workflow Browser — PLANNED
+### AI-039 — Development Workflow Browser — IN REVIEW
 
 Owner creates Development Request and sees FeaturePlan, dependencies, risk, executor recommendation and verification plan before repository mutation.
+
+Author implementation awaits the independent re-gate. A planning boundary only: no repository mutation, run, model, executor or GitHub action.
+
+- **Development Request = ProjectTask.** There is no separate request entity: `ProjectTask → FeaturePlan revisions → DevelopmentTask[] → (future) Runs`.
+- **Durable, immutable FeaturePlan revisions** (migration `0011`, `project_task_feature_plans`):
+  - one plan lineage per task, revisions 1..N, never updated (trigger), editing saves revision N+1;
+  - composite FK to the ProjectTask of the same workspace and project;
+  - the stored plan is the canonical `validateAndNormalizeFeaturePlan` output with a sha256 fingerprint;
+  - draft status only; the ProjectTask status is never changed.
+- **Owner flow (corrective P-1):** `ProjectTask → Owner Planning Interview → AI-assisted candidate FeaturePlan → deterministic validation → Owner review / edit → immutable saved FeaturePlan revision`.
+  - The interview asks product questions only (desired result, where behavior changes, what must not break, how success is recognized, constraints), task-type aware, with "Not sure" as a valid answer. It never asks for files, paths, commands, step ids or dependencies.
+  - Planning is ONE bounded structured completion through a provider-neutral planning port in the ModelProvider vocabulary — not an executor task, no tools or agent loop. The candidate is untrusted: it is rejected (never repaired) unless `validateAndNormalizeFeaturePlan` and `buildDevelopmentTaskWaves` accept it.
+  - The candidate is never saved by AI; only the Owner's explicit "save draft revision" creates a revision.
+  - The Project Registry holds no repository contents, so the planner never names repository paths: a candidate's allowed paths are marked as needing technical clarification and must be filled before saving.
+  - No planning provider is bound yet (a real ModelProvider binding needs the run-scoped invocation ledger and pre-spend budget reservation; M2.2 deferred), so production shows a factual "AI planner unavailable" state.
+- **Plan Builder (advanced editor / fallback)** at `/tasks/[taskId]/development` (from Task Detail; no new navigation item):
+  - steps with stable ids, dependencies chosen from other steps, risk, priority, Owner-approval flag and one-per-line scope / paths / criteria / commands;
+  - a bounded FormData parser and one Server Action → the server-only save contract (`lib/development/feature-plan-mutations.ts`);
+  - Owner + task + project locks, idempotent by an opaque form key + intent fingerprint, exactly one `task.feature_plan_revision_created` audit event;
+  - only a `draft` task of an `active` project can receive a revision.
+- **Browser** (read through the existing AI-038.0 / AI-038.1 chain, new read action `read_task_feature_plans`):
+  - development request, plan and bounded revision history;
+  - dependency waves from `buildDevelopmentTaskWaves` (logical readiness only), aggregate risk = max step risk;
+  - verification plan = exactly the commands written in the plan.
+  - Stored plans are re-validated and re-fingerprinted on every read and fail closed when corrupted.
+- **Executor recommendation:** factually unavailable until ExecutorRouter (AI-041.3); no executor is shown or implied.
+- **Follow-up (Owner decision):** adaptive, task-specific interview questions proposed by the planning model (on top of the fixed task-type questions, product-only, each with "Not sure") — after a real planning provider is bound.
+- **Repository changes:** factually not started.
 
 ## 10. Architecture Decomposition Gate
 
@@ -1056,7 +1085,7 @@ Roadmap does not imply strictly serial development. Parallel work is allowed onl
 
 ### A. Current operational line (unchanged by the rebase)
 
-While M2.2 is deferred: `AI-037.7 DONE → AI-038.0 DONE → AI-038.1 DONE → AI-038.2a DONE → AI-038.2b DONE → AI-038.3 DONE → AI-038.3.1 DONE → AI-038.3.2 DONE → AI-038.4a Project Task Foundation + read surfaces DONE → AI-038.4b Quick Create / task mutation binding DONE → AI-038.5 Mission Control Visual Refinement DONE → AI-038.6 RU/EN Owner Console Localization DONE → AI-038.7 Dynamic Ambient Shader Background (IN REVIEW) → AI-039 Development Workflow Browser` (M3 Owner path, §9). AI-038.2 passed; the Owner Console reads real runtime data through AI-038.3, read-only. The rebase does not cancel or skip any unfinished AI-038 work.
+While M2.2 is deferred: `AI-037.7 DONE → AI-038.0 DONE → AI-038.1 DONE → AI-038.2a DONE → AI-038.2b DONE → AI-038.3 DONE → AI-038.3.1 DONE → AI-038.3.2 DONE → AI-038.4a Project Task Foundation + read surfaces DONE → AI-038.4b Quick Create / task mutation binding DONE → AI-038.5 Mission Control Visual Refinement DONE → AI-038.6 RU/EN Owner Console Localization DONE → AI-038.7 Dynamic Ambient Shader Background DONE → AI-039 Development Workflow Browser (IN REVIEW)` (M3 Owner path, §9). AI-038.2 passed; the Owner Console reads real runtime data through AI-038.3, read-only. The rebase does not cancel or skip any unfinished AI-038 work.
 
 ### B. First new architecture implementation introduced by v1.4
 
@@ -1068,7 +1097,7 @@ While M2.2 is deferred: `AI-037.7 DONE → AI-038.0 DONE → AI-038.1 DONE → A
 
 ### UI
 
-AI-038.2, AI-038.3, AI-038.3.1 and AI-038.3.2 are DONE: the Owner Console reads real runtime data with All Projects and real project switching, read-only. AI-038.4a (DONE) adds persistent Owner Tasks as read surfaces; AI-038.4b (DONE) adds Quick Create, the only UI write (draft task intent through the audited `createTask`). Other UI write actions need separate tasks. AI-039 is not started.
+AI-038.2, AI-038.3, AI-038.3.1 and AI-038.3.2 are DONE: the Owner Console reads real runtime data with All Projects and real project switching, read-only. AI-038.4a (DONE) adds persistent Owner Tasks as read surfaces; AI-038.4b (DONE) adds Quick Create, the only UI write (draft task intent through the audited `createTask`). AI-039 (IN REVIEW) adds the second UI write: saving immutable draft FeaturePlan revisions of a ProjectTask, with no execution. Other UI write actions need separate tasks.
 
 ### Execution platform
 

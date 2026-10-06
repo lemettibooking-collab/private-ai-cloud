@@ -127,7 +127,7 @@ test("L. active user + active membership + Owner role in A → backend reads onl
   const overview = await decision.backend!.getRunOverview("run-one");
   assert.deepEqual([overview.status, overview.data?.status, overview.data?.revision], ["available", "running", 1], "A's Run, never B's queued one");
   assert.equal(JSON.stringify(overview).includes(A.id) || JSON.stringify(overview).includes(B.id), false);
-  assert.deepEqual(Reflect.ownKeys(decision.backend!).sort(), ["getRunAuditTimeline", "getRunModelUsage", "getRunOverview", "getTask", "listApprovalQueue", "listProjectTasks", "listProjects", "listRuns", "listTasks"]);
+  assert.deepEqual(Reflect.ownKeys(decision.backend!).sort(), ["getRunAuditTimeline", "getRunModelUsage", "getRunOverview", "getTask", "getTaskFeaturePlans", "listApprovalQueue", "listProjectTasks", "listProjects", "listRuns", "listTasks"]);
 });
 
 test("global system Owner role assigned to a membership in A → Owner in A only (the one global case 0007 permits)", async () => {

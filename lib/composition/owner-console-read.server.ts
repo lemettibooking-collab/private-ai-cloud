@@ -41,6 +41,7 @@ export type {
   OwnerConsoleTaskResult,
   OwnerConsoleTasks,
   OwnerConsoleTaskStatus,
+  OwnerConsoleTaskDevelopment,
   OwnerConsoleTaskView,
   OwnerConsoleUsage,
   OwnerConsoleWorkspace,
@@ -101,6 +102,11 @@ export async function loadOwnerQuickCreate(project: RawProjectSelector) {
 export async function loadOwnerTask(taskId: string, project: RawProjectSelector) {
   await connection();
   return reader.loadOwnerTask(taskId, parseProjectSelector(project));
+}
+
+export async function loadOwnerTaskDevelopment(taskId: string, project: RawProjectSelector) {
+  await connection();
+  return reader.loadOwnerTaskDevelopment(taskId, parseProjectSelector(project));
 }
 
 export async function loadOwnerAttention(project: RawProjectSelector) {

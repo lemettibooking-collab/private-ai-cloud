@@ -276,7 +276,7 @@ test("038.3-6. Run Detail's only runtime target is the runId route parameter", a
 test("038.3-7 / 3.2-20. the loader exposes read functions only; no write path", () => {
   const { instance } = owner();
   const loaders = ["loadOwnerApprovals", "loadOwnerAttention", "loadOwnerDashboard", "loadOwnerProjects", "loadOwnerQuickCreate", "loadOwnerRun",
-    "loadOwnerRuns", "loadOwnerShell", "loadOwnerTask", "loadOwnerTasks"];
+    "loadOwnerRuns", "loadOwnerShell", "loadOwnerTask", "loadOwnerTaskDevelopment", "loadOwnerTasks"];
   assert.deepEqual(Object.keys(instance).sort(), loaders);
   assert.ok(Object.isFrozen(instance));
   const server = source("lib/composition/owner-console-read.server.ts");

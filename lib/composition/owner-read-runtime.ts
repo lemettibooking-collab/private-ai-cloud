@@ -10,6 +10,7 @@ import type {
   WorkflowRuntimePublicProjectSummary,
   WorkflowRuntimePublicRunOverview,
   WorkflowRuntimePublicTaskDetail,
+  WorkflowRuntimePublicTaskFeaturePlans,
   WorkflowRuntimePublicTaskSummary,
 } from "../workflows/workflow-runtime-access";
 import type {
@@ -51,6 +52,8 @@ export const ownerReadActions = Object.freeze([
   "list_tasks",
   "list_project_tasks",
   "read_task",
+  // AI-039: FeaturePlan revisions of a ProjectTask (read-only).
+  "read_task_feature_plans",
 ] as const satisfies readonly WorkflowRuntimeAccessAction[]);
 
 export interface OwnerReadBackend {
@@ -70,6 +73,8 @@ export interface OwnerReadBackend {
   listProjectTasks(projectId: unknown, view: unknown): Promise<TenantBoundWorkflowRuntimeDecision<readonly WorkflowRuntimePublicTaskSummary[]>>;
   // AI-038.4a: one ProjectTask by its stable Task ID with its linked runs.
   getTask(taskId: unknown): Promise<TenantBoundWorkflowRuntimeDecision<WorkflowRuntimePublicTaskDetail>>;
+  // AI-039: the persisted FeaturePlan revisions of one ProjectTask by its stable Task ID.
+  getTaskFeaturePlans(taskId: unknown): Promise<TenantBoundWorkflowRuntimeDecision<WorkflowRuntimePublicTaskFeaturePlans>>;
 }
 
 export type OwnerReadRuntimeDecision =
@@ -122,7 +127,7 @@ function capturedConnect(input: unknown): WorkflowRuntimeDatabase["connect"] | n
 }
 
 // Read-only Owner policy: allow only the configured principal, only in the bound workspace, only
-// for the fixed read actions (AI-038.0 runs/approvals, AI-038.3.1 projects, AI-038.4a tasks). execute_runtime_command,
+// for the fixed read actions (AI-038.0 runs/approvals, AI-038.3.1 projects, AI-038.4a tasks, AI-039 plans). execute_runtime_command,
 // unknown actions and anything malformed deny.
 export function createOwnerReadAuthorizer(ownerActorId: string, workspaceId: string) {
   const owner = ownerActorId;
@@ -201,6 +206,7 @@ function buildOwnerReadBackend(
     listTasks: (view: unknown) => guarded(() => facade.listTasks(request({ view }, false))),
     listProjectTasks: (projectId: unknown, view: unknown) => guarded(() => facade.listProjectTasks(request({ projectId, view }, false))),
     getTask: (taskId: unknown) => guarded(() => facade.getTask(request({ taskId }, false))),
+    getTaskFeaturePlans: (taskId: unknown) => guarded(() => facade.getTaskFeaturePlans(request({ taskId }, false))),
   });
   return Object.freeze({ verdict: "allow" as const, reason: null, backend });
 }

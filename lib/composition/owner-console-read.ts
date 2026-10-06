@@ -1,6 +1,10 @@
 import type { AuthenticatedOwnerReadDecision } from "./authenticated-owner-read-runtime";
 import type { OwnerReadBackend } from "./owner-read-runtime";
 import type { ProjectSelector } from "../projects/project-context";
+import type { FeaturePlan } from "../contracts/development-plan";
+import type { FeaturePlanRevisionSummary, PlanCreationBlock, TaskFeaturePlans } from "../development/feature-plan-model";
+// @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
+import { fingerprintPattern, planCreationBlock, planKeyPattern } from "../development/feature-plan-model.ts";
 
 // AI-038.3 / AI-038.3.2 Owner Console read seam (pure; no runtime imports). Application code uses
 // `./owner-console-read.server`, which binds the real request-scoped Auth.js identity and a
@@ -256,6 +260,19 @@ export type OwnerConsoleTaskView = Gate<ProjectList & Readonly<{
   task: Readonly<{ state: "available"; detail: OwnerConsoleTaskDetail }> | Readonly<{ state: "unavailable" }>;
 }>>;
 
+// AI-039 Development Workflow of ONE ProjectTask (the Owner-level development request): the task, its
+// factual project, its persisted FeaturePlan revisions, and whether a new draft revision may be saved.
+export type OwnerConsoleTaskDevelopment = Gate<ProjectList & Readonly<{
+  scope: OwnerConsoleScope;
+  development: Readonly<{ state: "unavailable" }> | Readonly<{
+    state: "available";
+    task: OwnerConsoleTask;
+    project: OwnerConsoleProject | null;
+    plans: Readonly<{ state: "available"; data: TaskFeaturePlans }> | Readonly<{ state: "unavailable" }>;
+    creationBlock: PlanCreationBlock | null;
+  }>;
+}>>;
+
 // My Attention: attention-status tasks + pending approvals (workspace, or factually one project).
 export type OwnerConsoleAttention = Gate<
   | (ProjectList & Readonly<{ mode: "all"; scope: Readonly<{ mode: "all" }>; attentionTasks: TaskList; approvals: readonly OwnerConsoleApproval[]; pendingApprovals: number; highRiskApprovals: number; queueTruncated: boolean }>)
@@ -433,6 +450,40 @@ function invocationView(input: Record<string, unknown> | null | undefined): Owne
 const taskStatuses = new Set(["draft", "ready", "planning", "approved", "running", "verifying", "waiting_owner",
   "blocked", "recovery_required", "completed", "failed", "cancelled"]);
 const taskTypes = new Set(["feature", "fix", "investigation", "roadmap"]);
+
+// AI-039: the backend's FeaturePlan projection, re-checked structurally for THIS task (the read path
+// already validated and re-fingerprinted the stored plan; any shape surprise is `unavailable`).
+function featurePlansView(input: unknown, taskId: string, projectId: string): TaskFeaturePlans | null {
+  if (typeof input !== "object" || input === null) return null;
+  const data = input as Record<string, unknown>;
+  const revision = (item: unknown): FeaturePlanRevisionSummary | null => {
+    if (typeof item !== "object" || item === null) return null;
+    const row = item as Record<string, unknown>;
+    return typeof row.planId === "string" && planKeyPattern.test(row.planId) && Number.isSafeInteger(row.revision) && (row.revision as number) >= 1
+      && typeof row.createdAt === "string" && typeof row.fingerprint === "string" && fingerprintPattern.test(row.fingerprint)
+      ? Object.freeze({ planId: row.planId, revision: row.revision as number, createdAt: row.createdAt, fingerprint: row.fingerprint })
+      : null;
+  };
+  const history = Array.isArray(data.history) ? data.history.map(revision) : null;
+  const count = data.revisionCount;
+  if (data.taskId !== taskId || data.projectId !== projectId || !history || history.some((item) => item === null)
+    || !Number.isSafeInteger(count) || typeof data.historyTruncated !== "boolean") return null;
+  if (data.latest === null) {
+    return count === 0 && history.length === 0 ? Object.freeze({ taskId, projectId, revisionCount: 0, latest: null, history: Object.freeze([]), historyTruncated: false }) : null;
+  }
+  const latest = revision(data.latest);
+  const plan = (data.latest as Record<string, unknown>).plan as FeaturePlan | null | undefined;
+  if (!latest || typeof plan !== "object" || plan === null || plan.id !== latest.planId || plan.status !== "draft" || !Array.isArray(plan.tasks)
+    || history.length === 0 || history[0]!.revision !== latest.revision || count !== latest.revision) return null;
+  return Object.freeze({
+    taskId,
+    projectId,
+    revisionCount: count as number,
+    latest: Object.freeze({ ...latest, plan }),
+    history: Object.freeze(history as FeaturePlanRevisionSummary[]),
+    historyTruncated: data.historyTruncated,
+  });
+}
 
 function taskView(input: Record<string, unknown>): OwnerConsoleTask | null {
   const latest = input.latestRun as Record<string, unknown> | null | undefined;
@@ -755,6 +806,50 @@ export function createOwnerConsoleReader(dependencies: OwnerConsoleDependencies)
                 runsTruncated,
               }),
             }),
+          }),
+        };
+      });
+    },
+
+    // AI-039 Development Workflow. Same targeting as Task Detail: the ONLY target is the stable Task
+    // ID, the project selector never authorizes access, and a task of another project under a selected
+    // project is the same opaque `unavailable` as an unknown task. Plans that the backend cannot
+    // present (corrupted, inconsistent, unreadable) are `unavailable` — never partial, never demo.
+    async loadOwnerTaskDevelopment(taskId: unknown, selector: ProjectSelector): Promise<OwnerConsoleTaskDevelopment> {
+      return gate(async (backend) => {
+        if (selector.kind === "invalid") throw new ProjectUnavailable();
+        const list = await projectList(backend);
+        const scope = resolveScope(selector, list);
+        const opaque = { ...list, scope, development: Object.freeze({ state: "unavailable" as const }) };
+        if (typeof taskId !== "string" || !runIdPattern.test(taskId)) return opaque;
+        let detail;
+        try {
+          detail = await backend.getTask(taskId);
+        } catch {
+          detail = null;
+        }
+        if (!detail || detail.verdict !== "allow") return opaque;
+        const task = taskView((detail.data as unknown as Record<string, unknown>).task as Record<string, unknown>);
+        if (!task || task.taskId !== taskId) return opaque;
+        if (scope.mode === "project" && task.projectId !== scope.project.projectId) return opaque;
+        let plans: Readonly<{ state: "available"; data: TaskFeaturePlans }> | Readonly<{ state: "unavailable" }> = Object.freeze({ state: "unavailable" as const });
+        try {
+          const result = await backend.getTaskFeaturePlans(taskId);
+          const data = result.verdict === "allow" ? featurePlansView(result.data, task.taskId, task.projectId) : null;
+          if (data) plans = Object.freeze({ state: "available" as const, data });
+        } catch {
+          // plans stay unavailable
+        }
+        const project = list.projects.find((item) => item.projectId === task.projectId) ?? null;
+        return {
+          ...list,
+          scope,
+          development: Object.freeze({
+            state: "available" as const,
+            task,
+            project,
+            plans,
+            creationBlock: planCreationBlock(task.status, project?.status ?? null, plans.state === "available"),
           }),
         };
       });

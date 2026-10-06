@@ -167,8 +167,9 @@ test("J–K. the caller cannot supply or override workspaceId or actorId", async
   assert.ok(db.calls.readWorkspaceParameters.every((value) => value === workspaceDatabaseId), "still only the bound tenant");
   // No method signature takes an identity.
   // AI-038.3.1: listProjects(limit), listRuns(projectId, limit); AI-038.4a: listTasks(view),
-  // listProjectTasks(projectId, view), getTask(taskId) — still no identity parameter.
-  assert.deepEqual(Object.values(owner).map((method: any) => method.length), [1, 2, 1, 1, 1, 2, 1, 2, 1]);
+  // listProjectTasks(projectId, view), getTask(taskId); AI-039: getTaskFeaturePlans(taskId) — still no
+  // identity parameter.
+  assert.deepEqual(Object.values(owner).map((method: any) => method.length), [1, 2, 1, 1, 1, 2, 1, 2, 1, 1]);
 });
 
 test("L–M. the Owner read authorizer denies execute_runtime_command, unknown actions and malformed input", () => {
@@ -188,7 +189,7 @@ test("L–M. the Owner read authorizer denies execute_runtime_command, unknown a
     assert.deepEqual(authorizer.authorize(input as any), { verdict: "deny" });
   }
   assert.equal(Object.isFrozen(authorizer), true);
-  assert.deepEqual([...bundle.ownerReadActions].sort(), ["list_approval_queue", "list_project_runs", "list_project_tasks", "list_projects", "list_tasks", "read_run_audit_timeline", "read_run_model_usage", "read_run_overview", "read_task"]);
+  assert.deepEqual([...bundle.ownerReadActions].sort(), ["list_approval_queue", "list_project_runs", "list_project_tasks", "list_projects", "list_tasks", "read_run_audit_timeline", "read_run_model_usage", "read_run_overview", "read_task", "read_task_feature_plans"]);
 });
 
 test("N. database failures during reads are sanitized: no DATABASE_URL, SQL or driver text leaves", async () => {
@@ -209,7 +210,7 @@ test("O–R. the bundle is frozen and exposes exactly the four read methods: no 
   const owner: any = decision.backend;
   assert.equal(Object.isFrozen(decision), true);
   assert.equal(Object.isFrozen(owner), true);
-  assert.deepEqual(Reflect.ownKeys(owner).sort(), ["getRunAuditTimeline", "getRunModelUsage", "getRunOverview", "getTask", "listApprovalQueue", "listProjectTasks", "listProjects", "listRuns", "listTasks"]);
+  assert.deepEqual(Reflect.ownKeys(owner).sort(), ["getRunAuditTimeline", "getRunModelUsage", "getRunOverview", "getTask", "getTaskFeaturePlans", "listApprovalQueue", "listProjectTasks", "listProjects", "listRuns", "listTasks"]);
   for (const forbidden of ["executeCommand", "execute", "advance", "approve", "reject", "cancel", "database", "tenant",
     "workspaceDatabaseId", "readModel", "facade", "access", "resolver", "authorizer", "runtimeService", "close"]) {
     assert.equal(forbidden in owner, false, forbidden);

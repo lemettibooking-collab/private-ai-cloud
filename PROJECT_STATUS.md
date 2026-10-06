@@ -1,6 +1,6 @@
 # Project Status
 
-## Current State (Roadmap v1.4, 2026-10-01)
+## Current State (Roadmap v1.4, 2026-10-06)
 
 Private AI Cloud is a **vendor-neutral AI Engineering Control Plane**. The canonical status lives in [`docs/ROADMAP.md`](docs/ROADMAP.md). This file is a short summary and does not override the roadmap.
 
@@ -8,17 +8,17 @@ Private AI Cloud is a **vendor-neutral AI Engineering Control Plane**. The canon
 |---|---|
 | M1 Real Money Safety | DONE |
 | M2 Direct Model Provider Capability | IN REVIEW (M2.0 and M2.1 DONE; M2.2 DEFERRED BY OWNER) |
-| M3 Owner Product | ACTIVE: AI-037.7, AI-038.0, AI-038.1 and AI-038.2a DONE; AI-038.2b real GitHub OAuth smoke PLANNED / BLOCKED ON OWNER EXTERNAL CONFIG |
+| M3 Owner Product | ACTIVE / NOT DONE: AI-037.7 and AI-038.0–AI-038.7 DONE; AI-039 Development Workflow Browser IN REVIEW |
 | M4 Vendor-Neutral Executor Platform | REBASED; first new task AI-041.0 Vendor-Neutral Executor Adapter Contract (PLANNED) |
 | M5–M8 | PLANNED (M5 and M7 rebased in v1.4) |
 
-**Next on the operational line:** AI-038.2b, then real read wiring for the Owner Console, then AI-039.\
+**Next on the operational line:** the independent re-gate of AI-039; the order after it is in `docs/ROADMAP.md` §9.\
 **First implementation task created by the v1.4 rebase:** AI-041.0.
 
 ## What Exists
 
-- A Next.js UI prototype for the AI Operations Center. Most of it is backed by mocked data; it is not yet wired to the runtime.
-- A PostgreSQL 16 schema with raw SQL migrations `0001`–`0008` and the Smart Algorithms demo seed.
+- The Owner Console (RU / EN): Dashboard, My Attention, Projects, Tasks, Runs and Approvals read real runtime data read-only; the remaining prototype pages use mocked data.
+- A PostgreSQL 16 schema with raw SQL migrations `0001`–`0011` and the Smart Algorithms demo seed.
 - A server-only workflow runtime:
   - command lifecycle, claims and executions;
   - approvals and the invocation ledger;
@@ -33,12 +33,12 @@ Private AI Cloud is a **vendor-neutral AI Engineering Control Plane**. The canon
   - the model registry and routing policy.
 - A `ModelProvider` abstraction with an OpenAI adapter, a deterministic mock and a real-provider composition root. No real paid call has been made.
 - The Owner read backend bundle, the authenticated identity boundary, and the Auth.js GitHub session adapter. The adapter's only HTTP route is `/api/auth/[...nextauth]`.
+- Two narrow Owner writes, each through an audited server-side contract: Quick Create (a draft ProjectTask) and saving an immutable draft FeaturePlan revision of a ProjectTask (AI-039). Neither starts an execution.
 - CI quality workflow: lint, typecheck, unit tests and build.
 
 ## Not Yet Implemented
 
-- Real GitHub OAuth smoke, and UI wiring to real runtime data
-- Runtime business APIs or server actions
+- Runtime business APIs, and any UI action that starts a run, model, executor or repository change
 - Executor integrations (ExecutorAdapter / ExecutorRouter / ExecutionEnvironment)
 - Automated Quality/Security Gate on executor output, and the corrective controller
 - RAG, real external integrations, staging/production deployment
@@ -64,6 +64,13 @@ These are recorded in `docs/ROADMAP.md` §4 and in `docs/qa/`.
 - `/departments`
 - `/operations`
 - `/projects`
+- `/attention`
+- `/tasks`
+- `/tasks/new`
+- `/tasks/[taskId]`
+- `/tasks/[taskId]/development`
+- `/runs`
+- `/runs/[runId]`
 - `/workflows`
 - `/workflows/development-plan/run`
 - `/workflows/development-execution/run`

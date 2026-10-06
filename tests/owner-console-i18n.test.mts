@@ -220,7 +220,7 @@ test("V-1 survives localization: only the state WORD is localized; the bounded-c
 // handler, not a page.
 const coverage: Readonly<Record<string, "owner" | "prototype">> = {
   "/": "owner", "/dashboard": "owner", "/attention": "owner", "/projects": "owner", "/tasks": "owner", "/tasks/[taskId]": "owner",
-  "/tasks/new": "owner", "/runs": "owner", "/runs/[runId]": "owner", "/approvals": "owner",
+  "/tasks/new": "owner", "/tasks/[taskId]/development": "owner", "/runs": "owner", "/runs/[runId]": "owner", "/approvals": "owner",
   "/approvals/[approvalId]": "prototype", "/roadmap": "prototype", "/settings": "prototype", "/settings/assistants": "prototype",
   "/settings/integrations": "prototype", "/settings/operator-console": "prototype", "/settings/roles": "prototype", "/settings/security": "prototype",
   "/knowledge": "prototype", "/knowledge/[documentId]": "prototype", "/chat": "prototype", "/departments": "prototype", "/reports": "prototype",

@@ -45,10 +45,12 @@ test("no new client components or write paths in the Owner Console", () => {
   // AI-038.6 adds exactly one small client component: the interface-language selector.
   // AI-038.7 adds exactly one more: the decorative ambient shader background (its renderer module is
   // plain TypeScript, not a client entry).
-  assert.deepEqual(clientFiles, ["components/domain/owner-console/quick-create-form.tsx", ambientComponent, "components/shell/locale-switcher.tsx", "components/shell/project-switcher.tsx", "components/shell/sidebar.tsx"]);
+  // AI-039 adds the Plan Builder form (draft FeaturePlan revisions only) and, in P-1, the planning
+  // flow around it (interview → unsaved AI candidate → review; it saves only through the builder).
+  assert.deepEqual(clientFiles, ["components/domain/owner-console/feature-plan-builder.tsx", "components/domain/owner-console/feature-plan-planning.tsx", "components/domain/owner-console/quick-create-form.tsx", ambientComponent, "components/shell/locale-switcher.tsx", "components/shell/project-switcher.tsx", "components/shell/sidebar.tsx"]);
   assert.ok(!/^\s*["']use client["']/mu.test(source(ambientRenderer)), "the renderer is a plain module");
   const serverActions = [...walk("app"), ...walk("components"), ...walk("lib")].filter((path) => /\.(tsx?|mts)$/u.test(path) && /["']use server["']/u.test(code(path)));
-  assert.deepEqual(serverActions, ["app/tasks/new/actions.ts"]);
+  assert.deepEqual(serverActions, ["app/tasks/[taskId]/development/actions.ts", "app/tasks/[taskId]/development/draft-actions.ts", "app/tasks/new/actions.ts"]);
   for (const path of consoleUi) {
     assert.ok(!/\bfetch\(|lib\/db\/|lib\/tasks\/owner-task-mutations|lib\/providers|lib\/workflows/u.test(code(path)), `${path} reaches data or write layers`);
   }

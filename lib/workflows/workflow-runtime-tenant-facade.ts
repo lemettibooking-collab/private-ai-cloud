@@ -9,6 +9,7 @@ import type {
   WorkflowRuntimePublicProjectSummary,
   WorkflowRuntimePublicRunOverview,
   WorkflowRuntimePublicTaskDetail,
+  WorkflowRuntimePublicTaskFeaturePlans,
   WorkflowRuntimePublicTaskSummary,
 } from "./workflow-runtime-access";
 import type { WorkflowRuntimeDatabase } from "../db/workflow-runtime-store";
@@ -59,6 +60,8 @@ export interface TenantBoundWorkflowRuntimeFacade {
   listProjectTasks(request: unknown): Promise<TenantBoundWorkflowRuntimeDecision<readonly WorkflowRuntimePublicTaskSummary[]>>;
   // AI-038.4a { workspaceId, actorId, taskId }
   getTask(request: unknown): Promise<TenantBoundWorkflowRuntimeDecision<WorkflowRuntimePublicTaskDetail>>;
+  // AI-039 { workspaceId, actorId, taskId }: the FeaturePlan revisions of one ProjectTask.
+  getTaskFeaturePlans(request: unknown): Promise<TenantBoundWorkflowRuntimeDecision<WorkflowRuntimePublicTaskFeaturePlans>>;
 }
 
 export const tenantBoundWorkflowRuntimeFacadeLimits = Object.freeze({
@@ -240,5 +243,7 @@ export function createTenantBoundWorkflowRuntimeFacade(input: unknown): TenantBo
       (context, gated) => access.listProjectTasks(context, gated.projectId, gated.view)),
     getTask: (request: unknown) => guarded<WorkflowRuntimePublicTaskDetail>(request, ["workspaceId", "actorId", "taskId"], [],
       (context, gated) => access.getTask(context, gated.taskId)),
+    getTaskFeaturePlans: (request: unknown) => guarded<WorkflowRuntimePublicTaskFeaturePlans>(request, ["workspaceId", "actorId", "taskId"], [],
+      (context, gated) => access.getTaskFeaturePlans(context, gated.taskId)),
   });
 }

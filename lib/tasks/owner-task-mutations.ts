@@ -55,11 +55,13 @@ const attachFields = ["taskId", "runId"] as const;
 const freeze = <T extends object>(value: T): Readonly<T> => Object.freeze(value);
 const outcome = <S extends string>(status: S) => freeze({ status });
 
-class Conflict extends Error {}
-class Unavailable extends Error {}
+// The shared write-boundary primitives below are also used by the AI-039 FeaturePlan revision contract
+// (lib/development/feature-plan-mutations.ts); this module itself still writes tasks / links only.
+export class Conflict extends Error {}
+export class Unavailable extends Error {}
 
 // Own data members of an ordinary non-Proxy object with EXACTLY `fields`; getters never run.
-function exactOwnData(input: unknown, fields: readonly string[]): Record<string, unknown> | null {
+export function exactOwnData(input: unknown, fields: readonly string[]): Record<string, unknown> | null {
   try {
     if (typeof input !== "object" || input === null || isProxy(input) || Array.isArray(input)) return null;
     const prototype = Object.getPrototypeOf(input);
@@ -78,7 +80,7 @@ function exactOwnData(input: unknown, fields: readonly string[]): Record<string,
   }
 }
 
-function capturedMethod(input: unknown, name: string): ((...args: unknown[]) => unknown) | null {
+export function capturedMethod(input: unknown, name: string): ((...args: unknown[]) => unknown) | null {
   try {
     if (typeof input !== "object" || input === null || isProxy(input) || Array.isArray(input)) return null;
     const descriptor = Object.getOwnPropertyDescriptor(input, name);
@@ -91,7 +93,7 @@ function capturedMethod(input: unknown, name: string): ((...args: unknown[]) => 
 }
 
 // Only a genuine native Promise is awaited (no arbitrary thenable / Proxy `then` is ever invoked).
-async function resolveUserId(resolve: (...args: unknown[]) => unknown): Promise<string | null> {
+export async function resolveUserId(resolve: (...args: unknown[]) => unknown): Promise<string | null> {
   let raw: unknown;
   try {
     raw = Reflect.apply(resolve, undefined, []);
@@ -147,7 +149,7 @@ const isSqlState = (error: unknown): boolean =>
 // a failed BEGIN, a COMMIT that did not succeed, a failed ROLLBACK or any non-SQLSTATE error. A COMMIT
 // that did not succeed is ambiguous and surfaces as `unavailable` (a retry with the same idempotency
 // key is safe). No slow work happens inside the transaction.
-async function inTransaction<T>(database: WorkflowRuntimeDatabase, work: (client: WorkflowRuntimeSqlClient) => Promise<T>): Promise<T> {
+export async function inTransaction<T>(database: WorkflowRuntimeDatabase, work: (client: WorkflowRuntimeSqlClient) => Promise<T>): Promise<T> {
   const client = await database.connect();
   let destroy = false;
   try {
@@ -183,7 +185,7 @@ async function inTransaction<T>(database: WorkflowRuntimeDatabase, work: (client
 
 // Same Owner predicate as the AI-038.1 read check, here inside the write transaction and with
 // FOR SHARE on every authority row so a concurrent revocation is serialized against the write.
-async function lockOwnerAuthority(client: WorkflowRuntimeSqlClient, tenant: ResolvedWorkflowRuntimeTenant, userId: string): Promise<void> {
+export async function lockOwnerAuthority(client: WorkflowRuntimeSqlClient, tenant: ResolvedWorkflowRuntimeTenant, userId: string): Promise<void> {
   const result = await client.query(
     `/* task-mutation:owner-lock */
      select account.id

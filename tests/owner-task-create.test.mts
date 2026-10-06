@@ -160,8 +160,13 @@ test("binding exposes createTask ONLY (attachRun is never bound) and refuses inv
 });
 
 test("O. dependency direction: UI → Server Action → server composition → owner-task-mutations (never UI → mutations)", () => {
-  // The low-level mutation contract has exactly ONE application importer: the binding module.
-  assert.deepEqual(importers(/from\s+["'][^"']*\/tasks\/owner-task-mutations(\.ts)?["']/u), ["lib/composition/owner-task-create.ts"]);
+  // The low-level task mutation contract (createOwnerTaskMutations) has exactly ONE application importer:
+  // the binding module. AI-039: the FeaturePlan revision contract imports ONLY the shared write-boundary
+  // primitives (Owner lock, transaction, strict input reading) — never createTask / attachRun.
+  assert.deepEqual(importers(/\bcreateOwnerTaskMutations\b/u).filter((path) => path !== "lib/tasks/owner-task-mutations.ts"), ["lib/composition/owner-task-create.ts"]);
+  assert.deepEqual(importers(/from\s+["'][^"']*\/tasks\/owner-task-mutations(\.ts)?["']/u), ["lib/composition/owner-task-create.ts", "lib/development/feature-plan-mutations.ts"]);
+  assert.match(code("lib/development/feature-plan-mutations.ts"),
+    /import \{ Conflict, Unavailable, capturedMethod, exactOwnData, inTransaction, lockOwnerAuthority, resolveUserId \} from "\.\.\/tasks\/owner-task-mutations\.ts";/u);
   // The binding is imported only by its server-only entry.
   assert.deepEqual(importers(/from\s+["'][^"']*owner-task-create(\.ts)?["']/u), ["lib/composition/owner-task-create.server.ts"]);
   // The server-only entry is imported only by the Quick Create Server Action and its page (key issue).
@@ -170,10 +175,19 @@ test("O. dependency direction: UI → Server Action → server composition → o
   assert.match(serverEntry, /^(\/\/[^\n]*\n)*import "server-only";/u, "server-only must be the first import");
   assert.match(serverEntry, /createGitHubOwnerTaskCreate\(\{ database, domainWorkspaceId, sessionResolver: \{ resolve: \(\) => auth\(\) \} \}\)/u, "the real Auth.js session of THIS request");
   assert.match(serverEntry, /workspaceSlug: process\.env\.APP_DEMO_WORKSPACE_SLUG/u, "the workspace is trusted server configuration");
-  // Exactly one Server Action module in the application, exporting exactly one async action.
+  // Exactly three Server Action modules in the application (AI-038.4b Quick Create, AI-039 Plan Builder
+  // save, AI-039 P-1 planning-interview draft), each exporting exactly one async action.
   const serverActionFiles = applicationFiles().filter((path) => /^\s*["']use server["'];/u.test(source(path)));
-  assert.deepEqual(serverActionFiles, ["app/tasks/new/actions.ts"]);
-  assert.ok(!applicationFiles().filter((path) => path !== "app/tasks/new/actions.ts").some((path) => /["']use server["']/u.test(code(path))), "no inline Server Function elsewhere");
+  assert.deepEqual(serverActionFiles, ["app/tasks/[taskId]/development/actions.ts", "app/tasks/[taskId]/development/draft-actions.ts", "app/tasks/new/actions.ts"]);
+  // The draft action writes nothing: it reaches only the draft composition (never the save / mutations).
+  const draftAction = code("app/tasks/[taskId]/development/draft-actions.ts");
+  assert.deepEqual([...draftAction.matchAll(/^export\s+(?:async\s+)?(?:function|const|let|class)\s+(\w+)/gmu)].map((match) => match[1]), ["draftFeaturePlanAction"]);
+  assert.deepEqual([...draftAction.matchAll(/from\s+["']([^"']+)["']/gu)].map((match) => match[1]).sort(), ["@/lib/composition/owner-feature-plan-draft.server", "@/lib/development/feature-plan-planner"]);
+  assert.match(draftAction, /import type \{ FeaturePlanCandidate \} from "@\/lib\/development\/feature-plan-planner";/u, "the planner module is a type-only import");
+  assert.ok(!applicationFiles().filter((path) => !serverActionFiles.includes(path)).some((path) => /["']use server["']/u.test(code(path))), "no inline Server Function elsewhere");
+  const planAction = code("app/tasks/[taskId]/development/actions.ts");
+  assert.deepEqual([...planAction.matchAll(/^export\s+(?:async\s+)?(?:function|const|let|class)\s+(\w+)/gmu)].map((match) => match[1]), ["saveFeaturePlanAction"]);
+  assert.deepEqual([...planAction.matchAll(/from\s+["']([^"']+)["']/gu)].map((match) => match[1]).sort(), ["@/lib/composition/owner-feature-plan-save.server", "next/navigation"]);
   const action = code("app/tasks/new/actions.ts");
   assert.deepEqual([...action.matchAll(/^export\s+(?:async\s+)?(?:function|const|let|class)\s+(\w+)/gmu)].map((match) => match[1]), ["quickCreateTaskAction"]);
   assert.deepEqual([...action.matchAll(/from\s+["']([^"']+)["']/gu)].map((match) => match[1]).sort(), ["@/lib/composition/owner-task-create.server", "next/navigation"]);

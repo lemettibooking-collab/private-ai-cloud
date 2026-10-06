@@ -14,6 +14,9 @@ import { queryProjectRuns, queryProjects } from "../projects/postgres-project-re
 import type { ProjectTaskView, PublicProjectTaskDetail, PublicProjectTaskSummary } from "../tasks/project-task";
 // @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
 import { queryProjectTask, queryProjectTasks } from "../tasks/postgres-project-task-read.ts";
+import type { TaskFeaturePlans } from "../development/feature-plan-model";
+// @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
+import { queryTaskFeaturePlans } from "../development/postgres-feature-plan-read.ts";
 
 export const workflowRuntimeReadModelLimits = Object.freeze({
   defaultLimit: 25,
@@ -469,6 +472,17 @@ export class PostgresWorkflowRuntimeReadModel {
       return await this.#withClient(async (client) => {
         const result = await queryProjectTask(client, this.#workspaceDatabaseId, taskId);
         return result.verdict === "allow" ? allow(result.data) : deny<PublicProjectTaskDetail>(result.reason);
+      });
+    } catch { return deny("read_failed"); }
+  }
+
+  // AI-039: the persisted FeaturePlan revisions of one ProjectTask of THIS tenant (one bounded
+  // statement; stored plans re-validated and re-fingerprinted, never repaired).
+  async getTaskFeaturePlans(taskId: string): Promise<WorkflowRuntimeReadDecision<TaskFeaturePlans>> {
+    try {
+      return await this.#withClient(async (client) => {
+        const result = await queryTaskFeaturePlans(client, this.#workspaceDatabaseId, taskId);
+        return result.verdict === "allow" ? allow(result.data) : deny<TaskFeaturePlans>(result.reason);
       });
     } catch { return deny("read_failed"); }
   }

@@ -10,6 +10,8 @@ import type {
 import type { ProjectRunSummary } from "../projects/postgres-project-registry";
 import type { PublicProjectSummary } from "../projects/project-registry";
 import type { ProjectTaskView, PublicProjectTaskDetail, PublicProjectTaskSummary } from "../tasks/project-task";
+import type { DevelopmentTask, FeaturePlan } from "../contracts/development-plan";
+import type { FeaturePlanRevisionSummary, TaskFeaturePlans } from "../development/feature-plan-model";
 import type {
   WorkflowRuntimeCommand,
   WorkflowRuntimeResponse,
@@ -33,6 +35,8 @@ export const workflowRuntimeAccessActions = Object.freeze([
   "list_tasks",
   "list_project_tasks",
   "read_task",
+  // AI-039 FeaturePlan revisions of a ProjectTask (read-only, tenant-scoped).
+  "read_task_feature_plans",
 ] as const);
 
 export type WorkflowRuntimeAccessAction = typeof workflowRuntimeAccessActions[number];
@@ -260,6 +264,10 @@ export type WorkflowRuntimePublicTaskDetail = Readonly<{
   runsTruncated: boolean;
 }>;
 
+// AI-039 public FeaturePlan revisions of a ProjectTask (explicit copies; no internal ids, no
+// idempotency keys, no intent fingerprints, no creator ids).
+export type WorkflowRuntimePublicTaskFeaturePlans = TaskFeaturePlans;
+
 export interface WorkflowRuntimeAccessAuthorizer {
   authorize(
     input: WorkflowRuntimeAccessAuthorizationInput,
@@ -273,7 +281,7 @@ export type WorkflowRuntimeAccessDecision<T> =
 type RuntimeReadModel = Pick<PostgresWorkflowRuntimeReadModel,
   "getRunOverview" | "getRunAuditTimeline" | "getRunModelUsage" | "listApprovalQueue">
   // AI-038.3.1: optional project discovery; when absent the corresponding reads fail closed.
-  & Partial<Pick<PostgresWorkflowRuntimeReadModel, "listProjects" | "listProjectRuns" | "listTasks" | "getTask">>;
+  & Partial<Pick<PostgresWorkflowRuntimeReadModel, "listProjects" | "listProjectRuns" | "listTasks" | "getTask" | "getTaskFeaturePlans">>;
 
 export type AuthorizedWorkflowRuntimeAccessDependencies = Readonly<{
   runtimeService: Pick<WorkflowRuntimeService, "execute">;
@@ -315,6 +323,7 @@ export interface AuthorizedWorkflowRuntimeAccess {
   listTasks(context: unknown, view: unknown): Promise<WorkflowRuntimeAccessDecision<readonly WorkflowRuntimePublicTaskSummary[]>>;
   listProjectTasks(context: unknown, projectId: unknown, view: unknown): Promise<WorkflowRuntimeAccessDecision<readonly WorkflowRuntimePublicTaskSummary[]>>;
   getTask(context: unknown, taskId: unknown): Promise<WorkflowRuntimeAccessDecision<WorkflowRuntimePublicTaskDetail>>;
+  getTaskFeaturePlans(context: unknown, taskId: unknown): Promise<WorkflowRuntimeAccessDecision<WorkflowRuntimePublicTaskFeaturePlans>>;
 }
 
 const stableIdPattern = /^[a-z0-9][a-z0-9._-]{0,63}$/u;
@@ -608,6 +617,43 @@ function projectTaskDetail(input: PublicProjectTaskDetail): WorkflowRuntimePubli
   return { task: projectTaskSummary(input.task), runs: input.runs.map(projectProjectRunSummary), runsTruncated: input.runsTruncated };
 }
 
+function projectDevelopmentTask(input: DevelopmentTask): DevelopmentTask {
+  return {
+    id: input.id,
+    sequence: input.sequence,
+    title: input.title,
+    goal: input.goal,
+    scope: [...input.scope],
+    nonGoals: [...input.nonGoals],
+    allowedPaths: [...input.allowedPaths],
+    acceptanceCriteria: [...input.acceptanceCriteria],
+    verificationCommands: [...input.verificationCommands],
+    dependencyIds: [...input.dependencyIds],
+    riskLevel: input.riskLevel,
+    priority: input.priority,
+    requiresOwnerApproval: input.requiresOwnerApproval,
+  };
+}
+
+function projectFeaturePlan(input: FeaturePlan): FeaturePlan {
+  return { id: input.id, title: input.title, goal: input.goal, status: input.status, tasks: input.tasks.map(projectDevelopmentTask) };
+}
+
+function projectPlanRevision(input: FeaturePlanRevisionSummary): FeaturePlanRevisionSummary {
+  return { planId: input.planId, revision: input.revision, createdAt: input.createdAt, fingerprint: input.fingerprint };
+}
+
+function projectTaskFeaturePlans(input: TaskFeaturePlans): WorkflowRuntimePublicTaskFeaturePlans {
+  return {
+    taskId: input.taskId,
+    projectId: input.projectId,
+    revisionCount: input.revisionCount,
+    latest: input.latest === null ? null : { ...projectPlanRevision(input.latest), plan: projectFeaturePlan(input.latest.plan) },
+    history: input.history.map(projectPlanRevision),
+    historyTruncated: input.historyTruncated,
+  };
+}
+
 const taskViews = new Set<string>(["all", "current", "attention", "completed"]);
 function taskView(input: unknown): ProjectTaskView | null {
   return typeof input === "string" && taskViews.has(input) ? input as ProjectTaskView : null;
@@ -834,6 +880,24 @@ export function createAuthorizedWorkflowRuntimeAccess(
     }
   }
 
+  // AI-039: the persisted FeaturePlan revisions of one ProjectTask. Same gate as getTask: the task id
+  // is an untrusted selector; unknown, foreign, archived-project and corrupted data are all `unavailable`.
+  async function getTaskFeaturePlans(
+    contextInput: unknown,
+    taskIdInput: unknown,
+  ): Promise<WorkflowRuntimeAccessDecision<WorkflowRuntimePublicTaskFeaturePlans>> {
+    const readModel = dependencies.readModel;
+    const taskId = runId(taskIdInput);
+    if (!taskId || typeof readModel.getTaskFeaturePlans !== "function") return unavailable();
+    if (!await authorize(contextInput, "read_task_feature_plans", null)) return unavailable();
+    try {
+      const result = await readModel.getTaskFeaturePlans(taskId);
+      return rawAllowed(result) && result.data.taskId === taskId ? availableProjected(projectTaskFeaturePlans(result.data)) : unavailable();
+    } catch {
+      return unavailable();
+    }
+  }
+
   return Object.freeze({
     executeCommand,
     getRunOverview,
@@ -845,5 +909,6 @@ export function createAuthorizedWorkflowRuntimeAccess(
     listTasks: (context: unknown, view: unknown) => readTasks(context, "list_tasks", null, view),
     listProjectTasks: (context: unknown, projectId: unknown, view: unknown) => readTasks(context, "list_project_tasks", projectId, view),
     getTask,
+    getTaskFeaturePlans,
   });
 }
