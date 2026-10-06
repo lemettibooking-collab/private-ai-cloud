@@ -1,15 +1,19 @@
-// AI-039 P-1 AI-assisted FeaturePlan CANDIDATE (pure; no I/O of its own).
+// AI-039 P-1 / AI-039.1 AI-assisted FeaturePlan CANDIDATE (pure; no I/O of its own).
 //
 //   ProjectTask facts + Owner Planning Interview answers
-//     → ONE bounded structured-planning completion through a PlanningModelPort
-//     → strict parse of the untrusted model output
+//     → ONE bounded planning invocation through a PlanningModelPort (AI-039.1: a real persisted
+//       planning Workflow Run through the existing runtime — ledger, budget, provider-start fence,
+//       usage / cost settlement, outcome_unknown — returning the DURABLE step result text)
+//     → strict JSON parse of the untrusted output text (no repair, no fence stripping)
+//     → strict field-by-field parse of the untrusted model output
 //     → deterministic validation: validateAndNormalizeFeaturePlan + buildDevelopmentTaskWaves
 //     → an UNSAVED candidate for Owner review (or a rejection with codes only)
 //
 // Boundaries:
-// * Planning is a bounded direct-model task in the ModelProvider vocabulary (messages in, structured
-//   output out). It is NOT an executor task: no ExecutorAdapter, no tools, no agent loop, no follow-up
-//   turns, no repository, GitHub, run or runtime access.
+// * Planning is a bounded direct-model task in the ModelProvider vocabulary (messages in, output text
+//   out). It is NOT an executor task: no ExecutorAdapter, no tools, no agent loop, no follow-up turns,
+//   no repository or GitHub access. This module has no I/O and no runtime access of its own: the
+//   planning Run lives behind the PlanningModelPort binding.
 // * The candidate is never saved here. Only the Owner's explicit "save draft revision" (the AI-039
 //   save contract, with its own validation) creates a FeaturePlan revision.
 // * Repository context: the Project Registry holds a repository URL only, never its contents. With no
@@ -28,12 +32,31 @@ import { buildDevelopmentTaskWaves, validateAndNormalizeFeaturePlan } from "../c
 // @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
 import { featurePlanBuilderLimits, stepIdPattern } from "./feature-plan-model.ts";
 
-// One bounded structured-planning completion. A binding over a real ModelProvider must go through the
-// invocation ledger and pre-spend budget reservation; none exists for planning yet (M2.2 deferred), so
-// production has NO binding and planning is factually unavailable.
+// The Owner's planning request context: the task, its project and the rendered form's idempotency key.
+export type PlanningRequestContext = Readonly<{
+  taskId: string;
+  projectId: string;
+  projectName: string;
+  idempotencyKey: string;
+}>;
+
+// Factual non-candidate outcomes of the planning invocation (never a guess):
+//   unavailable          no valid planning policy / provider binding (nothing was attempted)
+//   budget_denied        the aggregate planning budget denied generation before any provider spend
+//   provider_unavailable the provider failed transiently; the attempt is finished (no hidden retry)
+//   failed               the planning Run failed definitively (or could not start; nothing was spent)
+//   recovery_required    the outcome is ambiguous (outcome_unknown, ambiguous persistence, in flight):
+//                        budget held, never redispatched
+//   conflict             the idempotency key was used for a different planning request
+//   not_plannable / unauthenticated   re-checked at the durable boundary
+export type PlanningModelFailure =
+  | "unavailable" | "budget_denied" | "provider_unavailable" | "failed" | "recovery_required" | "conflict" | "not_plannable" | "unauthenticated";
+
+// ONE bounded planning invocation. AI-039.1 production binding: lib/composition/owner-feature-plan-planning
+// (a real planning Workflow Run). Never a direct provider SDK call.
 export type PlanningModelPort = Readonly<{
-  complete(input: Readonly<{ messages: readonly ModelInvocationMessage[]; maxOutputTokens: number }>): Promise<
-    Readonly<{ status: "completed"; structuredOutput: unknown }> | Readonly<{ status: "unavailable" | "failed" }>
+  complete(input: Readonly<{ context: PlanningRequestContext; messages: readonly ModelInvocationMessage[]; maxOutputTokens: number }>): Promise<
+    Readonly<{ status: "completed"; outputText: string }> | Readonly<{ status: PlanningModelFailure }>
   >;
 }>;
 
@@ -68,10 +91,12 @@ export type CandidateRejection =
 export type PlannerOutcome =
   | Readonly<{ status: "candidate"; candidate: FeaturePlanCandidate }>
   | Readonly<{ status: "rejected"; reason: CandidateRejection }>
-  | Readonly<{ status: "unavailable" }>
-  | Readonly<{ status: "failed" }>;
+  | Readonly<{ status: PlanningModelFailure }>;
 
-export const plannerLimits = Object.freeze({ maxOutputTokens: 4000, maxSteps: 8 });
+// maxOutputTextLength: the largest output text the planner parses (a 4000-token JSON plan is far below).
+export const plannerLimits = Object.freeze({ maxOutputTokens: 4000, maxSteps: 8, maxOutputTextLength: 65_536 });
+
+const failures: readonly PlanningModelFailure[] = ["unavailable", "budget_denied", "provider_unavailable", "failed", "recovery_required", "conflict", "not_plannable", "unauthenticated"];
 
 const limits = featurePlanBuilderLimits;
 const outputFields = ["title", "goal", "steps"] as const;
@@ -173,18 +198,40 @@ export function candidateFromModelOutput(output: unknown): Readonly<{ ok: true; 
   }
 }
 
-// One planning attempt: exactly one completion call, then deterministic validation. Never saves.
-export async function draftFeaturePlanCandidate(input: Readonly<{ task: PlanningTaskFacts; answers: InterviewAnswers; model: PlanningModelPort | null }>): Promise<PlannerOutcome> {
+// Untrusted output TEXT → candidate or rejection. The whole text must be exactly one JSON object
+// (JSON.parse: no markdown fences, comments, trailing text or repair), within the bounded length.
+export function candidateFromOutputText(text: unknown): ReturnType<typeof candidateFromModelOutput> {
+  if (typeof text !== "string" || text.length === 0 || text.length > plannerLimits.maxOutputTextLength) return { ok: false, reason: "malformed_output" };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { ok: false, reason: "malformed_output" };
+  }
+  return candidateFromModelOutput(parsed);
+}
+
+// One planning attempt: exactly one invocation, then deterministic validation. Never saves.
+export async function draftFeaturePlanCandidate(input: Readonly<{
+  task: PlanningTaskFacts; answers: InterviewAnswers; context: PlanningRequestContext; model: PlanningModelPort | null;
+}>): Promise<PlannerOutcome> {
   if (!input.model) return Object.freeze({ status: "unavailable" as const });
   let result: Awaited<ReturnType<PlanningModelPort["complete"]>>;
   try {
-    result = await input.model.complete({ messages: planningMessages(input.task, input.answers), maxOutputTokens: plannerLimits.maxOutputTokens });
+    result = await input.model.complete({
+      context: input.context,
+      messages: planningMessages(input.task, input.answers),
+      maxOutputTokens: plannerLimits.maxOutputTokens,
+    });
   } catch {
-    return Object.freeze({ status: "failed" as const });
+    // The binding owns the provider boundary; an escaped exception cannot prove nothing was spent.
+    return Object.freeze({ status: "recovery_required" as const });
   }
-  if (result.status === "unavailable") return Object.freeze({ status: "unavailable" as const });
-  if (result.status !== "completed") return Object.freeze({ status: "failed" as const });
-  const parsed = candidateFromModelOutput(result.structuredOutput);
+  if (typeof result !== "object" || result === null || isProxy(result)) return Object.freeze({ status: "recovery_required" as const });
+  if (result.status !== "completed") {
+    return Object.freeze({ status: failures.includes(result.status) ? result.status : "recovery_required" as const });
+  }
+  const parsed = candidateFromOutputText(result.outputText);
   return parsed.ok
     ? Object.freeze({ status: "candidate" as const, candidate: parsed.candidate })
     : Object.freeze({ status: "rejected" as const, reason: parsed.reason });

@@ -162,7 +162,9 @@ The census recorded the current hardening debt and moved development to mileston
 - **AI-038.5 Mission Control Visual Refinement — DONE** (`c7d9b26`)
 - **AI-038.6 RU/EN Owner Console Localization — DONE** (`5af9f50`)
 - **AI-038.7 Dynamic Ambient Shader Background — DONE** (`4cb0dc0`)
-- **AI-039 Development Workflow Browser — IN REVIEW**
+- **AI-039 Development Workflow Browser — DONE** (`b0e0bb8`)
+- **AI-039.1 Ledger-backed AI FeaturePlan Planning — DONE** (see §9). Direct API-key live smoke deferred by Owner until API billing is available; no real paid call has been made, and M2.2 remains DEFERRED BY OWNER.
+- **AI-039.2 ChatGPT Plan Access — PLANNED / NEXT** (see §9)
 - **Roadmap Rebase v1.4 — vendor-neutral control plane — documentation only** (this version; `docs/ROADMAP_REBASE_V1.4.md`)
 
 AI-037.1.1 passed independent re-gate and was committed/pushed through the Owner-approved repository workflow.
@@ -641,11 +643,11 @@ Runtime command/write wiring remains deferred to a later write boundary.
 - pre-auth body/shape/resource limits
 - Proxy rejection and cheap structural gate
 
-### AI-039 — Development Workflow Browser — IN REVIEW
+### AI-039 — Development Workflow Browser — DONE (`b0e0bb8`)
 
 Owner creates Development Request and sees FeaturePlan, dependencies, risk, executor recommendation and verification plan before repository mutation.
 
-Author implementation awaits the independent re-gate. A planning boundary only: no repository mutation, run, model, executor or GitHub action.
+A planning boundary only: no repository mutation, run, model, executor or GitHub action. (AI-039.1 below binds the planning port.)
 
 - **Development Request = ProjectTask.** There is no separate request entity: `ProjectTask → FeaturePlan revisions → DevelopmentTask[] → (future) Runs`.
 - **Durable, immutable FeaturePlan revisions** (migration `0011`, `project_task_feature_plans`):
@@ -658,7 +660,7 @@ Author implementation awaits the independent re-gate. A planning boundary only: 
   - Planning is ONE bounded structured completion through a provider-neutral planning port in the ModelProvider vocabulary — not an executor task, no tools or agent loop. The candidate is untrusted: it is rejected (never repaired) unless `validateAndNormalizeFeaturePlan` and `buildDevelopmentTaskWaves` accept it.
   - The candidate is never saved by AI; only the Owner's explicit "save draft revision" creates a revision.
   - The Project Registry holds no repository contents, so the planner never names repository paths: a candidate's allowed paths are marked as needing technical clarification and must be filled before saving.
-  - No planning provider is bound yet (a real ModelProvider binding needs the run-scoped invocation ledger and pre-spend budget reservation; M2.2 deferred), so production shows a factual "AI planner unavailable" state.
+  - At AI-039 no planning provider was bound, so production showed a factual "AI planner unavailable" state. AI-039.1 binds the port through a real planning Run (below); without a valid planning policy the state stays "unavailable".
 - **Plan Builder (advanced editor / fallback)** at `/tasks/[taskId]/development` (from Task Detail; no new navigation item):
   - steps with stable ids, dependencies chosen from other steps, risk, priority, Owner-approval flag and one-per-line scope / paths / criteria / commands;
   - a bounded FormData parser and one Server Action → the server-only save contract (`lib/development/feature-plan-mutations.ts`);
@@ -672,6 +674,62 @@ Author implementation awaits the independent re-gate. A planning boundary only: 
 - **Executor recommendation:** factually unavailable until ExecutorRouter (AI-041.3); no executor is shown or implied.
 - **Follow-up (Owner decision):** adaptive, task-specific interview questions proposed by the planning model (on top of the fixed task-type questions, product-only, each with "Not sure") — after a real planning provider is bound.
 - **Repository changes:** factually not started.
+
+### AI-039.1 — Ledger-backed AI FeaturePlan Planning — DONE
+
+The AI-039 planning port bound to a REAL bounded model invocation, through the existing runtime.
+
+**DONE means:** implementation, deterministic / fake-SDK / live-PostgreSQL verification and the independent architecture review are complete.
+
+**It does not mean** that a real API-key paid call was performed, that API billing was verified live, or that M2.2 is complete.
+
+**Direct API-key live smoke deferred by Owner until API billing is available.** The API-key path is kept as implemented. The one Owner-approved paid planning call remains a separate gated step, and M2.2 remains DEFERRED BY OWNER.
+
+- **Seam:** one real persisted single-step planning Workflow Run per planning request, through the existing lifecycle (`create → start → advance`).
+  - It inherits route, data-handling permit, invocation ledger, preflight, pre-spend budget reservation, provider-start fence, usage / cost settlement, `outcome_unknown`, recovery, audit and observability.
+  - No second ledger, no synthetic run / workflow / agent / step identity. The planning Run is visible on the Runs page.
+  - The Run's policy snapshot is a versioned built-in planning workflow (`pac-feature-plan-planning`, agent `pac-feature-planner`, step `feature-plan`, `proposal_only`, no tools, `maxAttempts` 1) for the task's real Project Registry project.
+- **Durable step result** (narrow, generic pull-forward of AI-037.2; migration `0012`):
+  - the output text of a succeeded invocation is stored in `workflow_model_invocation_results` in the same transaction as the ledger's usage / cost / budget settlement, sha256-fingerprinted;
+  - rows are immutable and tenant-bound (composite FKs); readers re-fingerprint and fail closed.
+  - A result therefore survives a later snapshot commit failure without a second dispatch.
+- **Planning request** (`project_task_planning_requests`, migration `0012`):
+  - Owner + task + project locks (the AI-039 plannability rule);
+  - idempotency key + request fingerprint: exact replay never dispatches again; the same key with a different request is a conflict;
+  - settled exactly once with the runtime outcome; one audit event each for started and settled.
+  - The candidate is re-derived from the durable result, never stored twice.
+- **Budget policy `feature_plan_planning`** from trusted server configuration (`PAC_PLANNER_*`):
+  - pinned identity, verified prices, per-call input / output / cost ceilings, daily-token and monthly-cost windows;
+  - fails closed, and the windows must hold one call.
+  - Production binding only when the policy, the credential and the trusted workspace are valid (loopback PostgreSQL until AI-037.5).
+- **Data handling:** project egress mode `approved_minimum`. Every planning request needs the Owner's explicit, unchecked-by-default consent in the form, turned into one-shot evidence bound to exactly that invocation.
+- **Strict output:** the whole output text must be one JSON object (no fences, no repair), then the AI-039 candidate validator. Non-empty `allowedPaths` still reject the candidate.
+- **Outcomes:** `candidate`, `candidate_rejected`, `planner_unavailable`, `budget_denied`, `provider_unavailable`, `planning_failed`, `recovery_required`, plus `egress_approval_required` and `conflict`.
+- **Unchanged:** no auto-save, no task status change, no repository execution; provider SDK retries 0; the credential stays server-side only.
+
+### AI-039.2 — ChatGPT Plan Access — PLANNED / NEXT
+
+Purpose: use official Sign in with ChatGPT / ChatGPT plan usage as a second `ModelProvider` access mode for bounded FeaturePlan planning.
+
+```
+ModelProvider
+  ├── api_key               (AI-039.1, preserved)
+  └── subscription_session  (AI-039.2)
+```
+
+Both access modes feed the same flow: `Planning Interview → ledger / policy → candidate → deterministic validation → Owner review`. `ModelProvider` is NOT collapsed into `ExecutorAdapter`.
+
+Approved architecture direction (only this is recorded):
+
+- the official Sign in with ChatGPT OAuth path;
+- ChatGPT-plan usage for eligible Responses API requests;
+- access mode `subscription_session`, with no API key required for this route;
+- OAuth credentials protected server / local only; no tokens in browser storage;
+- the existing `api_key` path preserved;
+- no fake $0 cost: subscription usage / quota is represented separately from metered API cost;
+- no repository execution, and no ExecutorAdapter work yet.
+
+Actual availability / eligibility and the supported request contract must be re-verified against official OpenAI documentation during AI-039.2.
 
 ## 10. Architecture Decomposition Gate
 
@@ -835,7 +893,7 @@ The safety requirements are kept as environment capability/policy requirements t
 
 | Package | Purpose | Required by |
 |---|---|---|
-| AI-037.2 | Durable Step result; recovery without provider redispatch | Before autonomous controller (AI-043.2) / after design review; v1.4: also covers durable executor-outcome capture |
+| AI-037.2 | Durable Step result; recovery without provider redispatch | Before autonomous controller (AI-043.2) / after design review; v1.4: also covers durable executor-outcome capture. AI-039.1 pulled forward one narrow part: the output text of a succeeded model invocation is stored with its settlement (`workflow_model_invocation_results`). Snapshot-level step results, structured output, recovery tooling and executor outcomes remain deferred. |
 | AI-037.3 | Ambiguous COMMIT reconciliation + general recovery tooling | Before autonomous controller / staging |
 | AI-037.5 | TLS/config allowlist + startup validation | Before staging (earlier if M2 PostgreSQL is non-loopback) |
 | AI-037.6b | Lease heartbeat / DB clock if needed | Before multi-instance/autonomy when evidence requires it; long-running executor runs may pull it forward |
@@ -1085,7 +1143,7 @@ Roadmap does not imply strictly serial development. Parallel work is allowed onl
 
 ### A. Current operational line (unchanged by the rebase)
 
-While M2.2 is deferred: `AI-037.7 DONE → AI-038.0 DONE → AI-038.1 DONE → AI-038.2a DONE → AI-038.2b DONE → AI-038.3 DONE → AI-038.3.1 DONE → AI-038.3.2 DONE → AI-038.4a Project Task Foundation + read surfaces DONE → AI-038.4b Quick Create / task mutation binding DONE → AI-038.5 Mission Control Visual Refinement DONE → AI-038.6 RU/EN Owner Console Localization DONE → AI-038.7 Dynamic Ambient Shader Background DONE → AI-039 Development Workflow Browser (IN REVIEW)` (M3 Owner path, §9). AI-038.2 passed; the Owner Console reads real runtime data through AI-038.3, read-only. The rebase does not cancel or skip any unfinished AI-038 work.
+While M2.2 is deferred: `AI-037.7 DONE → AI-038.0 DONE → AI-038.1 DONE → AI-038.2a DONE → AI-038.2b DONE → AI-038.3 DONE → AI-038.3.1 DONE → AI-038.3.2 DONE → AI-038.4a Project Task Foundation + read surfaces DONE → AI-038.4b Quick Create / task mutation binding DONE → AI-038.5 Mission Control Visual Refinement DONE → AI-038.6 RU/EN Owner Console Localization DONE → AI-038.7 Dynamic Ambient Shader Background DONE → AI-039 Development Workflow Browser DONE → AI-039.1 Ledger-backed AI FeaturePlan Planning DONE (direct API-key live smoke deferred by Owner) → AI-039.2 ChatGPT Plan Access (NEXT) → AI-040a (PLANNED)` (M3 Owner path, §9). AI-038.2 passed; the Owner Console reads real runtime data through AI-038.3, read-only. The rebase does not cancel or skip any unfinished AI-038 work.
 
 ### B. First new architecture implementation introduced by v1.4
 
@@ -1097,7 +1155,7 @@ While M2.2 is deferred: `AI-037.7 DONE → AI-038.0 DONE → AI-038.1 DONE → A
 
 ### UI
 
-AI-038.2, AI-038.3, AI-038.3.1 and AI-038.3.2 are DONE: the Owner Console reads real runtime data with All Projects and real project switching, read-only. AI-038.4a (DONE) adds persistent Owner Tasks as read surfaces; AI-038.4b (DONE) adds Quick Create, the only UI write (draft task intent through the audited `createTask`). AI-039 (IN REVIEW) adds the second UI write: saving immutable draft FeaturePlan revisions of a ProjectTask, with no execution. Other UI write actions need separate tasks.
+AI-038.2, AI-038.3, AI-038.3.1 and AI-038.3.2 are DONE: the Owner Console reads real runtime data with All Projects and real project switching, read-only. AI-038.4a (DONE) adds persistent Owner Tasks as read surfaces; AI-038.4b (DONE) adds Quick Create, the only UI write (draft task intent through the audited `createTask`). AI-039 (DONE) adds the second UI write: saving immutable draft FeaturePlan revisions of a ProjectTask, with no execution. AI-039.1 (DONE; direct API-key live smoke deferred by Owner) adds the Owner-approved planning request, which runs one budget-bounded planning Run and never saves a plan or changes the task. Other UI write actions need separate tasks.
 
 ### Execution platform
 

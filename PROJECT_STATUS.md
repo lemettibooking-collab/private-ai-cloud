@@ -8,17 +8,17 @@ Private AI Cloud is a **vendor-neutral AI Engineering Control Plane**. The canon
 |---|---|
 | M1 Real Money Safety | DONE |
 | M2 Direct Model Provider Capability | IN REVIEW (M2.0 and M2.1 DONE; M2.2 DEFERRED BY OWNER) |
-| M3 Owner Product | ACTIVE / NOT DONE: AI-037.7 and AI-038.0–AI-038.7 DONE; AI-039 Development Workflow Browser IN REVIEW |
+| M3 Owner Product | ACTIVE / NOT DONE: AI-037.7, AI-038.0–AI-038.7, AI-039 Development Workflow Browser and AI-039.1 Ledger-backed AI FeaturePlan Planning DONE (direct API-key live smoke deferred by Owner until API billing is available); AI-039.2 ChatGPT Plan Access NEXT |
 | M4 Vendor-Neutral Executor Platform | REBASED; first new task AI-041.0 Vendor-Neutral Executor Adapter Contract (PLANNED) |
 | M5–M8 | PLANNED (M5 and M7 rebased in v1.4) |
 
-**Next on the operational line:** the independent re-gate of AI-039; the order after it is in `docs/ROADMAP.md` §9.\
+**Next on the operational line:** AI-039.2 ChatGPT Plan Access (PLANNED / NEXT); AI-040a remains PLANNED after AI-039.2. The full order is in `docs/ROADMAP.md` §9. M2.2 remains DEFERRED BY OWNER.\
 **First implementation task created by the v1.4 rebase:** AI-041.0.
 
 ## What Exists
 
 - The Owner Console (RU / EN): Dashboard, My Attention, Projects, Tasks, Runs and Approvals read real runtime data read-only; the remaining prototype pages use mocked data.
-- A PostgreSQL 16 schema with raw SQL migrations `0001`–`0011` and the Smart Algorithms demo seed.
+- A PostgreSQL 16 schema with raw SQL migrations `0001`–`0012` and the Smart Algorithms demo seed.
 - A server-only workflow runtime:
   - command lifecycle, claims and executions;
   - approvals and the invocation ledger;
@@ -31,14 +31,20 @@ Private AI Cloud is a **vendor-neutral AI Engineering Control Plane**. The canon
   - the development-execution state machine with corrective attempts;
   - the multi-project scheduler;
   - the model registry and routing policy.
-- A `ModelProvider` abstraction with an OpenAI adapter, a deterministic mock and a real-provider composition root. No real paid call has been made.
+- A `ModelProvider` abstraction with an OpenAI adapter, a deterministic mock and a real-provider composition root. No real paid call has been made (the AI-039.1 direct API-key live smoke is deferred by Owner).
 - The Owner read backend bundle, the authenticated identity boundary, and the Auth.js GitHub session adapter. The adapter's only HTTP route is `/api/auth/[...nextauth]`.
-- Two narrow Owner writes, each through an audited server-side contract: Quick Create (a draft ProjectTask) and saving an immutable draft FeaturePlan revision of a ProjectTask (AI-039). Neither starts an execution.
+- Two narrow Owner product-state writes, each through an audited server-side contract: Quick Create (a draft ProjectTask) and saving an immutable draft FeaturePlan revision of a ProjectTask (AI-039). Neither starts an execution or a model invocation.
+- AI-039.1 adds one Owner-approved model-operation write, the Planning Interview. With a valid planning policy and the Owner's explicit per-request approval, it:
+  - records a planning request;
+  - runs ONE budget-bounded planning Workflow Run through the existing runtime (ledger, pre-spend budget, durable result), which starts one model invocation;
+  - returns an unsaved candidate.
+
+  It writes runtime and planning state. It never saves a FeaturePlan, never changes the ProjectTask status, and never invokes an executor, GitHub or a repository mutation.
 - CI quality workflow: lint, typecheck, unit tests and build.
 
 ## Not Yet Implemented
 
-- Runtime business APIs, and any UI action that starts a run, model, executor or repository change
+- Runtime business APIs, and any UI action that starts a run, model, executor or repository change (the only exception is the AI-039.1 Owner-approved planning Run)
 - Executor integrations (ExecutorAdapter / ExecutorRouter / ExecutionEnvironment)
 - Automated Quality/Security Gate on executor output, and the corrective controller
 - RAG, real external integrations, staging/production deployment

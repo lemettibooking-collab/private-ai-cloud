@@ -52,14 +52,15 @@ const freeze = <T extends object>(value: T): Readonly<T> => Object.freeze(value)
 const outcome = <S extends string>(status: S) => freeze({ status });
 
 // The task exists in this workspace and the Owner may see it, but it cannot receive a revision now.
-class NotPlannable extends Unavailable {}
+// Shared with the AI-039.1 planning request boundary (same plannability rule, same locks).
+export class NotPlannable extends Unavailable {}
 
 const positive = (input: unknown): number | null => {
   const value = typeof input === "string" ? Number(input) : input;
   return Number.isSafeInteger(value) && (value as number) >= 1 ? value as number : null;
 };
 
-async function lockTask(client: WorkflowRuntimeSqlClient, tenant: ResolvedWorkflowRuntimeTenant, taskId: string): Promise<Readonly<{ projectId: string }>> {
+export async function lockTask(client: WorkflowRuntimeSqlClient, tenant: ResolvedWorkflowRuntimeTenant, taskId: string): Promise<Readonly<{ projectId: string }>> {
   const task = await client.query<{ project_key: string; status: string }>(
     `/* feature-plan-mutation:task-lock */
      select project_key, status from project_tasks where workspace_id = $1 and task_key = $2 for update`,

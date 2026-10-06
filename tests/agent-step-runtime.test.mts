@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
@@ -1097,7 +1098,13 @@ test("durable invocation ledger reserves before provider and records bounded fac
     latencyMs: 5,
     costUsdMicros: 0,
     errorCode: null,
+    // AI-039.1: the durable step result travels with the settlement (exact text + sha256 fingerprint).
+    stepResult: {
+      outputText: "Deterministic Agent Step output.",
+      outputFingerprint: `sha256:${createHash("sha256").update("Deterministic Agent Step output.", "utf8").digest("hex")}`,
+    },
   });
+  assert.equal(runtimeContract.agentStepOutputFingerprint("Deterministic Agent Step output."), (outcome as any).stepResult.outputFingerprint);
   assert.deepEqual(input, before);
   assert.equal(deeplyFrozen(decision), true);
 });

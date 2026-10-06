@@ -62,6 +62,8 @@ export const postgresWorkflowRuntimeStoreLimits = Object.freeze({
   maximumCommandLeaseDurationMs: 15 * 60 * 1_000,
   maxStoredResponseReasons: 256,
   maxInvocationErrorCodeLength: 128,
+  // AI-039.1 durable step result text (= the model invocation contract's output text bound).
+  maxStepResultTextLength: 131_072,
 });
 
 export type PostgresWorkflowRuntimeStoreOptions = Readonly<{
@@ -207,6 +209,8 @@ type ModelInvocationRow = Record<string, unknown> & {
   latency_ms: string | number | null;
   cost_usd_micros: string | number | null;
   error_code: string | null;
+  // AI-039.1: fingerprint of the durable step result of this invocation, if one was stored.
+  result_fingerprint?: string | null;
 };
 
 type WorkflowExecutionIdentityRow = Record<string, unknown> & {
@@ -771,7 +775,8 @@ function validInvocationOutcome(input: AgentStepModelInvocationOutcome): boolean
       && input.totalTokens === (input.inputTokens as number) + (input.outputTokens as number)
       && (input.status === "succeeded") === (input.outcome === "succeeded")
       && (input.status === "succeeded" ? input.errorCode === null : true))
-      || (!hasUsage && input.status !== "succeeded" && input.errorCode !== null));
+      || (!hasUsage && input.status !== "succeeded" && input.errorCode !== null))
+    && validStepResult(input);
 }
 
 function sameReservation(row: ModelInvocationRow, input: AgentStepModelInvocationReservation): boolean {
@@ -819,8 +824,22 @@ function sameBudgetReservation(
     && databaseInteger(row.monthly_cost_budget_usd_micros) === input.monthlyCostBudgetUsdMicros;
 }
 
+// AI-039.1: the optional durable step result is an own data property with exactly the canonical fields,
+// only on a succeeded outcome, with bounded text whose fingerprint is recomputed here (never trusted).
+function validStepResult(input: AgentStepModelInvocationOutcome): boolean {
+  if (!Object.hasOwn(input, "stepResult")) return true;
+  const descriptor = Object.getOwnPropertyDescriptor(input, "stepResult");
+  const value: unknown = descriptor && Object.hasOwn(descriptor, "value") ? descriptor.value : undefined;
+  if (input.status !== "succeeded" || !plainRecord(value) || !exactFields(value, ["outputText", "outputFingerprint"])) return false;
+  const { outputText, outputFingerprint } = value as { outputText: unknown; outputFingerprint: unknown };
+  return typeof outputText === "string" && outputText.length >= 1
+    && outputText.length <= postgresWorkflowRuntimeStoreLimits.maxStepResultTextLength
+    && typeof outputFingerprint === "string" && outputFingerprint === `sha256:${createHash("sha256").update(outputText, "utf8").digest("hex")}`;
+}
+
 function sameOutcome(row: ModelInvocationRow, input: AgentStepModelInvocationOutcome): boolean {
-  return row.status === input.status
+  return (row.result_fingerprint ?? null) === (input.stepResult?.outputFingerprint ?? null)
+    && row.status === input.status
     && row.outcome === input.outcome
     && row.finish_reason === input.finishReason
     && (row.input_tokens === null ? null : databaseInteger(row.input_tokens)) === input.inputTokens
@@ -1041,7 +1060,10 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
                 invocation.total_tokens::text as total_tokens,
                 invocation.latency_ms::text as latency_ms,
                 invocation.cost_usd_micros::text as cost_usd_micros,
-                invocation.error_code
+                invocation.error_code,
+                (select result.output_fingerprint from workflow_model_invocation_results as result
+                 where result.workspace_id = invocation.workspace_id
+                   and result.model_invocation_id = invocation.id) as result_fingerprint
          from workflow_model_invocations as invocation
          join workflow_runs as run on run.id = invocation.workflow_run_id
          where invocation.workspace_id = $1 and run.workspace_id = $1
@@ -1055,6 +1077,58 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
       failed = true;
       if (error instanceof WorkflowRuntimePersistenceError) throw error;
       throw persistenceError("Model invocation lookup failed closed.");
+    } finally {
+      client?.release(failed);
+    }
+  }
+
+  // AI-039.1: the settled facts and durable step result of ONE invocation of a Run of this tenant.
+  // The stored text is re-fingerprinted; any disagreement fails closed (never repaired). Returns null
+  // when this tenant has no such invocation. Read-only; never part of a provider decision.
+  async readModelInvocationResult(input: Readonly<{ runId: string; invocationId: string }>): Promise<Readonly<{
+    status: ModelInvocationRow["status"];
+    errorCode: string | null;
+    outputText: string | null;
+  }> | null> {
+    if (!plainRecord(input) || !exactFields(input, ["runId", "invocationId"])
+      || typeof input.runId !== "string" || !stableIdPattern.test(input.runId)
+      || typeof input.invocationId !== "string" || !stableIdPattern.test(input.invocationId)) {
+      throw persistenceError("Model invocation result lookup input is invalid.");
+    }
+    let client: WorkflowRuntimeSqlClient | null = null;
+    let failed = false;
+    try {
+      client = await this.#database.connect();
+      const result = await client.query<{
+        status: ModelInvocationRow["status"]; outcome: string | null; error_code: string | null;
+        output_text: string | null; output_fingerprint: string | null;
+      }>(
+        `/* workflow-runtime:read-invocation-result */
+         select invocation.status, invocation.outcome, invocation.error_code,
+                result.output_text, result.output_fingerprint
+         from workflow_model_invocations as invocation
+         join workflow_runs as run
+           on run.id = invocation.workflow_run_id and run.workspace_id = invocation.workspace_id
+         left join workflow_model_invocation_results as result
+           on result.model_invocation_id = invocation.id and result.workspace_id = invocation.workspace_id
+          and result.workflow_run_id = invocation.workflow_run_id
+         where invocation.workspace_id = $1 and run.runtime_id = $2 and invocation.invocation_id = $3`,
+        [this.#workspaceDatabaseId, input.runId, input.invocationId],
+      );
+      if (result.rowCount === 0) return null;
+      if (result.rowCount !== 1) throw persistenceError("Model invocation result lookup is ambiguous.");
+      const row = result.rows[0];
+      if (!["running", "succeeded", "failed", "outcome_unknown"].includes(row.status)
+        || (row.output_text === null) !== (row.output_fingerprint === null)
+        || (row.output_text !== null && (row.status !== "succeeded" || row.outcome !== "succeeded"
+          || row.output_fingerprint !== `sha256:${createHash("sha256").update(row.output_text, "utf8").digest("hex")}`))) {
+        throw persistenceError("Durable step result failed verification.");
+      }
+      return Object.freeze({ status: row.status, errorCode: row.error_code, outputText: row.output_text });
+    } catch (error) {
+      failed = true;
+      if (error instanceof WorkflowRuntimePersistenceError) throw error;
+      throw persistenceError("Model invocation result lookup failed closed.");
     } finally {
       client?.release(failed);
     }
@@ -2784,7 +2858,10 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
                   invocation.total_tokens::text as total_tokens,
                   invocation.latency_ms::text as latency_ms,
                   invocation.cost_usd_micros::text as cost_usd_micros,
-                  invocation.error_code
+                  invocation.error_code,
+                  (select result.output_fingerprint from workflow_model_invocation_results as result
+                   where result.workspace_id = invocation.workspace_id
+                     and result.model_invocation_id = invocation.id) as result_fingerprint
            from workflow_model_invocations as invocation
            join workflow_runtime_executions as execution
              on execution.id = invocation.workflow_execution_id
@@ -2917,6 +2994,20 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
           ],
         );
         if (updated.rowCount !== 1) throw persistenceError("Model invocation outcome conflicted.");
+        if (input.stepResult) {
+          // AI-039.1: the durable step result commits with the settlement or not at all.
+          const stored = await client.query(
+            `/* workflow-runtime:insert-invocation-result */
+             insert into workflow_model_invocation_results
+               (workspace_id, workflow_run_id, model_invocation_id, output_text, output_fingerprint)
+             values ($1, $2, $3, $4, $5)`,
+            [
+              this.#workspaceDatabaseId, current.rows[0].db_run_id, current.rows[0].model_invocation_id,
+              input.stepResult.outputText, input.stepResult.outputFingerprint,
+            ],
+          );
+          if (stored.rowCount !== 1) throw persistenceError("Durable step result conflicted.");
+        }
         await this.#appendAuditEvent(client, {
           runId: input.runId,
           eventKey: `${input.runId}:invocation:${input.invocationId}:${input.status}`,

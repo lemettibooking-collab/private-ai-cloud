@@ -14,9 +14,15 @@ This version has breaking changes - APIs, conventions, and file structure may al
   - PAC owns the engineering process; executors own the internal agent execution.
   - Do not build PAC-owned generic agent loops, context compaction, sandboxes, or browser or subagent runtimes unless the roadmap explicitly calls for them.
   - Canonical roadmap: `docs/ROADMAP.md`. Document authority: `docs/README.md`. Treat v0.3/v0.4/v0.5 strategy documents as historical.
-- **UI** (`app/`, `components/`): Owner Console pages (Dashboard, Projects, Runs, Run Detail, Approvals) read real runtime data **read-only** through the server-only loader `lib/composition/owner-console-read.server.ts` (AI-038.3), called from React Server Components. There is no business HTTP API. There are exactly two Owner-facing write paths, each a single Server Action through an audited server-side contract, and neither starts an execution, a model, an executor or a GitHub / repository action:
-  - Quick Create (`app/tasks/new/actions.ts`, AI-038.4b) creates only a draft ProjectTask intent (`lib/composition/owner-task-create*.ts` → `lib/tasks/owner-task-mutations.ts` `createTask`);
-  - the Plan Builder (`app/tasks/[taskId]/development/actions.ts`, AI-039) saves only an immutable draft FeaturePlan revision of a ProjectTask (`lib/composition/owner-feature-plan-save*.ts` → `lib/development/feature-plan-mutations.ts`) and never changes the task status.
+- **UI** (`app/`, `components/`): Owner Console pages (Dashboard, Projects, Runs, Run Detail, Approvals) read real runtime data **read-only** through the server-only loader `lib/composition/owner-console-read.server.ts` (AI-038.3), called from React Server Components. There is no business HTTP API. Every Owner-facing write is a single Server Action through an audited server-side contract.
+  - **Two product-state write paths.** Neither starts an execution, a model invocation, an executor or a GitHub / repository action:
+    - Quick Create (`app/tasks/new/actions.ts`, AI-038.4b) creates only a draft ProjectTask intent (`lib/composition/owner-task-create*.ts` → `lib/tasks/owner-task-mutations.ts` `createTask`);
+    - the Plan Builder (`app/tasks/[taskId]/development/actions.ts`, AI-039) saves only an immutable draft FeaturePlan revision of a ProjectTask (`lib/composition/owner-feature-plan-save*.ts` → `lib/development/feature-plan-mutations.ts`) and never changes the task status.
+  - **One model-operation write path** (AI-039.1, DONE): the Planning Interview action (`app/tasks/[taskId]/development/draft-actions.ts`).
+    - It requires a valid `feature_plan_planning` policy and the Owner's explicit per-request egress approval.
+    - Flow: planning request (`lib/development/feature-plan-planning-requests.ts`) → ONE budget-bounded planning Workflow Run through the existing runtime (`lib/composition/owner-feature-plan-planning.ts`) → one model invocation → an UNSAVED candidate.
+    - It writes runtime and planning state and starts a model invocation.
+    - It never saves a FeaturePlan, never changes the ProjectTask status, and never invokes an executor, GitHub or a repository mutation.
   Other prototype pages are still on mocked data.
 - **UI locales** (AI-038.6): `ru` (default) and `en`, chosen by the Owner via the `pac_locale` preference cookie (`lib/i18n/`). Localization is presentation-only:
   - domain / storage enum values stay canonical and locale-neutral;

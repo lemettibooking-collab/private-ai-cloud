@@ -310,11 +310,12 @@ test("P-1: an AI candidate (fake planner, real authenticated chain) writes nothi
   let calls = 0;
   const drafting = draftBinding.createOwnerFeaturePlanDraft({
     loadDevelopment: (taskId) => readerFor("6101").loadOwnerTaskDevelopment(taskId, context.parseProjectSelector(undefined)),
-    planner: { async complete() { calls += 1; return { status: "completed" as const, structuredOutput: plannerOutput }; } },
+    planner: { async complete() { calls += 1; return { status: "completed" as const, outputText: JSON.stringify(plannerOutput) }; } },
   });
   const form = new FormData();
-  for (const [name, value] of [["taskId", TASK_AI], ["answer.outcome", "See only the chosen risk"], ["answer.surface", "unknown"], ["answer.mustNotChange", ""],
-    ["answer.doneWhen", "The list changes"], ["answer.constraints", "none"]]) form.append(name, value);
+  // AI-039.1: the interview form carries its planning idempotency key and the Owner's egress approval.
+  for (const [name, value] of [["taskId", TASK_AI], ["idempotencyKey", `pl-${"c".repeat(32)}`], ["answer.outcome", "See only the chosen risk"], ["answer.surface", "unknown"], ["answer.mustNotChange", ""],
+    ["answer.doneWhen", "The list changes"], ["answer.constraints", "none"], ["egressApproval", "yes"]]) form.append(name, value);
   const outcome = await drafting.submit(form);
   assert.equal(outcome.status, "candidate", JSON.stringify(outcome));
   assert.equal(calls, 1);
@@ -323,7 +324,7 @@ test("P-1: an AI candidate (fake planner, real authenticated chain) writes nothi
   // A non-Owner cannot draft at all (the same authenticated read gate).
   const memberDraft = draftBinding.createOwnerFeaturePlanDraft({
     loadDevelopment: (taskId) => readerFor("6102").loadOwnerTaskDevelopment(taskId, context.parseProjectSelector(undefined)),
-    planner: { async complete() { calls += 1; return { status: "completed" as const, structuredOutput: plannerOutput }; } },
+    planner: { async complete() { calls += 1; return { status: "completed" as const, outputText: JSON.stringify(plannerOutput) }; } },
   });
   assert.notEqual((await memberDraft.submit(form)).status, "candidate");
   assert.equal(calls, 1, "no planning call without the Owner");

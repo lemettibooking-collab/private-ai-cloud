@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- adversarial fixtures intentionally cross unknown boundaries */
-// AI-039 P-1 Owner Planning Interview → AI-assisted UNSAVED candidate → Owner review. Pure and
-// structural guards with a deterministic fake planning model (no provider, no network, no spend).
+// AI-039 P-1 / AI-039.1 Owner Planning Interview → AI-assisted UNSAVED candidate → Owner review. Pure
+// and structural guards with a deterministic fake planning port (no provider, no network, no spend).
+// The run-backed production port is proven against live PostgreSQL in tests/pg/feature-plan-planning.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -30,6 +31,9 @@ function fakeModel(result: unknown) {
   return { calls, model: { async complete(input: any) { calls.push(input); if (result instanceof Error) throw result; return result as any; } } };
 }
 const facts = { taskId: "task-abc", projectId: "project-a", type: "feature" as const, title: "Фильтр задач по уровню риска", goal: null, priority: "P1", riskLevel: "medium" };
+const planningKey = `pl-${"a".repeat(32)}`;
+const context = { taskId: "task-abc", projectId: "project-a", projectName: "Project A", idempotencyKey: planningKey };
+const completed = (value: unknown) => ({ status: "completed", outputText: typeof value === "string" ? value : JSON.stringify(value) });
 
 test("interview: product questions only, task-type aware, 3–7 each; 'not sure' is offered on every choice", () => {
   assert.deepEqual(Object.keys(interview.planningInterviews).sort(), [...projectTask.projectTaskTypes].sort());
@@ -74,12 +78,13 @@ test("interview answers: 'not sure' and empty optional answers are valid; anythi
   assert.ok(interview.validateInterviewAnswers("fix", { currentBehavior: ["Crashes"], expectedBehavior: ["Works"], occurrence: ["unknown"], constraints: [] }));
 });
 
-test("planner: exactly one bounded completion; the candidate is canonical, waves come from the contract, no paths invented", async () => {
-  const fake = fakeModel({ status: "completed", structuredOutput: valid() });
+test("planner: exactly one bounded invocation; the candidate is canonical, waves come from the contract, no paths invented", async () => {
+  const fake = fakeModel(completed(valid()));
   const answers = interview.validateInterviewAnswers("feature", featureAnswers)!;
-  const result = await planner.draftFeaturePlanCandidate({ task: facts, answers, model: fake.model });
+  const result = await planner.draftFeaturePlanCandidate({ task: facts, answers, context, model: fake.model });
   assert.equal(fake.calls.length, 1, "one planning operation, no follow-up turns");
   assert.equal(fake.calls[0].maxOutputTokens, planner.plannerLimits.maxOutputTokens);
+  assert.deepEqual(fake.calls[0].context, context, "the port receives the request context (task, project, idempotency key)");
   assert.deepEqual(fake.calls[0].messages.map((message: any) => [message.role, message.toolCallId]), [["system", null], ["user", null]]);
   assert.match(fake.calls[0].messages[0].content, /NO access to the repository\. allowedPaths MUST be an empty array/u);
   const user = JSON.parse(fake.calls[0].messages[1].content);
@@ -101,6 +106,7 @@ test("planner: exactly one bounded completion; the candidate is canonical, waves
 
 test("planner: untrusted output is rejected — never repaired — and model failures are honest", async () => {
   const answers = interview.validateInterviewAnswers("feature", featureAnswers)!;
+  const draftWith = (model: unknown) => planner.draftFeaturePlanCandidate({ task: facts, answers, context, model: model as any });
   const cases: [unknown, string][] = [
     [output([step("step-1", { allowedPaths: ["app/tasks/page.tsx"] })]), "untrusted_repository_paths"],
     [output([step("step-1", { dependencyIds: ["step-2"] }), step("step-2", { dependencyIds: ["step-1"] })]), "invalid_dependency_graph"],
@@ -114,21 +120,36 @@ test("planner: untrusted output is rejected — never repaired — and model fai
     [output(Array.from({ length: planner.plannerLimits.maxSteps + 1 }, (_, index) => step(`step-${index + 1}`))), "malformed_output"],
     [output([]), "malformed_output"],
     [{ ...valid(), status: "approved" }, "malformed_output"],
-    ["{\"title\":\"x\"}", "malformed_output"],
-    [null, "malformed_output"],
+    [JSON.stringify("{\"title\":\"x\"}"), "malformed_output"],
+    ["null", "malformed_output"],
+    // AI-039.1 strict text parse: exactly one JSON value, nothing around it, nothing repaired.
+    [`\`\`\`json\n${JSON.stringify(valid())}\n\`\`\``, "malformed_output"],
+    [`Here is the plan: ${JSON.stringify(valid())}`, "malformed_output"],
+    [`${JSON.stringify(valid())} trailing`, "malformed_output"],
+    [JSON.stringify(valid()).slice(0, -1), "malformed_output"],
+    ["", "malformed_output"],
+    [`${JSON.stringify(valid())}${" ".repeat(planner.plannerLimits.maxOutputTextLength)}`, "malformed_output"],
   ];
-  for (const [structuredOutput, reason] of cases) {
-    const result = await planner.draftFeaturePlanCandidate({ task: facts, answers, model: fakeModel({ status: "completed", structuredOutput }).model });
-    assert.deepEqual(result, { status: "rejected", reason }, JSON.stringify(structuredOutput)?.slice(0, 80));
+  for (const [value, reason] of cases) {
+    const result = await draftWith(fakeModel(completed(value)).model);
+    assert.deepEqual(result, { status: "rejected", reason }, String(typeof value === "string" ? value : JSON.stringify(value)).slice(0, 80));
   }
+  // The parser itself never runs a Proxy trap.
   let trapped = 0;
   const proxy = new Proxy(valid(), { get() { trapped += 1; return undefined; }, ownKeys() { trapped += 1; return []; } });
-  assert.deepEqual(await planner.draftFeaturePlanCandidate({ task: facts, answers, model: fakeModel({ status: "completed", structuredOutput: proxy }).model }), { status: "rejected", reason: "malformed_output" });
+  assert.deepEqual(planner.candidateFromModelOutput(proxy), { ok: false, reason: "malformed_output" });
+  // A non-plain port result fails closed as recovery_required (it cannot prove nothing was spent).
+  // (Promise resolution itself looks up `then` on any returned object; only our own reads are counted.)
+  const proxyResult = new Proxy(completed(valid()), { get(_target, key) { if (key !== "then") trapped += 1; return undefined; } });
+  assert.deepEqual(await draftWith({ async complete() { return proxyResult; } }), { status: "recovery_required" });
   assert.equal(trapped, 0, "no proxy trap runs");
-  assert.deepEqual(await planner.draftFeaturePlanCandidate({ task: facts, answers, model: null }), { status: "unavailable" });
-  assert.deepEqual(await planner.draftFeaturePlanCandidate({ task: facts, answers, model: fakeModel({ status: "unavailable" }).model }), { status: "unavailable" });
-  assert.deepEqual(await planner.draftFeaturePlanCandidate({ task: facts, answers, model: fakeModel({ status: "failed" }).model }), { status: "failed" });
-  assert.deepEqual(await planner.draftFeaturePlanCandidate({ task: facts, answers, model: fakeModel(new Error("SENTINEL")).model }), { status: "failed" });
+  assert.deepEqual(await draftWith(null), { status: "unavailable" });
+  for (const status of ["unavailable", "budget_denied", "provider_unavailable", "failed", "recovery_required", "conflict", "not_plannable", "unauthenticated"]) {
+    assert.deepEqual(await draftWith(fakeModel({ status }).model), { status }, `${status} is reported as is`);
+  }
+  assert.deepEqual(await draftWith(fakeModel({ status: "approved" }).model), { status: "recovery_required" }, "an unknown port status is never success");
+  // AI-039.1: an exception escaping the bound port cannot prove nothing was spent → recovery_required.
+  assert.deepEqual(await draftWith(fakeModel(new Error("SENTINEL")).model), { status: "recovery_required" });
 });
 
 const development = (taskStatus = "draft", creationBlock: string | null = null) => ({
@@ -136,48 +157,98 @@ const development = (taskStatus = "draft", creationBlock: string | null = null) 
   development: { state: "available", task: { taskId: "task-abc", projectId: "project-a", title: "Фильтр", goal: null, type: "feature", status: taskStatus, priority: "P1", riskLevel: "medium" },
     project: null, plans: { state: "available", data: {} }, creationBlock },
 });
-const interviewForm = (extra: [string, string][] = []) => {
+const interviewForm = (extra: [string, string][] = [], approval = true) => {
   const form = new FormData();
-  for (const [name, value] of [["taskId", "task-abc"], ["answer.outcome", "Видеть только выбранный риск"], ["answer.surface", "unknown"], ["answer.mustNotChange", ""],
-    ["answer.doneWhen", "Список меняется"], ["answer.constraints", "none"], ...extra] as [string, string][]) form.append(name, value);
+  for (const [name, value] of [["taskId", "task-abc"], ["idempotencyKey", planningKey], ["answer.outcome", "Видеть только выбранный риск"], ["answer.surface", "unknown"], ["answer.mustNotChange", ""],
+    ["answer.doneWhen", "Список меняется"], ["answer.constraints", "none"], ...(approval ? [["egressApproval", "yes"]] : []), ...extra] as [string, string][]) form.append(name, value);
   return form;
 };
 
-test("draft composition: Owner + task checks first, then answers, then ONE planning call; production has no planner", async () => {
+test("draft composition: Owner + task checks first, then answers, then the Owner's egress approval, then ONE planning call", async () => {
   const run = async (view: unknown, model: unknown, form: FormData = interviewForm()) => {
     const fake = fakeModel(model);
     const instance = draft.createOwnerFeaturePlanDraft({ loadDevelopment: async () => view as any, planner: model === null ? null : fake.model });
     return { result: await instance.submit(form), calls: fake.calls.length };
   };
-  const candidateModel = { status: "completed", structuredOutput: valid() };
+  const candidateModel = completed(valid());
   assert.deepEqual(await run({ state: "unauthenticated" }, candidateModel), { result: { status: "unauthenticated" }, calls: 0 });
   assert.deepEqual(await run({ state: "unavailable" }, candidateModel), { result: { status: "unavailable" }, calls: 0 });
   assert.deepEqual(await run(development("ready", "task_not_draft"), candidateModel), { result: { status: "not_plannable" }, calls: 0 });
   assert.deepEqual(await run(development(), candidateModel, interviewForm([["answer.allowedPaths", "app/"]])), { result: { status: "invalid_input" }, calls: 0 });
   assert.deepEqual(await run(development(), null), { result: { status: "planner_unavailable" }, calls: 0 });
+  // AI-039.1: nothing is sent without the Owner's explicit approval of THIS request.
+  assert.deepEqual(await run(development(), candidateModel, interviewForm([], false)), { result: { status: "egress_approval_required" }, calls: 0 });
   const ok = await run(development(), candidateModel);
   assert.equal(ok.result.status, "candidate");
   assert.equal(ok.calls, 1);
-  assert.deepEqual(await run(development(), { status: "completed", structuredOutput: output([step("step-1", { allowedPaths: ["lib/"] })]) }), { result: { status: "candidate_rejected", reason: "untrusted_repository_paths" }, calls: 1 });
+  assert.deepEqual(await run(development(), completed(output([step("step-1", { allowedPaths: ["lib/"] })]))), { result: { status: "candidate_rejected", reason: "untrusted_repository_paths" }, calls: 1 });
+  // Port outcomes map to the public statuses (failed → planning_failed, unavailable → planner_unavailable).
+  for (const [status, expected] of [["failed", "planning_failed"], ["unavailable", "planner_unavailable"], ["budget_denied", "budget_denied"], ["provider_unavailable", "provider_unavailable"],
+    ["recovery_required", "recovery_required"], ["conflict", "conflict"], ["not_plannable", "not_plannable"], ["unauthenticated", "unauthenticated"]]) {
+    assert.deepEqual(await run(development(), { status }), { result: { status: expected }, calls: 1 }, status);
+  }
+  // The port receives the server-side task / project and the form's idempotency key; nothing else.
+  const captured = fakeModel(candidateModel);
+  await draft.createOwnerFeaturePlanDraft({ loadDevelopment: async () => ({ ...development(), development: { ...development().development, project: { displayName: "Проект A" } } }) as any, planner: captured.model }).submit(interviewForm());
+  assert.deepEqual(captured.calls[0].context, { taskId: "task-abc", projectId: "project-a", projectName: "Проект A", idempotencyKey: planningKey });
   // Bounded form parser.
-  for (const entries of [[["taskId", "task-x"]], [["workspaceId", "w"]], [["answer.out-come", "x"]], [["answer.outcome", "x".repeat(2000)]]] as [string, string][][]) {
+  for (const entries of [[["taskId", "task-x"]], [["workspaceId", "w"]], [["answer.out-come", "x"]], [["answer.outcome", "x".repeat(2000)]],
+    [["idempotencyKey", planningKey]], [["egressApproval", "yes"]], [["egressApproval", "true"]], [["planningKey", "fpp-0123456789abcdef0123"]]] as [string, string][][]) {
     assert.equal(draft.planningInputFromForm(interviewForm(entries)), null, JSON.stringify(entries));
   }
-  // Production binding: no planning provider is bound; availability is factually false.
-  const server = code("lib/composition/owner-feature-plan-draft.server.ts");
-  assert.match(server, /planner: null,/u);
-  assert.match(server, /export function isFeaturePlanPlannerAvailable\(\): boolean \{\s*return false;\s*\}/u);
-  assert.ok(!/providers|openai|model-provider|LLM_|process\.env/u.test(server), "no provider, SDK or provider configuration is read");
+  const noKey = interviewForm();
+  noKey.delete("idempotencyKey");
+  assert.equal(draft.planningInputFromForm(noKey), null, "the planning idempotency key is required");
+  for (const key of ["fp-" + "a".repeat(32), "pl-" + "A".repeat(32), "pl-" + "a".repeat(31)]) {
+    const form = interviewForm();
+    form.set("idempotencyKey", key);
+    assert.equal(draft.planningInputFromForm(form), null, key);
+  }
+  assert.deepEqual(draft.planningInputFromForm(interviewForm([], false))?.egressApproved, false);
+  assert.deepEqual(draft.planningInputFromForm(interviewForm())?.egressApproved, true);
 });
 
-test("boundaries: planning is a bounded model task — no executor, SDK, GitHub, repository, run or write; the candidate is never saved by AI", () => {
+test("AI-039.1 production binding: bound ONLY with a valid planning policy, credential and workspace; provider reached only through the composed runtime", () => {
+  const server = code("lib/composition/owner-feature-plan-draft.server.ts");
+  assert.match(server, /^import "server-only";/mu);
+  assert.match(server, /const policy = parseFeaturePlanPlannerPolicy\(process\.env\);/u);
+  assert.match(server, /if \(!policy \|\| typeof apiKey !== "string" \|\| apiKey\.length === 0/u);
+  assert.match(server, /planner: planningModel\(\),/u);
+  assert.match(server, /function planningModel\(\) \{\s*const binding = plannerBinding\(\);\s*if \(!binding\) return null;/u, "no binding → planner null → planner_unavailable");
+  assert.match(server, /await composeRealProviderRuntime\(\{/u, "the provider is composed only by the existing real-provider runtime");
+  assert.ok(!/from "openai"|lib\/providers|providers\/openai|createOpenAIModelProvider|new OpenAI/u.test(server), "no SDK / adapter import in the binding");
+  // The credential is read here only, and only handed to the composition (never returned / exposed).
+  assert.equal((server.match(/process\.env\.OPENAI_API_KEY/gu) ?? []).length, 1);
+  assert.match(server, /credentials: \{ apiKey \},/u);
+  assert.ok(!/apiKey[^,;]*\)\s*;?\s*\n\s*return \{[^}]*apiKey/u.test(server.split("export function featurePlanPlannerStatus")[1] ?? ""), "status exposes no credential");
+  const status = server.split("export function featurePlanPlannerStatus")[1] ?? "";
+  assert.ok(!/apiKey|OPENAI_API_KEY/u.test(status), "the presentation status never touches the credential");
+  for (const path of ["lib/development/feature-plan-planner.ts", "lib/composition/owner-feature-plan-draft.ts", "lib/composition/owner-feature-plan-planning.ts",
+    "app/tasks/[taskId]/development/draft-actions.ts", "components/domain/owner-console/feature-plan-planning.tsx", "app/tasks/[taskId]/development/page.tsx"]) {
+    assert.ok(!/OPENAI_API_KEY|apiKey/u.test(code(path)), `${path} never sees the credential`);
+  }
+});
+
+test("boundaries: planning is a bounded model task — no executor, SDK, GitHub, repository or FeaturePlan write; the candidate is never saved by AI", () => {
+  // Pure planning, presentation and action files: no SDK, provider, runtime, database or save path.
   const planningFiles = ["lib/development/feature-plan-planner.ts", "lib/development/planning-interview.ts", "lib/composition/owner-feature-plan-draft.ts",
-    "lib/composition/owner-feature-plan-draft.server.ts", "app/tasks/[taskId]/development/draft-actions.ts", "components/domain/owner-console/feature-plan-planning.tsx"];
+    "app/tasks/[taskId]/development/draft-actions.ts", "components/domain/owner-console/feature-plan-planning.tsx"];
   for (const path of planningFiles) {
     const text = code(path);
-    assert.ok(!/ExecutorAdapter|ExecutorRouter|executor-adapter|lib\/providers|openai|anthropic|octokit|api\.github\.com|child_process|node:fs|\bfetch\(|attachRun|workflow-runtime-service|agent-step-runtime/iu.test(text), `${path} reaches an executor / SDK / GitHub / repository`);
+    assert.ok(!/ExecutorAdapter|ExecutorRouter|executor-adapter|lib\/providers|openai|anthropic|octokit|api\.github\.com|child_process|node:fs|\bfetch\(|attachRun|workflow-runtime-service|agent-step-runtime|real-provider/iu.test(text), `${path} reaches an executor / SDK / runtime / GitHub / repository`);
     assert.ok(!/feature-plan-mutations|owner-feature-plan-save|saveDraftRevision|lib\/db|postgres|insert into|update .* set/iu.test(text), `${path} writes or reaches the save path`);
   }
+  // AI-039.1 run-backed port and its planning-run definition: no SDK, no provider adapter, no executor,
+  // no FeaturePlan save; the model is reachable ONLY through the runtime service's advance.
+  for (const path of ["lib/composition/owner-feature-plan-planning.ts", "lib/development/feature-plan-planning-run.ts", "lib/development/feature-plan-planning-requests.ts",
+    "lib/composition/feature-plan-planner-config.ts", "lib/composition/owner-egress-approval.ts"]) {
+    const text = code(path);
+    assert.ok(!/from "openai"|lib\/providers|providers\/|createOpenAIModelProvider|ExecutorAdapter|octokit|api\.github\.com|child_process|node:fs|\bfetch\(|attachRun|\.run\(|\.preflight\(/u.test(text), `${path} bypasses the runtime`);
+    assert.ok(!/owner-feature-plan-save|saveDraftRevision|project_task_feature_plans|update project_tasks|insert into project_tasks/u.test(text), `${path} writes a FeaturePlan or the task`);
+  }
+  const port = code("lib/composition/owner-feature-plan-planning.ts");
+  assert.equal((port.match(/runtime\.service\.advance\(/gu) ?? []).length, 1, "exactly one advance per planning request");
+  assert.ok(!/\bretry\b|while \(|for \(/u.test(port), "no retry loop in the planning port");
   // The planner speaks the ModelProvider message vocabulary only (type import), nothing executable.
   assert.match(code("lib/development/feature-plan-planner.ts"), /import type \{ ModelInvocationMessage \} from "\.\.\/contracts\/model-invocation";/u);
   // The planning UI never calls the save action itself: it hands it to the Plan Builder, which submits
@@ -187,7 +258,12 @@ test("boundaries: planning is a bounded model task — no executor, SDK, GitHub,
   assert.match(planning, /action=\{props\.saveAction\}/u);
   // The manual technical editor remains available (secondary path, and the fallback when the planner is unavailable).
   assert.match(planning, /onClick=\{\(\) => setMode\("manual"\)\}/u);
-  assert.match(planning, /state\.status === "planner_unavailable"[\s\S]*?onClick=\{props\.onManual\}/u);
+  assert.match(planning, /planner_unavailable: \[p\.unavailableTitle, p\.unavailableBody\]/u);
+  assert.match(planning, /const titledNotice = titled\[state\.status\];/u);
+  assert.match(planning, /<Notice body=\{titledNotice\[1\]\} title=\{titledNotice\[0\]\} tone="warn">\{manual\}<\/Notice>/u);
+  // The egress approval is an explicit, unchecked, required checkbox (never pre-checked or remembered).
+  assert.match(planning, /name="egressApproval" required type="checkbox" value="yes"/u);
+  assert.ok(!/defaultChecked|checked=\{true\}/u.test(planning.split("interview-egress-approval")[1]?.split("</label>")[0] ?? "x"), "consent is never pre-checked");
   // Executor recommendation stays a separate, unavailable entity (planning model ≠ executor recommendation).
   assert.ok(!/executorRecommendation/u.test(planning + code("lib/development/feature-plan-planner.ts")));
 });

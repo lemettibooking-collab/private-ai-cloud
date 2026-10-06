@@ -7,16 +7,21 @@ import { interviewLimits, type InterviewQuestion } from "@/lib/development/plann
 import { format } from "@/lib/i18n/locale";
 import type { Messages } from "@/lib/i18n/messages";
 
-// AI-039 P-1 Owner planning flow. Primary path: Owner Planning Interview (product questions only) →
-// AI-assisted UNSAVED candidate → Owner review / edit → explicit "save draft revision". Secondary path:
-// the manual technical editor (advanced / fallback). Nothing here saves on its own: the candidate is
-// only client state until the Owner submits the Plan Builder, whose save action re-validates it.
+// AI-039 P-1 / AI-039.1 Owner planning flow. Primary path: Owner Planning Interview (product questions
+// only) + explicit data-egress approval → ONE budget-bounded planning run → UNSAVED candidate → Owner
+// review / edit → explicit "save draft revision". Secondary path: the manual technical editor
+// (advanced / fallback). Nothing here saves on its own: the candidate is only client state until the
+// Owner submits the Plan Builder, whose save action re-validates it.
 
 export type FeaturePlanDraftState = Readonly<{
-  status: "idle" | "candidate" | "candidate_rejected" | "planner_unavailable" | "planner_failed" | "invalid_input" | "not_plannable" | "unavailable" | "unauthenticated";
+  status: "idle" | "candidate" | "candidate_rejected" | "planner_unavailable" | "budget_denied" | "provider_unavailable" | "planning_failed"
+    | "recovery_required" | "egress_approval_required" | "conflict" | "invalid_input" | "not_plannable" | "unavailable" | "unauthenticated";
   candidate: FeaturePlanCandidate | null;
   reason: string | null;
+  nextKey: string | null;
 }>;
+
+export type FeaturePlanPlannerStatus = Readonly<{ available: false } | { available: true; provider: string; model: string }>;
 
 type Labels = Messages["taskDevelopment"];
 type BuilderProps = Omit<React.ComponentProps<typeof FeaturePlanBuilder>, "initialSteps" | "initialTitle" | "initialGoal" | "notice" | "emptyPathsHint">;
@@ -26,7 +31,9 @@ type PlanningProps = {
   saveAction: (state: FeaturePlanFormState, form: FormData) => Promise<FeaturePlanFormState>;
   taskId: string;
   questions: readonly InterviewQuestion[];
-  plannerAvailable: boolean;
+  planner: FeaturePlanPlannerStatus;
+  // Planning idempotency key of this rendered form (server-issued; replaced by each result's nextKey).
+  planningFormKey: string;
   hasPlan: boolean;
   builderDescription: string;
   initialTitle: string;
@@ -37,7 +44,7 @@ type PlanningProps = {
   labels: Labels;
 };
 
-const initialDraft: FeaturePlanDraftState = { status: "idle", candidate: null, reason: null };
+const initialDraft: FeaturePlanDraftState = { status: "idle", candidate: null, reason: null, nextKey: null };
 const inputClass = "mt-1.5 w-full rounded-pac border border-line-strong bg-[rgba(5,8,13,0.62)] shadow-[inset_0_1px_2px_rgba(0,0,0,0.4)] px-2.5 text-[13px] text-ink transition-colors placeholder:text-ink-3/70 hover:border-ink-3/50 focus:border-accent/60 focus:outline-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
 const primaryButton = "pac-control-accent flex h-9 items-center justify-center gap-2 px-4 text-xs font-semibold disabled:cursor-wait disabled:opacity-70";
 const secondaryButton = "pac-control flex h-9 items-center px-3 text-xs text-ink-2 hover:text-ink";
@@ -111,9 +118,14 @@ function CandidateReview({ candidate, labels, riskLabels }: { candidate: Feature
   );
 }
 
-// One interview attempt (remounted for "answer again", which also resets the action state).
-function InterviewStage(props: PlanningProps & { onReview: (candidate: FeaturePlanCandidate) => void; onManual: () => void; onBack: () => void; onRetry: () => void }) {
+// One interview attempt (remounted for "answer again", which also resets the action state). Every
+// result carries a fresh key for the next submission; leaving the stage hands it to the parent.
+function InterviewStage(props: PlanningProps & {
+  onReview: (candidate: FeaturePlanCandidate) => void; onManual: () => void; onBack: () => void; onRetry: () => void; onNextKey: (key: string) => void;
+}) {
   const [state, formAction, pending] = useActionState(props.draftAction, initialDraft);
+  const formKey = state.nextKey ?? props.planningFormKey;
+  const leave = (then: () => void) => () => { if (state.nextKey) props.onNextKey(state.nextKey); then(); };
   // Controlled answers survive a non-success result (React resets uncontrolled fields after an action).
   const [answers, setAnswers] = useState<Record<string, string | readonly string[]>>({});
   const p = props.labels.planning;
@@ -134,33 +146,42 @@ function InterviewStage(props: PlanningProps & { onReview: (candidate: FeaturePl
         {candidate.pathsRequireTechnicalReview && <p className="rounded-pac border border-warn/35 bg-warn/7 px-3 py-2.5 text-[12.5px] leading-5 text-ink-2">{p.pathsPending}</p>}
         <CandidateReview candidate={candidate} labels={props.labels} riskLabels={props.riskLabels} />
         <div className="flex flex-wrap gap-2">
-          <button className={primaryButton} onClick={() => props.onReview(candidate)} type="button">{p.reviewAndEdit}</button>
-          <button className={secondaryButton} onClick={props.onRetry} type="button">{p.regenerate}</button>
+          <button className={primaryButton} onClick={leave(() => props.onReview(candidate))} type="button">{p.reviewAndEdit}</button>
+          <button className={secondaryButton} onClick={leave(props.onRetry)} type="button">{p.regenerate}</button>
         </div>
       </div>
     );
   }
 
-  const outcome = state.status === "planner_unavailable"
-    ? <Notice body={p.unavailableBody} title={p.unavailableTitle} tone="warn"><button className={secondaryButton} onClick={props.onManual} type="button">{p.manualStart}</button></Notice>
-    : state.status === "candidate_rejected"
-      ? <Notice body={`${p.rejectedBody} ${(p.rejected as Readonly<Record<string, string>>)[state.reason ?? ""] ?? ""}`} title={p.rejectedTitle} tone="warn">
-          <button className={secondaryButton} onClick={props.onRetry} type="button">{p.regenerate}</button>
-          <button className={secondaryButton} onClick={props.onManual} type="button">{p.manualStart}</button>
-        </Notice>
-      : state.status === "planner_failed"
-        ? <Notice body={p.failedBody} title={p.failedTitle} tone="warn"><button className={secondaryButton} onClick={props.onManual} type="button">{p.manualStart}</button></Notice>
-        : state.status === "idle" ? null
-          : <Notice body={({ invalid_input: p.invalidInput, not_plannable: p.notPlannable, unavailable: p.unavailable, unauthenticated: p.unauthenticated } as Record<string, string>)[state.status] ?? p.unavailable}
+  const manual = <button className={secondaryButton} onClick={leave(props.onManual)} type="button">{p.manualStart}</button>;
+  const titled: Readonly<Record<string, readonly [string, string]>> = {
+    planner_unavailable: [p.unavailableTitle, p.unavailableBody],
+    budget_denied: [p.budgetDeniedTitle, p.budgetDeniedBody],
+    provider_unavailable: [p.providerUnavailableTitle, p.providerUnavailableBody],
+    planning_failed: [p.failedTitle, p.failedBody],
+    recovery_required: [p.recoveryTitle, p.recoveryBody],
+  };
+  const titledNotice = titled[state.status];
+  const outcome = state.status === "idle" ? null
+    : titledNotice
+      ? <Notice body={titledNotice[1]} title={titledNotice[0]} tone="warn">{manual}</Notice>
+      : state.status === "candidate_rejected"
+        ? <Notice body={`${p.rejectedBody} ${(p.rejected as Readonly<Record<string, string>>)[state.reason ?? ""] ?? ""}`} title={p.rejectedTitle} tone="warn">
+            <button className={secondaryButton} onClick={leave(props.onRetry)} type="button">{p.regenerate}</button>
+            {manual}
+          </Notice>
+        : <Notice body={({ invalid_input: p.invalidInput, not_plannable: p.notPlannable, unavailable: p.unavailable, unauthenticated: p.unauthenticated,
+            egress_approval_required: p.egressRequired, conflict: p.conflict } as Record<string, string>)[state.status] ?? p.unavailable}
               title={p.interviewTitle} tone="warn" />;
 
   return (
     <form action={formAction} aria-busy={pending} className="space-y-4">
       <input name="taskId" type="hidden" value={props.taskId} />
+      <input name="idempotencyKey" type="hidden" value={formKey} />
       <div>
         <h3 className="text-[14px] font-semibold text-ink">{p.interviewTitle}</h3>
         <p className="mt-1 text-[12.5px] leading-5 text-ink-3">{p.interviewNote}</p>
-        {!props.plannerAvailable && <p className="mt-2 text-[12px] text-warn">{p.unavailableNotice}</p>}
+        {props.planner.available ? <p className="mt-1 text-[12px] text-ink-3">{p.runNote}</p> : <p className="mt-2 text-[12px] text-warn">{p.unavailableNotice}</p>}
       </div>
       {props.questions.map((question, index) => {
         const id = `interview-${question.id}`;
@@ -196,13 +217,20 @@ function InterviewStage(props: PlanningProps & { onReview: (candidate: FeaturePl
           </fieldset>
         );
       })}
+      {props.planner.available && (
+        // Explicit, per-request Owner approval of the data egress (never pre-checked, never remembered).
+        <label className="flex items-start gap-2 rounded-pac border border-line px-3 py-2.5 text-[12.5px] leading-5 text-ink-2" htmlFor="interview-egress-approval">
+          <input className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--pac-accent)]" id="interview-egress-approval" name="egressApproval" required type="checkbox" value="yes" />
+          {format(p.egressConsent, { model: props.planner.model, provider: props.planner.provider })}
+        </label>
+      )}
       {outcome}
       <div className="flex flex-wrap items-center gap-2">
         <button aria-disabled={pending} className={primaryButton} disabled={pending} type="submit">
           {pending && <span aria-hidden className="h-3 w-3 animate-spin rounded-full border-[1.5px] border-accent border-t-transparent" />}
           {pending ? p.pending : p.submit}
         </button>
-        <button className={secondaryButton} disabled={pending} onClick={props.onBack} type="button">{p.back}</button>
+        <button className={secondaryButton} disabled={pending} onClick={leave(props.onBack)} type="button">{p.back}</button>
       </div>
     </form>
   );
@@ -212,11 +240,12 @@ export function FeaturePlanPlanning(props: PlanningProps) {
   const [mode, setMode] = useState<"start" | "interview" | "manual" | "candidate">("start");
   const [attempt, setAttempt] = useState(0);
   const [candidate, setCandidate] = useState<FeaturePlanCandidate | null>(null);
+  const [planningFormKey, setPlanningFormKey] = useState(props.planningFormKey);
   const p = props.labels.planning;
 
   if (mode === "interview") {
     return (
-      <InterviewStage key={attempt} {...props} onBack={() => setMode("start")} onManual={() => setMode("manual")}
+      <InterviewStage key={attempt} {...props} onBack={() => setMode("start")} onManual={() => setMode("manual")} onNextKey={setPlanningFormKey} planningFormKey={planningFormKey}
         onRetry={() => setAttempt((value) => value + 1)} onReview={(next) => { setCandidate(next); setMode("candidate"); }} />
     );
   }
@@ -247,7 +276,7 @@ export function FeaturePlanPlanning(props: PlanningProps) {
       <div className="pac-inset p-5">
         <p className="text-[15px] font-semibold text-ink">{props.hasPlan ? p.aiTitleNext : p.aiTitle}</p>
         <p className="mt-1.5 max-w-[72ch] text-[12.5px] leading-5 text-ink-2">{p.aiBody}</p>
-        {!props.plannerAvailable && <p className="mt-2 text-[12px] text-warn">{p.unavailableNotice}</p>}
+        {!props.planner.available && <p className="mt-2 text-[12px] text-warn">{p.unavailableNotice}</p>}
         <button className={`${primaryButton} mt-4`} onClick={() => setMode("interview")} type="button">{p.aiStart}</button>
       </div>
       <div className="flex flex-wrap items-center justify-between gap-3 px-1">

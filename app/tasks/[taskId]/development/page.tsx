@@ -10,7 +10,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { SectionCard } from "@/components/ui/section-card";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { loadOwnerTaskDevelopment } from "@/lib/composition/owner-console-read.server";
-import { isFeaturePlanPlannerAvailable } from "@/lib/composition/owner-feature-plan-draft.server";
+import { featurePlanPlannerStatus, issuePlanningFormKey } from "@/lib/composition/owner-feature-plan-draft.server";
 import { issueFeaturePlanFormKey } from "@/lib/composition/owner-feature-plan-save.server";
 import { developmentPriorities } from "@/lib/contracts/development-plan";
 import { riskLevels } from "@/lib/contracts/domain";
@@ -39,8 +39,9 @@ function Meta({ label, children }: { label: string; children: React.ReactNode })
 }
 
 // AI-039 Development Workflow: ProjectTask (the development request) → persisted draft FeaturePlan
-// revisions. A planning boundary only: nothing here runs, calls a model or executor, or changes a
-// repository. Each render issues a new opaque form idempotency key for the Plan Builder.
+// revisions. Rendering never runs, calls a model or executor, or changes a repository; AI-039.1
+// planning happens only through the Planning Interview Server Action after the Owner's explicit
+// approval. Each render issues new opaque idempotency keys for the Plan Builder and the interview.
 export default async function TaskDevelopmentPage({ params, searchParams }: TaskDevelopmentPageProps) {
   const { taskId } = await params;
   const view = await loadOwnerTaskDevelopment(taskId, (await searchParams).project);
@@ -188,7 +189,8 @@ export default async function TaskDevelopmentPage({ params, searchParams }: Task
                 initialSteps={initialSteps}
                 initialTitle={latest ? latest.plan.title : task.title}
                 labels={k}
-                plannerAvailable={isFeaturePlanPlannerAvailable()}
+                planner={featurePlanPlannerStatus()}
+                planningFormKey={issuePlanningFormKey()}
                 questions={planningInterviews[task.type]}
                 riskLabels={t.risk}
                 saveAction={saveFeaturePlanAction}

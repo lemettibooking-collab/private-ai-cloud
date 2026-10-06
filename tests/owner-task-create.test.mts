@@ -164,9 +164,13 @@ test("O. dependency direction: UI → Server Action → server composition → o
   // the binding module. AI-039: the FeaturePlan revision contract imports ONLY the shared write-boundary
   // primitives (Owner lock, transaction, strict input reading) — never createTask / attachRun.
   assert.deepEqual(importers(/\bcreateOwnerTaskMutations\b/u).filter((path) => path !== "lib/tasks/owner-task-mutations.ts"), ["lib/composition/owner-task-create.ts"]);
-  assert.deepEqual(importers(/from\s+["'][^"']*\/tasks\/owner-task-mutations(\.ts)?["']/u), ["lib/composition/owner-task-create.ts", "lib/development/feature-plan-mutations.ts"]);
-  assert.match(code("lib/development/feature-plan-mutations.ts"),
-    /import \{ Conflict, Unavailable, capturedMethod, exactOwnData, inTransaction, lockOwnerAuthority, resolveUserId \} from "\.\.\/tasks\/owner-task-mutations\.ts";/u);
+  // AI-039.1: the planning request boundary is the only other importer, of the same primitives.
+  assert.deepEqual(importers(/from\s+["'][^"']*\/tasks\/owner-task-mutations(\.ts)?["']/u),
+    ["lib/composition/owner-task-create.ts", "lib/development/feature-plan-mutations.ts", "lib/development/feature-plan-planning-requests.ts"]);
+  for (const path of ["lib/development/feature-plan-mutations.ts", "lib/development/feature-plan-planning-requests.ts"]) {
+    assert.match(code(path),
+      /import \{ Conflict, Unavailable, capturedMethod, exactOwnData, inTransaction, lockOwnerAuthority, resolveUserId \} from "\.\.\/tasks\/owner-task-mutations\.ts";/u, path);
+  }
   // The binding is imported only by its server-only entry.
   assert.deepEqual(importers(/from\s+["'][^"']*owner-task-create(\.ts)?["']/u), ["lib/composition/owner-task-create.server.ts"]);
   // The server-only entry is imported only by the Quick Create Server Action and its page (key issue).

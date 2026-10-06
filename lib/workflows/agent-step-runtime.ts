@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { isProxy } from "node:util/types";
 import type {
   ModelCapabilityRiskApprovalScope,
@@ -144,7 +145,21 @@ export type AgentStepModelInvocationOutcome = Readonly<{
   latencyMs: number | null;
   costUsdMicros: number | null;
   errorCode: string | null;
+  // AI-039.1 (AI-037.2 pull-forward): the durable step result. Present ONLY on a succeeded outcome
+  // with non-empty output text, and persisted by the ledger in the same transaction that settles the
+  // invocation, so the result survives a later snapshot commit failure without a second dispatch.
+  stepResult?: AgentStepModelInvocationStepResult;
 }>;
+
+export type AgentStepModelInvocationStepResult = Readonly<{
+  outputText: string;
+  // sha256 of the UTF-8 output text, `sha256:<64 hex>`.
+  outputFingerprint: string;
+}>;
+
+export function agentStepOutputFingerprint(outputText: string): string {
+  return `sha256:${createHash("sha256").update(outputText, "utf8").digest("hex")}`;
+}
 
 export type AgentStepModelBudgetReservation = AgentStepModelInvocationReservation & Readonly<{
   departmentId: string;
@@ -1543,6 +1558,10 @@ export async function executeAgentStep(
         latencyMs: providerResult?.latencyMs ?? null,
         costUsdMicros: providerResult?.costUsdMicros ?? null,
         errorCode,
+        ...(status === "succeeded" && providerResult && typeof providerResult.outputText === "string"
+          && providerResult.outputText.length > 0
+          ? { stepResult: { outputText: providerResult.outputText, outputFingerprint: agentStepOutputFingerprint(providerResult.outputText) } }
+          : {}),
       }));
     } catch {
       recorded = { status: "recovery_required" };
