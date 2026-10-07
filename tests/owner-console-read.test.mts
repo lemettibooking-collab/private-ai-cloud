@@ -304,7 +304,8 @@ test("038.3-9 / 3.2-17. rewritten Owner pages import no mock runtime data and fa
 
 test("038.3-10 / 3.2-18. the only HTTP API route is the Auth.js route", () => {
   assert.deepEqual(walk("app/api").sort(), ["app/api/auth/[...nextauth]/route.ts"]);
-  assert.deepEqual(walk("app").filter((path) => /(^|\/)route\.(ts|tsx|js)$/u.test(path)), ["app/api/auth/[...nextauth]/route.ts"]);
+  // AI-039.2 adds exactly one non-API route: the Sign in with ChatGPT loopback OAuth callback.
+  assert.deepEqual(walk("app").filter((path) => /(^|\/)route\.(ts|tsx|js)$/u.test(path)).sort(), ["app/api/auth/[...nextauth]/route.ts", "app/integrations/chatgpt/callback/route.ts"]);
 });
 
 // ---------------------------------------------------------------------------------------------

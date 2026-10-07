@@ -19,6 +19,7 @@
     "workflow:provider-smoke": "node scripts/workflow-provider-smoke.mts"
   },
   "dependencies": {
+    "jose": "6.2.12",
     "next": "16.2.9",
     "next-auth": "5.0.0-beta.32",
     "openai": "7.5.0",

@@ -50,7 +50,8 @@ test("no new client components or write paths in the Owner Console", () => {
   assert.deepEqual(clientFiles, ["components/domain/owner-console/feature-plan-builder.tsx", "components/domain/owner-console/feature-plan-planning.tsx", "components/domain/owner-console/quick-create-form.tsx", ambientComponent, "components/shell/locale-switcher.tsx", "components/shell/project-switcher.tsx", "components/shell/sidebar.tsx"]);
   assert.ok(!/^\s*["']use client["']/mu.test(source(ambientRenderer)), "the renderer is a plain module");
   const serverActions = [...walk("app"), ...walk("components"), ...walk("lib")].filter((path) => /\.(tsx?|mts)$/u.test(path) && /["']use server["']/u.test(code(path)));
-  assert.deepEqual(serverActions, ["app/tasks/[taskId]/development/actions.ts", "app/tasks/[taskId]/development/draft-actions.ts", "app/tasks/new/actions.ts"]);
+  // AI-039.2 adds the ChatGPT plan integration actions (local integration credential store only).
+  assert.deepEqual(serverActions, ["app/settings/integrations/actions.ts", "app/tasks/[taskId]/development/actions.ts", "app/tasks/[taskId]/development/draft-actions.ts", "app/tasks/new/actions.ts"]);
   for (const path of consoleUi) {
     assert.ok(!/\bfetch\(|lib\/db\/|lib\/tasks\/owner-task-mutations|lib\/providers|lib\/workflows/u.test(code(path)), `${path} reaches data or write layers`);
   }

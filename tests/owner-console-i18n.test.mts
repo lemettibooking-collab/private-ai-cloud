@@ -236,7 +236,8 @@ const pageRoutes = () => walk("app").filter((path) => path.endsWith("/page.tsx")
 // L10N-3: the ONE bounded list of Latin words allowed inside human-facing copy that is otherwise
 // localized — brands / product names and acronyms. Ordinary English words (Owner, Scheduler,
 // Workspace, review, snapshot, scope…) are never on it.
-const latinNames = ["Private AI Cloud", "Smart Algorithms Demo", "Smart Algorithms", "PAC", "GitHub", "Telegram", "Codex", "Markdown", "Next.js", "Git", "Google", "Scanner", "Pro"];
+// AI-039.2: "ChatGPT" is the provider's product name in the official Sign in with ChatGPT wording.
+const latinNames = ["Private AI Cloud", "Smart Algorithms Demo", "Smart Algorithms", "PAC", "GitHub", "Telegram", "Codex", "Markdown", "Next.js", "Git", "Google", "Scanner", "Pro", "ChatGPT"];
 const latinAcronyms = new Set(["AI", "QA", "LLM", "API", "PDF", "RAG", "MVP", "FAQ", "SEO", "CRM", "CMS", "BI", "CI", "SLA", "GPU", "PR", "ID", "NUL"]);
 // Words that are not translatable UI copy in component sources (EN-side detector).
 const notCopy = new Set([...latinNames.flatMap((name) => name.split(/[ .]/u)), ...latinAcronyms, "S3", "npm"]);

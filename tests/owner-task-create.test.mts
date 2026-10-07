@@ -166,11 +166,14 @@ test("O. dependency direction: UI → Server Action → server composition → o
   assert.deepEqual(importers(/\bcreateOwnerTaskMutations\b/u).filter((path) => path !== "lib/tasks/owner-task-mutations.ts"), ["lib/composition/owner-task-create.ts"]);
   // AI-039.1: the planning request boundary is the only other importer, of the same primitives.
   assert.deepEqual(importers(/from\s+["'][^"']*\/tasks\/owner-task-mutations(\.ts)?["']/u),
-    ["lib/composition/owner-task-create.ts", "lib/development/feature-plan-mutations.ts", "lib/development/feature-plan-planning-requests.ts"]);
+    ["lib/composition/owner-task-create.ts", "lib/development/feature-plan-mutations.ts", "lib/development/feature-plan-planning-requests.ts", "lib/integrations/chatgpt/chatgpt-owner-authority.ts"]);
   for (const path of ["lib/development/feature-plan-mutations.ts", "lib/development/feature-plan-planning-requests.ts"]) {
     assert.match(code(path),
       /import \{ Conflict, Unavailable, capturedMethod, exactOwnData, inTransaction, lockOwnerAuthority, resolveUserId \} from "\.\.\/tasks\/owner-task-mutations\.ts";/u, path);
   }
+  // AI-039.2: the ChatGPT integration reuses ONLY the Owner predicate (read lock), never a task mutation.
+  assert.match(code("lib/integrations/chatgpt/chatgpt-owner-authority.ts"),
+    /import \{ capturedMethod, inTransaction, lockOwnerAuthority, resolveUserId \} from "\.\.\/\.\.\/tasks\/owner-task-mutations\.ts";/u);
   // The binding is imported only by its server-only entry.
   assert.deepEqual(importers(/from\s+["'][^"']*owner-task-create(\.ts)?["']/u), ["lib/composition/owner-task-create.server.ts"]);
   // The server-only entry is imported only by the Quick Create Server Action and its page (key issue).
@@ -179,10 +182,16 @@ test("O. dependency direction: UI → Server Action → server composition → o
   assert.match(serverEntry, /^(\/\/[^\n]*\n)*import "server-only";/u, "server-only must be the first import");
   assert.match(serverEntry, /createGitHubOwnerTaskCreate\(\{ database, domainWorkspaceId, sessionResolver: \{ resolve: \(\) => auth\(\) \} \}\)/u, "the real Auth.js session of THIS request");
   assert.match(serverEntry, /workspaceSlug: process\.env\.APP_DEMO_WORKSPACE_SLUG/u, "the workspace is trusted server configuration");
-  // Exactly three Server Action modules in the application (AI-038.4b Quick Create, AI-039 Plan Builder
-  // save, AI-039 P-1 planning-interview draft), each exporting exactly one async action.
+  // Exactly four Server Action modules in the application: AI-038.4b Quick Create, AI-039 Plan Builder
+  // save and AI-039 P-1 planning-interview draft (each exporting exactly one async action), plus the
+  // AI-039.2 ChatGPT plan integration module (its four actions are pinned below).
   const serverActionFiles = applicationFiles().filter((path) => /^\s*["']use server["'];/u.test(source(path)));
-  assert.deepEqual(serverActionFiles, ["app/tasks/[taskId]/development/actions.ts", "app/tasks/[taskId]/development/draft-actions.ts", "app/tasks/new/actions.ts"]);
+  // AI-039.2 adds a fourth module: the ChatGPT plan integration actions (pinned below).
+  assert.deepEqual(serverActionFiles, ["app/settings/integrations/actions.ts", "app/tasks/[taskId]/development/actions.ts", "app/tasks/[taskId]/development/draft-actions.ts", "app/tasks/new/actions.ts"]);
+  const integrationActions = code("app/settings/integrations/actions.ts");
+  assert.deepEqual([...integrationActions.matchAll(/^export\s+(?:async\s+)?(?:function|const|let|class)\s+(\w+)/gmu)].map((match) => match[1]),
+    ["connectChatGPTAction", "disconnectChatGPTAction", "refreshChatGPTModelsAction", "selectChatGPTModelAction"]);
+  assert.deepEqual([...integrationActions.matchAll(/from\s+["']([^"']+)["']/gu)].map((match) => match[1]).sort(), ["@/lib/composition/chatgpt-integration.server", "next/headers", "next/navigation"]);
   // The draft action writes nothing: it reaches only the draft composition (never the save / mutations).
   const draftAction = code("app/tasks/[taskId]/development/draft-actions.ts");
   assert.deepEqual([...draftAction.matchAll(/^export\s+(?:async\s+)?(?:function|const|let|class)\s+(\w+)/gmu)].map((match) => match[1]), ["draftFeaturePlanAction"]);
@@ -217,7 +226,8 @@ test("M. attachRun has no UI, Server Action, route or composition binding; no ne
     assert.ok(!/attachRun|attach-run|task\.run_attached/u.test(code(path)), `${path} exposes attachRun`);
   }
   const routes = walk("app").filter((path) => /(^|\/)route\.(ts|tsx|js)$/u.test(path));
-  assert.deepEqual(routes, ["app/api/auth/[...nextauth]/route.ts"], "the Auth.js route stays the only HTTP route");
+  // AI-039.2 adds exactly one route: the Sign in with ChatGPT loopback callback (no attachRun, no runtime).
+  assert.deepEqual(routes.sort(), ["app/api/auth/[...nextauth]/route.ts", "app/integrations/chatgpt/callback/route.ts"], "the Auth.js route plus the ChatGPT OAuth callback are the only HTTP routes");
 });
 
 test("L / scope. Quick Create starts nothing: no runtime, provider, executor, GitHub or network in its path", () => {

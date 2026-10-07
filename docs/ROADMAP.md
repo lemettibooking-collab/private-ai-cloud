@@ -164,7 +164,7 @@ The census recorded the current hardening debt and moved development to mileston
 - **AI-038.7 Dynamic Ambient Shader Background — DONE** (`4cb0dc0`)
 - **AI-039 Development Workflow Browser — DONE** (`b0e0bb8`)
 - **AI-039.1 Ledger-backed AI FeaturePlan Planning — DONE** (see §9). Direct API-key live smoke deferred by Owner until API billing is available; no real paid call has been made, and M2.2 remains DEFERRED BY OWNER.
-- **AI-039.2 ChatGPT Plan Access — PLANNED / NEXT** (see §9)
+- **AI-039.2 ChatGPT Plan Access — IN PROGRESS** (Phase A connection implemented; eligibility checkpoint pending; see §9)
 - **Roadmap Rebase v1.4 — vendor-neutral control plane — documentation only** (this version; `docs/ROADMAP_REBASE_V1.4.md`)
 
 AI-037.1.1 passed independent re-gate and was committed/pushed through the Owner-approved repository workflow.
@@ -262,7 +262,7 @@ Status: IN REVIEW. M2 is NOT DONE; the M2 Roadmap Review Gate is not complete.
 - **M2.1 — DONE.** Fake OpenAI SDK below the real adapter, against live PostgreSQL.
 - **M2.2 — DEFERRED BY OWNER**, awaiting intentional API billing activation. This is commercial/API sequencing, not a technical blocker in M2.0/M2.1. No real provider call has been made. When API use becomes useful, provider routes will be tested intentionally under their proper gates. Before the one Owner-approved paid call, the Owner verifies the configured model prices against the provider's current pricing and confirms that the provider-reported input tokens equal the preflight count.
 
-M2 proves the direct API-backed `ModelProvider` path. Managed executors (OpenAI Agents API, Claude Code, others) and subscription-backed access are an `ExecutorAdapter` concern in M4 and do not replace the M2 real-provider proof. v1.4 does not change M2 scope.
+M2 proves the direct API-backed `ModelProvider` path. Managed executors (OpenAI Agents API, Claude Code, others) and subscription-backed **executor** access are an `ExecutorAdapter` concern in M4 and do not replace the M2 real-provider proof. Subscription-backed **bounded model** access (ChatGPT plan via Sign in with ChatGPT) is a `ModelProvider` concern, implemented by AI-039.2; it does not replace or complete the M2 API-key gate. v1.4 does not change M2 scope.
 
 | Check | Requirement |
 |---|---|
@@ -707,7 +707,9 @@ The AI-039 planning port bound to a REAL bounded model invocation, through the e
 - **Outcomes:** `candidate`, `candidate_rejected`, `planner_unavailable`, `budget_denied`, `provider_unavailable`, `planning_failed`, `recovery_required`, plus `egress_approval_required` and `conflict`.
 - **Unchanged:** no auto-save, no task status change, no repository execution; provider SDK retries 0; the credential stays server-side only.
 
-### AI-039.2 — ChatGPT Plan Access — PLANNED / NEXT
+### AI-039.2 — ChatGPT Plan Access — IN PROGRESS (Phase A: connection, before the eligibility checkpoint)
+
+Phase A (implemented; awaiting the Owner eligibility checkpoint): Sign in with ChatGPT connection in Settings → Integrations — public-client OAuth (dynamic registration, PKCE S256, state, nonce, 127.0.0.1 loopback callback), JWKS-validated ID token, local protected credential store, serialized rotating refresh, revocation on disconnect, account-specific model discovery. **No inference.** Phase B (subscription accounting, adapter, planner binding) starts only if the official grant includes `chatgpt.tokens.use.direct`. Eligibility is determined by that official OAuth grant; a private PAC installation is not guaranteed ChatGPT-plan direct access.
 
 Purpose: use official Sign in with ChatGPT / ChatGPT plan usage as a second `ModelProvider` access mode for bounded FeaturePlan planning.
 

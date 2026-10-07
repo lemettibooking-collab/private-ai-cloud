@@ -1,10 +1,13 @@
+import { ChatGPTPlanCard } from "@/components/domain/settings/chatgpt-plan-card";
 import { AppShell } from "@/components/shell/app-shell";
 import { PageHeader } from "@/components/ui/page-header";
 import { SectionCard } from "@/components/ui/section-card";
 import { StatusBadge } from "@/components/ui/status-badge";
+import { loadChatGPTIntegration } from "@/lib/composition/chatgpt-integration.server";
 import { getI18n } from "@/lib/i18n/locale.server";
 import { prototypeContent } from "@/lib/i18n/prototype-content";
 import type { StatusTone } from "@/types/app";
+import { connectChatGPTAction, disconnectChatGPTAction, refreshChatGPTModelsAction, selectChatGPTModelAction } from "./actions";
 
 const integrationTone: Record<string, StatusTone> = {
   "not connected": "neutral",
@@ -13,9 +16,14 @@ const integrationTone: Record<string, StatusTone> = {
   "manual only": "warning",
 };
 
-export default async function IntegrationsPage() {
-  const { locale } = await getI18n();
+// AI-039.2: the ChatGPT plan card is real (Owner-only, safe status projection, Server Actions); the other
+// integration cards remain prototype content. `?chatgpt=` only selects one of the fixed localized notices.
+export default async function IntegrationsPage({ searchParams }: { searchParams: Promise<{ [key: string]: string | string[] | undefined }> }) {
+  const { locale, t } = await getI18n();
   const c = prototypeContent[locale].integrations;
+  const rawNotice = (await searchParams).chatgpt;
+  const notice = typeof rawNotice === "string" && /^[a-z_]{1,40}$/u.test(rawNotice) ? rawNotice : null;
+  const chatgpt = await loadChatGPTIntegration();
   return (
     <AppShell>
       <PageHeader
@@ -25,6 +33,12 @@ export default async function IntegrationsPage() {
       />
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <ChatGPTPlanCard
+          actions={{ connect: connectChatGPTAction, disconnect: disconnectChatGPTAction, refreshModels: refreshChatGPTModelsAction, selectModel: selectChatGPTModelAction }}
+          labels={t.chatgptIntegration}
+          notice={notice}
+          view={chatgpt}
+        />
         {c.items.map((integration) => (
           <SectionCard key={integration.id}>
             <div className="flex items-start justify-between gap-3">

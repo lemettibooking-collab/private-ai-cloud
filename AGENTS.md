@@ -34,7 +34,8 @@ This version has breaking changes - APIs, conventions, and file structure may al
   - it must honor `prefers-reduced-motion` (no animation loop);
   - no WebGL / animation library.
 - **Auth:** Auth.js with GitHub as the only provider (AI-038.2a), wired to the server-only Owner identity boundary (`lib/auth/`, `lib/composition/*owner-read*`).
-  - The only HTTP route is the Auth.js route `app/api/auth/[...nextauth]`. There is no business API.
+  - HTTP routes: the Auth.js route `app/api/auth/[...nextauth]`, plus (AI-039.2) the Sign in with ChatGPT loopback OAuth callback `app/integrations/chatgpt/callback`. There is no business API.
+  - The ChatGPT plan connection (AI-039.2) is a model-access integration credential, NOT PAC authentication. Its OAuth material lives only in the local protected credential store (`lib/integrations/chatgpt/`), never in PostgreSQL, browser storage, cookies, logs or audit.
   - The real GitHub OAuth smoke (AI-038.2b) passed; AI-038.2 is DONE.
 - **Backend runtime layer** (server-only; no runtime business API is exposed):
   - `lib/contracts/`: domain contracts;
