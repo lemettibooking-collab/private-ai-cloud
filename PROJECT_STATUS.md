@@ -9,10 +9,10 @@ Private AI Cloud is a **vendor-neutral AI Engineering Control Plane**. The canon
 | M1 Real Money Safety | DONE |
 | M2 Direct Model Provider Capability | IN REVIEW (M2.0 and M2.1 DONE; M2.2 DEFERRED BY OWNER) |
 | M3 Owner Product | ACTIVE / NOT DONE: AI-037.7, AI-038.0–AI-038.7, AI-039 and AI-039.1 DONE (direct API-key live smoke deferred by Owner); AI-039.2 Phase A committed, entitlement gate deferred by external supported-network blocker, Phase B blocked; AI-040a IN REVIEW |
-| M4 Vendor-Neutral Executor Platform | REBASED; first new task AI-041.0 Vendor-Neutral Executor Adapter Contract (PLANNED) |
+| M4 Vendor-Neutral Executor Platform | REBASED; AI-041.0 Vendor-Neutral Executor Adapter Contract IN REVIEW (contract only; no invocation authority) |
 | M5–M8 | PLANNED (M5 and M7 rebased in v1.4) |
 
-**Current local slice:** AI-040a Local Developer Handoff IN REVIEW (not DONE); AI-039.2 Phase B stays blocked, with no inference proof. The full order is in `docs/ROADMAP.md` §9. M2.2 remains DEFERRED BY OWNER.\
+**Current local slices:** AI-040a Local Developer Handoff and AI-041.0 Vendor-Neutral Executor Adapter Contract IN REVIEW (not DONE); AI-039.2 Phase B stays blocked, with no inference proof. The full order is in `docs/ROADMAP.md` §9 / §11. M2.2 remains DEFERRED BY OWNER.\
 **First implementation task created by the v1.4 rebase:** AI-041.0.
 
 ## What Exists
@@ -42,11 +42,12 @@ Private AI Cloud is a **vendor-neutral AI Engineering Control Plane**. The canon
   It writes runtime and planning state. It never saves a FeaturePlan, never changes the ProjectTask status, and never invokes an executor, GitHub or a repository mutation.
 - CI quality workflow: lint, typecheck, unit tests and build.
 - AI-040a (IN REVIEW): local CLI PREPARE/REVIEW, external protected manifest, explicit paths, tracked/untracked patch and untrusted report capture, bounded fixed-command verification and provider-neutral Owner review package. Human-operated executor metadata only; no executor invocation, runtime/DB/UI wiring, automatic approval or Git mutation. See `docs/operations/local-developer-handoff.md`.
+- AI-041.0 (IN REVIEW): separate pure ExecutorAdapter contract with configured identity/capabilities, existing FeaturePlan admission, immutable invocation validation and bounded hashed patch-proposal/report evidence. Rejected, failed and ambiguous outcomes remain distinct. No execute method, dispatch authority, real executor, provider, runtime/DB/UI binding or Git authority; AI-040a metadata remains inert. See [contract v1](docs/architecture/executor-adapter-contract-v1.md).
 
 ## Not Yet Implemented
 
 - Runtime business APIs, and any UI action that starts a run, model, executor or repository change (the only exception is the AI-039.1 Owner-approved planning Run)
-- Executor integrations (ExecutorAdapter / ExecutorRouter / ExecutionEnvironment)
+- Real executor integrations, invocation authority, ExecutorRouter and ExecutionEnvironment (AI-041.0 defines validation only)
 - Automated Quality/Security Gate on executor output, and the corrective controller
 - RAG, real external integrations, staging/production deployment
 

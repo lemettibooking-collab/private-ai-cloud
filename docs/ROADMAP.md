@@ -21,7 +21,7 @@ Important external actions remain separate approvals: accepting a result, allowi
 
 The development pipeline must not depend on one specific model, executor, or payment mechanism. API credits, subscription/CLI access, and self-hosted routes are implementation choices behind stable provider/backend contracts.
 
-`ModelProvider` and `ExecutorAdapter` are separate integration layers. `ModelProvider` serves direct, bounded model calls (classification, structured transformation, analysis, planning, review). `ExecutorAdapter` serves managed engineering/agent execution (repository work, coding, tool execution, managed agent sessions, patch production). They are not collapsed into one interface even when one vendor offers both. Executors may use API credentials, provider credits, provider-supported subscription sessions, or self-hosted routes behind the same `ExecutorAdapter` contract. Changing executor, authentication or payment mode must not change FeaturePlan, QA, approval, audit, artifact, or recovery semantics. (v1.3 called the executor layer `ExecutionBackend`; v1.4 renames the planned concept to `ExecutorAdapter`. No code for either exists yet.)
+`ModelProvider` and `ExecutorAdapter` are separate integration layers. `ModelProvider` serves direct, bounded model calls (classification, structured transformation, analysis, planning, review). `ExecutorAdapter` serves managed engineering/agent execution (repository work, coding, tool execution, managed agent sessions, patch production). They are not collapsed into one interface even when one vendor offers both. Executors may use API credentials, provider credits, provider-supported subscription sessions, or self-hosted routes behind the same `ExecutorAdapter` contract. Changing executor, authentication or payment mode must not change FeaturePlan, QA, approval, audit, artifact, or recovery semantics. (v1.3 called the executor layer `ExecutionBackend`; v1.4 renames it to `ExecutorAdapter`. AI-041.0 now defines a validation-only foundation IN REVIEW; no real executor or invocation authority exists.)
 
 Security, tenant isolation, budgets, idempotency, audit, and recovery remain system invariants.
 
@@ -166,6 +166,7 @@ The census recorded the current hardening debt and moved development to mileston
 - **AI-039.1 Ledger-backed AI FeaturePlan Planning — DONE** (see §9). Direct API-key live smoke deferred by Owner until API billing is available; no real paid call has been made, and M2.2 remains DEFERRED BY OWNER.
 - **AI-039.2 ChatGPT Plan Access — Phase A implemented/committed** (`c3e3db4`; live entitlement gate deferred by an external supported-network blocker; Phase B blocked; no inference proof; see §9)
 - **AI-040a Local Developer Handoff — IN REVIEW** (local/CLI human-operated handoff and bounded verification; no executor invocation)
+- **AI-041.0 Vendor-Neutral Executor Adapter Contract — IN REVIEW** (separate pure contract and deterministic harness; no invocation authority or real executor)
 - **Roadmap Rebase v1.4 — vendor-neutral control plane — documentation only** (this version; `docs/ROADMAP_REBASE_V1.4.md`)
 
 AI-037.1.1 passed independent re-gate and was committed/pushed through the Owner-approved repository workflow.
@@ -305,7 +306,7 @@ Minimal local/CLI flow:
 
 `Task Artifact → human-operated executor handoff → Patch/Report → Local Verification Runner → stable Review Package → Owner decision`
 
-v1.4: the selected executor is reached through the same `ExecutorAdapter` concept as M4 once AI-041.0 exists; until then AI-040a may use the current human-operated executor handoff. AI-040a must not build a PAC-owned agent loop or sandbox.
+v1.4: a future machine executor will use the M4 `ExecutorAdapter` boundary. AI-041.0 defines validation only, not a bridge that upgrades AI-040a's human-operated `selectedExecutor` metadata into invocation authority. AI-040a remains a human-operated handoff and must not build a PAC-owned agent loop or sandbox.
 
 Requirements:
 
@@ -779,11 +780,15 @@ Rules:
 - Capability detection fails closed: an executor that cannot satisfy the requested capability, environment, access mode or data-handling requirement is not selected.
 - No second dispatch on an ambiguous outcome; existing M1 invariants (budget-before-spend, `outcome_unknown`, idempotency, audit) apply to executor runs.
 
-### AI-041.0 — Vendor-Neutral Executor Adapter Contract — PLANNED (first new implementation task created by v1.4)
+### AI-041.0 — Vendor-Neutral Executor Adapter Contract — IN REVIEW (first new implementation task created by v1.4)
 
 Define only the PAC-owned contract and its contract tests. No SDK, no provider adapter, no network, no migration unless the task explicitly scopes one.
 
-Conceptual coverage (final shapes are decided in the task, not here):
+Implemented narrow foundation (awaiting independent re-gate): `lib/contracts/executor-adapter.ts` separates configured stable identity, bounded capability declarations, immutable invocation input and strictly validated terminal results. It reuses FeaturePlan validation, DevelopmentTask admission and existing pure bounded-data/path/evidence utilities. The deterministic test harness produces scoped, SHA-256-bound file proposals and reports. A successful result is not independently verified work: `verificationStatus: not_run`, `ownerDecisionRequired: true`; unknown outcomes never imply retry permission.
+
+There is no execute/invoke/dispatch method, permit issuer, provider/SDK/network call, filesystem execution, new persistence or Git authority. `allow` means contract-valid only (`invocationAuthorized: false`). AI-040a remains unchanged and human-operated. Full shapes, limits, trust assumptions and deferred additions: [ExecutorAdapter contract v1](architecture/executor-adapter-contract-v1.md).
+
+Future platform coverage (not all implemented by the narrow AI-041.0 foundation):
 
 - `ExecutorRequest` — bounded task derived from an admitted FeaturePlan task (scope/paths, acceptance criteria, verification plan, limits)
 - `ExecutorCapabilities` — what an executor factually supports
@@ -1154,7 +1159,7 @@ While M2.2 is deferred: `AI-037.7 DONE → AI-038.0 DONE → AI-038.1 DONE → A
 
 ### B. First new architecture implementation introduced by v1.4
 
-`AI-041.0 Vendor-Neutral Executor Adapter Contract` (PLANNED). It is a contract-only task and may be scheduled in parallel with line A when the Owner chooses; it does not depend on AI-038.2b.
+`AI-041.0 Vendor-Neutral Executor Adapter Contract` (IN REVIEW). It is a contract-only task scheduled separately from line A; no real executor stage may start until its independent gate passes.
 
 ### Early development automation
 
