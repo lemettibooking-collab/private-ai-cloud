@@ -10,22 +10,22 @@ type DataTableProps<T> = {
 
 export function DataTable<T>({ columns, rows, getRowKey }: DataTableProps<T>) {
   return (
-    <div className="overflow-hidden rounded-lg border border-slate-800">
-      <table className="min-w-full divide-y divide-slate-800 text-left text-sm">
-        <thead className="bg-slate-900/80 text-xs uppercase tracking-wide text-slate-500">
+    <div className="overflow-x-auto rounded-pac border border-line">
+      <table className="min-w-full divide-y divide-line text-left text-[13px]">
+        <thead className="bg-panel-2">
           <tr>
             {columns.map((column) => (
-              <th className="px-4 py-3 font-medium" key={String(column.key)}>
+              <th className="pac-label px-3 py-2 font-medium" key={String(column.key)}>
                 {column.header}
               </th>
             ))}
           </tr>
         </thead>
-        <tbody className="divide-y divide-slate-800 bg-slate-950/40">
+        <tbody className="divide-y divide-line bg-panel">
           {rows.map((row) => (
-            <tr className="hover:bg-slate-900/50" key={getRowKey(row)}>
+            <tr className="hover:bg-panel-2" key={getRowKey(row)}>
               {columns.map((column) => (
-                <td className="px-4 py-3 text-slate-300" key={String(column.key)}>
+                <td className="px-3 py-2 text-ink-2" key={String(column.key)}>
                   {column.render
                     ? column.render(row)
                     : String(row[column.key as keyof T] ?? "")}
