@@ -164,7 +164,8 @@ The census recorded the current hardening debt and moved development to mileston
 - **AI-038.7 Dynamic Ambient Shader Background — DONE** (`4cb0dc0`)
 - **AI-039 Development Workflow Browser — DONE** (`b0e0bb8`)
 - **AI-039.1 Ledger-backed AI FeaturePlan Planning — DONE** (see §9). Direct API-key live smoke deferred by Owner until API billing is available; no real paid call has been made, and M2.2 remains DEFERRED BY OWNER.
-- **AI-039.2 ChatGPT Plan Access — IN PROGRESS** (Phase A connection implemented; eligibility checkpoint pending; see §9)
+- **AI-039.2 ChatGPT Plan Access — Phase A implemented/committed** (`c3e3db4`; live entitlement gate deferred by an external supported-network blocker; Phase B blocked; no inference proof; see §9)
+- **AI-040a Local Developer Handoff — IN REVIEW** (local/CLI human-operated handoff and bounded verification; no executor invocation)
 - **Roadmap Rebase v1.4 — vendor-neutral control plane — documentation only** (this version; `docs/ROADMAP_REBASE_V1.4.md`)
 
 AI-037.1.1 passed independent re-gate and was committed/pushed through the Owner-approved repository workflow.
@@ -296,13 +297,13 @@ This gate prevents distant roadmap assumptions from turning into premature imple
 
 ## 8. Early self-development vertical slice
 
-### AI-040a — Local Developer Handoff — EARLY / PLANNED
+### AI-040a — Local Developer Handoff — IN REVIEW
 
 AI-040 is split so Private AI Cloud can begin helping build itself before the full Owner UI and execution platform are complete.
 
 Minimal local/CLI flow:
 
-`Task Artifact → Selected Executor → Patch/Report → Verification Runner → Review Package → Owner decision`
+`Task Artifact → human-operated executor handoff → Patch/Report → Local Verification Runner → stable Review Package → Owner decision`
 
 v1.4: the selected executor is reached through the same `ExecutorAdapter` concept as M4 once AI-041.0 exists; until then AI-040a may use the current human-operated executor handoff. AI-040a must not build a PAC-owned agent loop or sandbox.
 
@@ -316,6 +317,10 @@ Requirements:
 - reuse existing FeaturePlan/policy/audit concepts where available; do not create a parallel development pipeline
 
 AI-040a may start after the Real Provider gate or in parallel with early M3 work if its dependencies are satisfied.
+
+Implemented local slice (awaiting independent re-gate): `npm run development:handoff -- prepare|review` reuses FeaturePlan / DevelopmentTask admission, existing repository policy and the task artifact generator. A protected external manifest binds the clean repository, branch, HEAD, explicit writable paths and required checks. REVIEW captures tracked and untracked text changes without staging, fails closed on drift/scope/unsupported artifacts, performs bounded allowlisted verification and probable-secret checks, and publishes versioned JSON/Markdown evidence with `ownerDecisionRequired: true`.
+
+No ExecutorAdapter, automatic executor invocation, runtime/DB/UI wiring, automatic approval or commit/push. AI-040b UI integration remains later; AI-041.0 is the next ExecutorAdapter contract task. The local verifier is not a sandbox or the future full Security Gate. Usage, schema, limits and local trust assumptions: [Local developer handoff v1](operations/local-developer-handoff.md).
 
 ### AI-040b — Owner UI Integration — LATER
 
@@ -707,9 +712,9 @@ The AI-039 planning port bound to a REAL bounded model invocation, through the e
 - **Outcomes:** `candidate`, `candidate_rejected`, `planner_unavailable`, `budget_denied`, `provider_unavailable`, `planning_failed`, `recovery_required`, plus `egress_approval_required` and `conflict`.
 - **Unchanged:** no auto-save, no task status change, no repository execution; provider SDK retries 0; the credential stays server-side only.
 
-### AI-039.2 — ChatGPT Plan Access — IN PROGRESS (Phase A: connection, before the eligibility checkpoint)
+### AI-039.2 — ChatGPT Plan Access — Phase A implemented/committed; Phase B blocked
 
-Phase A (implemented; awaiting the Owner eligibility checkpoint): Sign in with ChatGPT connection in Settings → Integrations — public-client OAuth (dynamic registration, PKCE S256, state, nonce, 127.0.0.1 loopback callback), JWKS-validated ID token, local protected credential store, serialized rotating refresh, revocation on disconnect, account-specific model discovery. **No inference.** Phase B (subscription accounting, adapter, planner binding) starts only if the official grant includes `chatgpt.tokens.use.direct`. Eligibility is determined by that official OAuth grant; a private PAC installation is not guaranteed ChatGPT-plan direct access.
+Phase A implemented and committed/pushed in `c3e3db4`: Sign in with ChatGPT connection in Settings → Integrations — public-client OAuth (dynamic registration, PKCE S256, state, nonce, 127.0.0.1 loopback callback), JWKS-validated ID token, local protected credential store, serialized rotating refresh, revocation on disconnect, account-specific model discovery. The live entitlement gate is deferred by an external supported-network blocker. **No inference proof; Phase B remains blocked.** Phase B (subscription accounting, adapter, planner binding) starts only if the official grant includes `chatgpt.tokens.use.direct`. Eligibility is determined by that official OAuth grant; a private PAC installation is not guaranteed ChatGPT-plan direct access. Initial `invalid_grant` recovery remains recorded debt, not AI-040a work.
 
 Purpose: use official Sign in with ChatGPT / ChatGPT plan usage as a second `ModelProvider` access mode for bounded FeaturePlan planning.
 
@@ -1145,7 +1150,7 @@ Roadmap does not imply strictly serial development. Parallel work is allowed onl
 
 ### A. Current operational line (unchanged by the rebase)
 
-While M2.2 is deferred: `AI-037.7 DONE → AI-038.0 DONE → AI-038.1 DONE → AI-038.2a DONE → AI-038.2b DONE → AI-038.3 DONE → AI-038.3.1 DONE → AI-038.3.2 DONE → AI-038.4a Project Task Foundation + read surfaces DONE → AI-038.4b Quick Create / task mutation binding DONE → AI-038.5 Mission Control Visual Refinement DONE → AI-038.6 RU/EN Owner Console Localization DONE → AI-038.7 Dynamic Ambient Shader Background DONE → AI-039 Development Workflow Browser DONE → AI-039.1 Ledger-backed AI FeaturePlan Planning DONE (direct API-key live smoke deferred by Owner) → AI-039.2 ChatGPT Plan Access (NEXT) → AI-040a (PLANNED)` (M3 Owner path, §9). AI-038.2 passed; the Owner Console reads real runtime data through AI-038.3, read-only. The rebase does not cancel or skip any unfinished AI-038 work.
+While M2.2 is deferred: `AI-037.7 DONE → AI-038.0 DONE → AI-038.1 DONE → AI-038.2a DONE → AI-038.2b DONE → AI-038.3 DONE → AI-038.3.1 DONE → AI-038.3.2 DONE → AI-038.4a Project Task Foundation + read surfaces DONE → AI-038.4b Quick Create / task mutation binding DONE → AI-038.5 Mission Control Visual Refinement DONE → AI-038.6 RU/EN Owner Console Localization DONE → AI-038.7 Dynamic Ambient Shader Background DONE → AI-039 Development Workflow Browser DONE → AI-039.1 Ledger-backed AI FeaturePlan Planning DONE (direct API-key live smoke deferred by Owner) → AI-039.2 Phase A committed (entitlement gate deferred; Phase B blocked) → AI-040a IN REVIEW` (M3 Owner path, §9). AI-038.2 passed; the Owner Console reads real runtime data through AI-038.3, read-only. The rebase does not cancel or skip any unfinished AI-038 work.
 
 ### B. First new architecture implementation introduced by v1.4
 

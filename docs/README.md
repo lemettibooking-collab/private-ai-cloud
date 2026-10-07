@@ -22,6 +22,7 @@ Private AI Cloud is a **vendor-neutral AI Engineering Control Plane**: PAC owns 
 | [`architecture/database-schema-v0.1.md`](architecture/database-schema-v0.1.md) | Schema blueprint. Applied migrations in `db/migrations/` are the factual schema. |
 | [`architecture/db-foundation-implementation-plan-v0.1.md`](architecture/db-foundation-implementation-plan-v0.1.md) | DB foundation plan. Its context section is historical (DB-01 era). |
 | [`operations/workflow-runtime-recovery.md`](operations/workflow-runtime-recovery.md) | Owner-operated recovery procedure |
+| [`operations/local-developer-handoff.md`](operations/local-developer-handoff.md) | AI-040a local PREPARE/REVIEW usage, schema and trust boundary (IN REVIEW) |
 | [`../db/README.md`](../db/README.md) | DB scaffold notes. Its "no backend routes / no auth" lines predate AI-038.2a and are outdated (see `../PROJECT_STATUS.md`). |
 | [`../README.md`](../README.md), [`../PROJECT_STATUS.md`](../PROJECT_STATUS.md) | Short project overview and current state |
 

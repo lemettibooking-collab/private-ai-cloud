@@ -16,7 +16,8 @@
     "test": "node --test tests/*.test.mts",
     "test:pg": "node --test tests/pg/*.test.mts",
     "workflow:recovery": "node scripts/workflow-runtime-recovery.mts",
-    "workflow:provider-smoke": "node scripts/workflow-provider-smoke.mts"
+    "workflow:provider-smoke": "node scripts/workflow-provider-smoke.mts",
+    "development:handoff": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/local-developer-handoff.mts"
   },
   "dependencies": {
     "jose": "6.2.12",

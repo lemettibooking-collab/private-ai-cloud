@@ -46,6 +46,7 @@ This version has breaking changes - APIs, conventions, and file structure may al
   - `lib/db/`: PostgreSQL store, read model, tenant resolver, `pg` adapter;
   - `db/migrations/`, `db/seeds/`: raw SQL, PostgreSQL 16.
 - **Work is tracked as numbered tasks (`AI-0xx`).** Security-relevant stages pass an adversarial gate before the next stage starts (see "Task and gate process").
+- **Local developer handoff (AI-040a, IN REVIEW):** `npm run development:handoff -- prepare|review` is Node/CLI-only. It reuses FeaturePlan/task admission and path policy; PREPARE requires a clean Git baseline and manual paths, REVIEW produces bounded patch/report/verification evidence outside the repository. `selectedExecutor` is inert human-operated metadata, never an adapter or invocation. Owner decision remains external; no runtime/DB/UI binding or automatic Git mutation. The verifier is not a sandbox: run only Owner-trusted local scripts, with all other writers stopped and the external manifest protected. AI-040b and AI-041.0 remain later/separate tasks. See `docs/operations/local-developer-handoff.md`.
 
 ### Scope
 
