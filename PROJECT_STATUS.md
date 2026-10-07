@@ -9,11 +9,13 @@ Private AI Cloud is a **vendor-neutral AI Engineering Control Plane**. The canon
 | M1 Real Money Safety | DONE |
 | M2 Direct Model Provider Capability | IN REVIEW (M2.0 and M2.1 DONE; M2.2 DEFERRED BY OWNER) |
 | M3 Owner Product | ACTIVE / NOT DONE: AI-037.7, AI-038.0–AI-038.7, AI-039 and AI-039.1 DONE (direct API-key live smoke deferred by Owner); AI-039.2 Phase A committed, entitlement gate deferred by external supported-network blocker, Phase B blocked; AI-040a IN REVIEW |
-| M4 Vendor-Neutral Executor Platform | REBASED; AI-041.0 Vendor-Neutral Executor Adapter Contract IN REVIEW (contract only; no invocation authority) |
+| M4 Vendor-Neutral Executor Platform | AI-041.0 IN REVIEW; AI-041.1 IN REVIEW (managed transport + process-local executor authority/exposure bridge; production dispatch BLOCKED) |
 | M5–M8 | PLANNED (M5 and M7 rebased in v1.4) |
 
-**Current local slices:** AI-040a Local Developer Handoff and AI-041.0 Vendor-Neutral Executor Adapter Contract IN REVIEW (not DONE); AI-039.2 Phase B stays blocked, with no inference proof. The full order is in `docs/ROADMAP.md` §9 / §11. M2.2 remains DEFERRED BY OWNER.\
+**Current local slices:** AI-040a Local Developer Handoff, AI-041.0 Vendor-Neutral Executor Adapter Contract and AI-041.1 executor transport/exposure bridge IN REVIEW (not DONE); AI-041.1 real dispatch and AI-039.2 Phase B stay blocked, with no inference proof. The full order is in `docs/ROADMAP.md` §9 / §11. M2.2 remains DEFERRED BY OWNER.\
 **First implementation task created by the v1.4 rebase:** AI-041.0.
+
+**Current AI-041.1 exception:** the Owner explicitly excluded the prerequisite independent AI-041.0 / Decomposition gates for this implementation. This is not a PASS declaration. Security invariants are unchanged. AI-041.1 is IN REVIEW; real executor dispatch remains BLOCKED pending a durable executor-specific financial/start boundary and a sufficient exposure policy.
 
 ## What Exists
 
@@ -43,11 +45,12 @@ Private AI Cloud is a **vendor-neutral AI Engineering Control Plane**. The canon
 - CI quality workflow: lint, typecheck, unit tests and build.
 - AI-040a (IN REVIEW): local CLI PREPARE/REVIEW, external protected manifest, explicit paths, tracked/untracked patch and untrusted report capture, bounded fixed-command verification and provider-neutral Owner review package. Human-operated executor metadata only; no executor invocation, runtime/DB/UI wiring, automatic approval or Git mutation. See `docs/operations/local-developer-handoff.md`.
 - AI-041.0 (IN REVIEW): separate pure ExecutorAdapter contract with configured identity/capabilities, existing FeaturePlan admission, immutable invocation validation and bounded hashed patch-proposal/report evidence. Rejected, failed and ambiguous outcomes remain distinct. No execute method, dispatch authority, real executor, provider, runtime/DB/UI binding or Git authority; AI-040a metadata remains inert. See [contract v1](docs/architecture/executor-adapter-contract-v1.md).
+- AI-041.1 (IN REVIEW): separate managed Agents API protocol transport (`environment: none`, no executable tools/subagents), explicit dispatch authority, financial admission/exposure reservation, process-local single-consumer test fence and usage reconciliation. Fake transport evidence only. The server-only production composition cannot read credentials or dispatch; no caller flag enables it. No provider-side hard spending cap is claimed. See [boundary and limitations](docs/architecture/openai-agents-executor-v1.md).
 
 ## Not Yet Implemented
 
 - Runtime business APIs, and any UI action that starts a run, model, executor or repository change (the only exception is the AI-039.1 Owner-approved planning Run)
-- Real executor integrations, invocation authority, ExecutorRouter and ExecutionEnvironment (AI-041.0 defines validation only)
+- Enabled/live executor dispatch and durable executor financial/start authority, ExecutorRouter and ExecutionEnvironment (AI-041.1 supplies a locked transport and process-local test proof only)
 - Automated Quality/Security Gate on executor output, and the corrective controller
 - RAG, real external integrations, staging/production deployment
 

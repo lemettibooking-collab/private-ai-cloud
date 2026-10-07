@@ -21,7 +21,7 @@ Important external actions remain separate approvals: accepting a result, allowi
 
 The development pipeline must not depend on one specific model, executor, or payment mechanism. API credits, subscription/CLI access, and self-hosted routes are implementation choices behind stable provider/backend contracts.
 
-`ModelProvider` and `ExecutorAdapter` are separate integration layers. `ModelProvider` serves direct, bounded model calls (classification, structured transformation, analysis, planning, review). `ExecutorAdapter` serves managed engineering/agent execution (repository work, coding, tool execution, managed agent sessions, patch production). They are not collapsed into one interface even when one vendor offers both. Executors may use API credentials, provider credits, provider-supported subscription sessions, or self-hosted routes behind the same `ExecutorAdapter` contract. Changing executor, authentication or payment mode must not change FeaturePlan, QA, approval, audit, artifact, or recovery semantics. (v1.3 called the executor layer `ExecutionBackend`; v1.4 renames it to `ExecutorAdapter`. AI-041.0 now defines a validation-only foundation IN REVIEW; no real executor or invocation authority exists.)
+`ModelProvider` and `ExecutorAdapter` are separate integration layers. `ModelProvider` serves direct, bounded model calls (classification, structured transformation, analysis, planning, review). `ExecutorAdapter` serves managed engineering/agent execution (repository work, coding, tool execution, managed agent sessions, patch production). They are not collapsed into one interface even when one vendor offers both. Executors may use API credentials, provider credits, provider-supported subscription sessions, or self-hosted routes behind the same `ExecutorAdapter` contract. Changing executor, authentication or payment mode must not change FeaturePlan, QA, approval, audit, artifact, or recovery semantics. (v1.3 called the executor layer `ExecutionBackend`; v1.4 renames it to `ExecutorAdapter`. AI-041.0 defines the validation-only foundation; AI-041.1 adds a separate process-local authority/exposure test bridge and locked managed transport, IN REVIEW. Production/live executor dispatch remains BLOCKED.)
 
 Security, tenant isolation, budgets, idempotency, audit, and recovery remain system invariants.
 
@@ -167,6 +167,7 @@ The census recorded the current hardening debt and moved development to mileston
 - **AI-039.2 ChatGPT Plan Access — Phase A implemented/committed** (`c3e3db4`; live entitlement gate deferred by an external supported-network blocker; Phase B blocked; no inference proof; see §9)
 - **AI-040a Local Developer Handoff — IN REVIEW** (local/CLI human-operated handoff and bounded verification; no executor invocation)
 - **AI-041.0 Vendor-Neutral Executor Adapter Contract — IN REVIEW** (separate pure contract and deterministic harness; no invocation authority or real executor)
+- **AI-041.1 OpenAIAgentsExecutor — IN REVIEW** (bounded protocol transport and process-local executor-specific authority/exposure bridge; production/live dispatch BLOCKED)
 - **Roadmap Rebase v1.4 — vendor-neutral control plane — documentation only** (this version; `docs/ROADMAP_REBASE_V1.4.md`)
 
 AI-037.1.1 passed independent re-gate and was committed/pushed through the Owner-approved repository workflow.
@@ -803,13 +804,17 @@ Future platform coverage (not all implemented by the narrow AI-041.0 foundation)
 
 Exit: contract and adversarial contract tests pass; a deterministic fake executor satisfies the contract; nothing calls a real provider.
 
-### AI-041.1 — OpenAI Agents API Adapter (`OpenAIAgentsExecutor`) — PLANNED (P1 candidate)
+### AI-041.1 — OpenAI Agents API Adapter (`OpenAIAgentsExecutor`) — IN REVIEW (production dispatch BLOCKED)
 
 First managed executor implementation candidate, started only after the AI-041.0 contract passes its gate. Uses the official OpenAI Agents API. PAC remains responsible for FeaturePlan, policy, routing, quality, security, audit, cost normalization, approval and corrective orchestration; the Agents API may own session execution, the agent loop, tools, context runtime, subagents and hosted execution. Only capabilities confirmed by current official documentation at implementation time may be relied on (see `docs/ROADMAP_REBASE_V1.4.md` §External capability assumptions; status at rebase: public beta).
 
+Owner exception for this slice: prerequisite AI-041.0 / Decomposition gates were explicitly excluded, not declared passed. The implementation preserves security invariants. Scope was explicitly extended to a separate Executor Budget / Provider-Start Fence Bridge; existing ModelInvocation/Workflow Run grants are not reused.
+
+Implemented: managed session request construction, minimized explicitly supplied context, bounded SSE/result conversion, factual AI-041.0 result validation; separate opaque dispatch permits and monetary exposure reservations; synchronous process-local test fence; retained exposure and explicit reconciliation on missing/ambiguous usage. Production server composition is locked before credential access/network. No UI/route, SDK upgrade, repository execution, patch application, migration or durable executor ledger. Managed Agents API documentation checked in this slice does not establish a configurable per-session hard tokens/cost cap; timeout is not such a cap. No live execution proof. [Architecture, bounds and enablement conditions](architecture/openai-agents-executor-v1.md).
+
 Replaces the v1.3 default "CodexBackend via Codex CLI subscription session". Codex CLI/SDK/Cloud routes remain possible future executors or environments if a supported control-plane interface is confirmed (see AI-041.R1).
 
-Exit: real tasks run through the contract without a parallel special-case pipeline, and changing the supported access/payment mode does not change FeaturePlan, QA, evidence, Owner approvals or audit semantics.
+Review checkpoint: process-local/fake transport proof plus an explicit production dispatch BLOCKED verdict is the authorized result of this narrow slice. Future enablement requires a durable executor fence, sufficient financial exposure policy, reconciliation and separately approved live smoke. The original live exit criterion is not met or claimed; FeaturePlan, QA, evidence and Owner approval semantics remain unchanged.
 
 ### AI-041.2 — Second Vendor / Portability Proof — PLANNED
 
@@ -1159,7 +1164,7 @@ While M2.2 is deferred: `AI-037.7 DONE → AI-038.0 DONE → AI-038.1 DONE → A
 
 ### B. First new architecture implementation introduced by v1.4
 
-`AI-041.0 Vendor-Neutral Executor Adapter Contract` (IN REVIEW). It is a contract-only task scheduled separately from line A; no real executor stage may start until its independent gate passes.
+`AI-041.0 Vendor-Neutral Executor Adapter Contract` (IN REVIEW). It is contract-only and separate from line A. The Owner explicitly excluded its prerequisite gate and the Decomposition gate for AI-041.1; this does not mark either gate PASS. AI-041.1 is IN REVIEW with production/live dispatch BLOCKED.
 
 ### Early development automation
 
