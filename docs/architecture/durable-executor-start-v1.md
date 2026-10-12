@@ -1,6 +1,6 @@
 # AI-041.1b — Durable executor start and exposure boundary
 
-Status: IN REVIEW. Baseline/b0 commit: `2109545f829dfe4e63a23e95301893c534e75947`. AI-041.1 remains IN REVIEW. Production/live dispatch is BLOCKED. No distributed exactly-once provider execution claim.
+AI-041.1b: DONE / COMMITTED / PUSHED as `d72a439a456cb1370b49448fb354ea93b381907b`. B0 commit: `2109545f829dfe4e63a23e95301893c534e75947`. AI-041.1c extension: IN REVIEW. AI-041.1 remains IN REVIEW. Production/live dispatch is BLOCKED. No distributed exactly-once provider execution claim.
 
 ## Trusted inputs and storage
 
@@ -18,7 +18,7 @@ The process-local bridge remains useful test/defense-in-depth; its WeakMaps/Sets
 
 ## Serialization and operation analysis
 
-Every operation uses one connection and one transaction: workspace SHARE → Project SHARE → workspace budget UPDATE lock → factual attempt UPDATE lock. Workspace/domain/status and Project existence are revalidated; reserve/prepare/start also require active Project. A fresh DB clock is read after waiting for locks; the start UPDATE also checks expiry. Both timestamps in a transition use one statement timestamp to avoid volatile-expression evaluation ordering. No provider/network work occurs in a transaction.
+Every operation uses one connection and one transaction. With AI-041.1c the order is workspace SHARE → Project SHARE → current authority UPDATE lock → workspace budget UPDATE lock → factual attempt UPDATE lock. Workspace/domain/status and Project existence are revalidated; reserve/prepare/start also require active Project and exact active current authority. A fresh DB clock is read after waiting for locks; the start UPDATE also checks expiry. Both timestamps in a transition use one statement timestamp to avoid volatile-expression evaluation ordering. No provider/network work occurs in a transaction.
 
 | Operation | Protection and replay behavior |
 |---|---|
@@ -43,4 +43,4 @@ On DB/COMMIT uncertainty, return only recovery_required with null snapshot/capab
 
 `durable-development-executor.server.ts` is server-only. Its trusted facade has no start issuer, always-false start authorization and an invoke method that denies. The existing production `createOpenAIAgentsTransport` stays structurally locked before credentials or network, without environment/caller bypass. Controlled tests never dispatch real OAuth/OpenAI/inference.
 
-This boundary trusts separately supplied canonical AI-011 state through b0; it does NOT persist that lifecycle or replace a future atomic current-Run lease/revision/pause/approval authority. Production binding must load current factual state from trusted server sources. Live transport hookup, full current-state fence, sufficient financial-policy approval, durable result/reconciliation/settlement, complete provider protocol compatibility and an explicitly approved live smoke remain prerequisites. AI-037.2/.3/.8 and M4 are not completed by this slice.
+AI-041.1c now binds b0 setup evidence to [durable current authority](executor-current-authority-v1.md); snapshot validity alone cannot authorize reserve/prepare/start. Migration `0014` permanently binds authority generation and both fingerprints into new exposures. Legacy `0013` rows are not backfilled with invented grants: NULL-authority rows cannot prepare/start, but historical cancellation/reconciliation remains possible. This is not AI-011 lifecycle persistence (there is no AI-011 paused state); Project pause remains factual Registry state. Live transport hookup, a trusted future cancellation/approval-revocation producer, sufficient financial-policy approval, durable result/reconciliation/settlement, complete provider protocol compatibility and an explicitly approved live smoke remain prerequisites. AI-037.2/.3/.8 and M4 are not completed by this slice.

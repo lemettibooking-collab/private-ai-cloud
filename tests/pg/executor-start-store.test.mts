@@ -10,6 +10,7 @@ const durable = existsSync(location) ? await import(location.href) as typeof imp
 const live = await import(new URL("./helpers/live-pg.ts", import.meta.url).href) as typeof import("./helpers/live-pg");
 const postgres = await import(new URL("../../lib/db/postgres.ts", import.meta.url).href) as typeof import("../../lib/db/postgres");
 const tenants = await import(new URL("../../lib/db/workflow-runtime-tenant.ts", import.meta.url).href) as typeof import("../../lib/db/workflow-runtime-tenant");
+const authority = await import(new URL("../../lib/db/executor-current-authority-store.ts", import.meta.url).href) as typeof import("../../lib/db/executor-current-authority-store");
 const db = await live.useLiveDatabase("executorfence");
 for (const workspace of [live.primaryWorkspace, live.secondaryWorkspace]) {
   await live.insertWorkspace(db.admin, workspace);
@@ -20,6 +21,10 @@ async function store(runId: string, number = 1, options: Record<string, unknown>
   assert.equal(typeof durable?.createPostgresExecutorStartStore, "function", "baseline has no durable executor authority");
   const database = postgres.createWorkflowRuntimePostgresDatabase({ connectionString: db.url, maxConnections: 1 }); pools.push(database);
   const tenant = await tenants.createPostgresWorkflowRuntimeTenantResolver(database).resolve(live.primaryWorkspace.domain); assert.ok(tenant);
+  // Trusted test setup only, never implicit production registration/advancement.
+  const c = { database, tenant, projectId: "project-a", configuration: executorConfiguration(number, runId), ...options };
+  const a = authority.createPostgresExecutorCurrentAuthorityStore({ database: c.database, tenant: c.tenant, projectId: c.projectId, configuration: c.configuration });
+  await a.registerCurrentAuthority();
   return durable!.createPostgresExecutorStartStore({ database, tenant, projectId: "project-a", configuration: executorConfiguration(number, runId),
     target: executorTarget(), financialPolicy: financialPolicy(), authorizeStart: () => true, ...options });
 }
@@ -32,6 +37,7 @@ test("PG OS process restart: reserve/prepare/start survive separate Node process
     const { createWorkflowRuntimePostgresDatabase } = await import(new URL('lib/db/postgres.ts', root));
     const { createPostgresWorkflowRuntimeTenantResolver } = await import(new URL('lib/db/workflow-runtime-tenant.ts', root));
     const { createPostgresExecutorStartStore } = await import(new URL('lib/db/executor-start-store.ts', root));
+    const { createPostgresExecutorCurrentAuthorityStore } = await import(new URL('lib/db/executor-current-authority-store.ts', root));
     const f = await import(new URL('tests/fixtures/durable-executor.mts', root));
     const database = createWorkflowRuntimePostgresDatabase({ connectionString: process.env.EXECUTOR_TEST_DB, maxConnections: 1 });
     try {
@@ -39,6 +45,7 @@ test("PG OS process restart: reserve/prepare/start survive separate Node process
       const s = createPostgresExecutorStartStore({ database, tenant, projectId: 'project-a', configuration: f.executorConfiguration(1, 'process-restart'),
         target: f.executorTarget(), financialPolicy: f.financialPolicy(), authorizeStart: () => true });
       const raw = f.executorRequest(1, 'process-restart'), stage = process.env.EXECUTOR_TEST_STAGE;
+      if (stage === 'reserve') await createPostgresExecutorCurrentAuthorityStore({ database, tenant, projectId: 'project-a', configuration: f.executorConfiguration(1, 'process-restart') }).registerCurrentAuthority();
       const read = stage === 'reserve' ? null : await s.inspect(raw);
       const d = stage === 'reserve' ? await s.reserve(raw, { maximumExposureUsdMicros: 10000 })
         : stage === 'prepare' ? await s.bindRequest(raw, f.context())
@@ -83,6 +90,11 @@ test("PG independent connections: same attempt has exactly one committed start; 
 test("PG factual attempts: changed invocation ID cannot reserve again; legitimate corrective 2/3 can", async () => {
   for (const number of [1, 2, 3]) {
     const s = await store("corrective", number), raw = executorRequest(number, "corrective", `invocation-${number}`);
+    if (number > 1) {
+      const database = postgres.createWorkflowRuntimePostgresDatabase({ connectionString: db.url, maxConnections: 1 }); pools.push(database);
+      const tenant = await tenants.createPostgresWorkflowRuntimeTenantResolver(database).resolve(live.primaryWorkspace.domain); assert.ok(tenant);
+      assert.equal((await authority.createPostgresExecutorCurrentAuthorityStore({ database, tenant, projectId: "project-a", configuration: executorConfiguration(number, "corrective") }).advanceCurrentAuthority()).status, "advanced");
+    }
     assert.equal((await s.reserve(raw, exposure)).status, "reserved");
     assert.equal((await s.reserve({ ...raw, invocationId: "replacement" }, exposure)).status, "conflict");
     assert.equal((await s.cancel(raw)).status, "cancelled");

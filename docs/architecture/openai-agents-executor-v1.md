@@ -12,11 +12,17 @@ Prerequisite discovered by the AI-041.1b STOP condition; internal decomposition/
 
 V1 permits at most one managed provider-start commitment per factual implementation attempt, not per invocation ID/capability/mode. There is no sub-dispatch model. B0 passed independent re-gate and was committed as `2109545f829dfe4e63a23e95301893c534e75947`; b0 itself added no migration or production enablement.
 
-## AI-041.1b — Durable Executor Start & Exposure Fence — IN REVIEW
+## AI-041.1b — Durable Executor Start & Exposure Fence — DONE / COMMITTED / PUSHED
+
+Commit: `d72a439a456cb1370b49448fb354ea93b381907b`.
 
 PostgreSQL is now the candidate future financial/start authority, not WeakMap/Set state. Migration `0013` adds a serialized workspace exposure budget, one durable record per workspace/development Run/attempt and an immutable transactional journal. The existing canonical capped-request builder is shared; provider bytes and AI-041.1a rounding are unchanged. A definitively committed prepared → start_committed winner alone receives an ephemeral single-use capability; no persisted bearer secret or restart reconstruction. Full exposure remains held after start or uncertainty. See [schema, operations, locking, crash semantics and residual debt](durable-executor-start-v1.md).
 
 Production/live dispatch remains **BLOCKED**. The new server-only composition exposes reservation/preparation/cancellation/read operations, but no start issuer or credentials; its invoke method denies. The production transport accepts neither durable capabilities nor caller unlock flags. Live PostgreSQL verification uses no provider network.
+
+## AI-041.1c — Current Run / Attempt Authority — IN REVIEW
+
+Migration `0014` adds narrow durable current authority, not a second AI-011 lifecycle. Reserve/prepare/start lock and validate the active current generation and canonical Run/admission grant; the exposure permanently binds these facts. Trusted revocation or canonical corrective advancement fences stale factories across processes. Full details and deferred cancellation/Owner integration: [current authority](executor-current-authority-v1.md). No production transport enablement, credentials, network, OAuth or inference is added.
 
 ## Responsibilities
 

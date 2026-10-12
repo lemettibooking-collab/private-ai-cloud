@@ -17,11 +17,16 @@ import { boundedData, exactRecord, ensureSafeEvidence, freezeDeep } from "../loc
 import { normalizeExecutorTarget } from "../executors/executor-start-boundary.ts";
 // @ts-expect-error Node direct TypeScript requires the runtime extension.
 import { createOpenAIAgentsCanonicalRequest } from "../executors/openai-agents-executor.ts";
+// @ts-expect-error Node direct TypeScript requires the runtime extension.
+import { deriveExecutorAuthorityFacts } from "../executors/executor-current-authority.ts";
+// @ts-expect-error Node direct TypeScript requires the runtime extension.
+import { lockExecutorWorkspaceProject, lockExecutorAuthority, executorAuthorityMatches } from "./executor-current-authority-store.ts";
 
 export type DurableExecutorState = "reserved" | "prepared" | "start_committed" | "cancelled" | "reconciliation_required";
 export type DurableExecutorSnapshot = Readonly<{
   projectId: string; attempt: ExecutorAttemptIdentity; identity: ExecutorIdentity; invocationId: string;
   planId: string; taskId: string; repository: ExecutorRepositoryRef; capability: string; mode: string; target: ExecutorTarget;
+  authorityGeneration: number | null; canonicalRunFingerprint: string | null; admissionFingerprint: string | null;
   maximumExposureUsdMicros: number; heldExposureUsdMicros: number; providerSpendLimitCents: number;
   requestFingerprint: string | null; state: DurableExecutorState; reconciliation: string;
   observedUsage: Readonly<{ inputTokens: number; outputTokens: number; totalTokens: number }> | null;
@@ -65,6 +70,7 @@ function numeric(input: unknown, max = Number.MAX_SAFE_INTEGER): number {
 const nullableNumber = (v: unknown, max = Number.MAX_SAFE_INTEGER) => v === null ? null : numeric(v, max);
 const rowSelect = `project_key, development_run_id, attempt_number, attempt_kind, plan_id, task_id, executor_id, executor_version,
   invocation_id, repository_id, repository_baseline, capability, mode, provider_id, provider_model_id, account_id, invocation_fingerprint,
+  authority_generation, canonical_run_fingerprint, admission_fingerprint,
   maximum_exposure_usd_micros::text, provider_spend_limit_cents::text, request_fingerprint, state, reconciliation, event_version,
   observed_input_tokens::text, observed_output_tokens::text, observed_total_tokens::text, provider_consumed_cents::text,
   floor(extract(epoch from created_at)*1000)::text as created_ms, floor(extract(epoch from updated_at)*1000)::text as updated_ms,
@@ -80,6 +86,7 @@ export function createPostgresExecutorStartStore(input: unknown) {
   const configured = createExecutorAdapterContract(c.configuration);
   if (!configured.adapter) throw Error("invalid_durable_executor_configuration");
   const contract = configured.adapter;
+  const authorityFacts = deriveExecutorAuthorityFacts(c.configuration);
   const target = normalizeExecutorTarget(c.target);
   if (target.providerId !== "openai") throw Error("invalid_durable_executor_configuration");
   const policy = exactRecord(boundedData(c.financialPolicy), ["maximumExposureUsdMicros", "totalExposureUsdMicros", "reservationTtlMs"]);
@@ -104,12 +111,8 @@ export function createPostgresExecutorStartStore(input: unknown) {
       repository_id: i.repository.id, repository_baseline: i.repository.baseline, capability: i.capability, mode: i.mode,
       provider_id: target.providerId, provider_model_id: target.modelId, account_id: target.accountId, invocation_fingerprint: hash(JSON.stringify(i)) };
   }
-  async function locks(client: WorkflowRuntimeSqlClient, initialize: boolean, active: boolean): Promise<number | null> {
-    // Consistent order: workspace SHARE → project SHARE → budget UPDATE → attempt UPDATE.
-    const w = await client.query(`/* executor:workspace */ select domain_workspace_id, status from workspaces where id = $1 for share`, [workspace]);
-    if (w.rowCount !== 1 || w.rows[0].domain_workspace_id !== tenant.workspaceId || !["active", "demo"].includes(w.rows[0].status as string)) return null;
-    const p = await client.query(`/* executor:project */ select status from projects where workspace_id = $1 and project_key = $2 for share`, [workspace, projectId]);
-    if (p.rowCount !== 1 || (active && p.rows[0].status !== "active")) return null;
+  async function locks(client: WorkflowRuntimeSqlClient, initialize: boolean): Promise<number | null> {
+    // Consistent order: workspace SHARE → project SHARE → authority UPDATE → budget UPDATE → attempt UPDATE.
     if (initialize) await client.query(`/* executor:budget-init */ insert into executor_exposure_budgets
       (workspace_id, maximum_exposure_usd_micros, total_exposure_usd_micros, reservation_ttl_ms) values($1,$2,$3,$4) on conflict do nothing`, [workspace, maximum, total, ttl]);
     const b = await client.query(`/* executor:budget-lock */ select maximum_exposure_usd_micros::text, total_exposure_usd_micros::text,
@@ -151,6 +154,8 @@ export function createPostgresExecutorStartStore(input: unknown) {
       || (state === "start_committed" && ((row.reconciliation === "usage_unknown" && input === null) || (row.reconciliation === "partially_observed" && input !== null)))
       || (state === "reconciliation_required" && row.reconciliation === "reconciliation_required"));
     return freezeDeep({ projectId, attempt: { ...i.attempt }, identity: { ...i.identity }, invocationId: i.invocationId, planId: i.planId, taskId: i.taskId,
+      authorityGeneration: row.authority_generation as number | null, canonicalRunFingerprint: row.canonical_run_fingerprint as string | null,
+      admissionFingerprint: row.admission_fingerprint as string | null,
       repository: { ...i.repository }, capability: i.capability, mode: i.mode, target: { ...target }, maximumExposureUsdMicros: amount,
       heldExposureUsdMicros: state === "cancelled" ? 0 : amount, providerSpendLimitCents: cap, requestFingerprint: row.request_fingerprint as string | null,
       state, reconciliation: row.reconciliation as string, observedUsage: input === null ? null : { inputTokens: input, outputTokens: output!, totalTokens: tokens! },
@@ -166,22 +171,32 @@ export function createPostgresExecutorStartStore(input: unknown) {
     requireFact(r.rowCount === 1); return numeric(r.rows[0].now_ms);
   }
   async function run(raw: unknown, initialize: boolean, active: boolean,
-    operation: (client: WorkflowRuntimeSqlClient, i: NormalizedExecutorInvocation, held: number, row: Record<string, unknown> | null) => Promise<DurableExecutorDecision>) {
+    operation: (client: WorkflowRuntimeSqlClient, i: NormalizedExecutorInvocation, held: number, row: Record<string, unknown> | null,
+      authority: import("./executor-current-authority-store").ExecutorCurrentAuthoritySnapshot | null) => Promise<DurableExecutorDecision>) {
     if (uncertain) return denied("recovery_required");
     const d = contract.validateInvocation(raw); if (!d.normalizedInvocation) return denied(); const i = d.normalizedInvocation;
     try {
       return await inTransaction(database, async client => {
-        const held = await locks(client, initialize, active); if (held === null) return denied();
+        if (!await lockExecutorWorkspaceProject(client, tenant, projectId, active)) return denied();
+        const authority = await lockExecutorAuthority(client, workspace, authorityFacts.developmentRunId);
+        // Reserve, prepare AND start share the same current-authority predicate under lock.
+        // Historical cancel/evidence/read do not reactivate authority and remain usable.
+        if (active && (!authority || authority.status !== "active" || !executorAuthorityMatches(authority, projectId, authorityFacts))) return denied("conflict");
+        const held = await locks(client, initialize); if (held === null) return denied();
         if (uncertain) return denied("recovery_required");
         const row = await read(client, i);
         if (row && !matches(row, i)) return denied("conflict");
         if (row) {
+          requireFact((row.authority_generation === null && row.canonical_run_fingerprint === null && row.admission_fingerprint === null)
+            || (integer(row.authority_generation, 1000000) && row.authority_generation > 0 && fingerprint(row.canonical_run_fingerprint) && fingerprint(row.admission_fingerprint)));
+          if (active && (row.authority_generation !== authority!.generation
+            || row.canonical_run_fingerprint !== authority!.canonicalRunFingerprint || row.admission_fingerprint !== authority!.admissionFingerprint)) return denied("conflict");
           snapshot(row, i);
           const a = await client.query(`/* executor:audit-integrity */ select count(*)::int as count from executor_attempt_events
             where workspace_id = $1 and development_run_id = $2 and attempt_number = $3 and event_version = $4 and state = $5`, [...key(i), row.event_version, row.state]);
           requireFact(a.rowCount === 1 && a.rows[0].count === 1);
         }
-        return operation(client, i, held, row);
+        return operation(client, i, held, row, authority);
       });
     } catch { uncertain = true; return denied("recovery_required"); }
   }
@@ -192,7 +207,7 @@ export function createPostgresExecutorStartStore(input: unknown) {
       if (!integer(e.maximumExposureUsdMicros, maximum) || e.maximumExposureUsdMicros < 10000) return denied();
       amount = e.maximumExposureUsdMicros;
     } catch { return denied(); }
-    return run(raw, true, true, async (client, i, held, row) => {
+    return run(raw, true, true, async (client, i, held, row, authority) => {
       if (row) {
         if (numeric(row.maximum_exposure_usd_micros) !== amount) return denied("conflict");
         if (["start_committed", "reconciliation_required"].includes(row.state as string)) return denied("recovery_required");
@@ -204,7 +219,8 @@ export function createPostgresExecutorStartStore(input: unknown) {
         set held_exposure_usd_micros = held_exposure_usd_micros + $2, updated_at = clock_timestamp()
         where workspace_id = $1 and held_exposure_usd_micros + $2 <= total_exposure_usd_micros`, [workspace, amount]);
       requireFact(updated.rowCount === 1);
-      const b = bindings(i), columns = Object.keys(b), values = Object.values(b);
+      const b = { ...bindings(i), authority_generation: authority!.generation, canonical_run_fingerprint: authority!.canonicalRunFingerprint,
+        admission_fingerprint: authority!.admissionFingerprint }, columns = Object.keys(b), values = Object.values(b);
       const inserted = await client.query(`/* executor:reserve */ insert into executor_attempt_exposures
         (workspace_id, ${columns.join(",")}, maximum_exposure_usd_micros, provider_spend_limit_cents, state, reconciliation, event_version, created_at, updated_at, expires_at)
         select $1, ${values.map((_, n) => `$${n + 2}`).join(",")}, $${values.length + 2}, $${values.length + 3}, 'reserved', 'not_started', 1,

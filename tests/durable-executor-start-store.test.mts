@@ -18,6 +18,7 @@ const tenantContract = await import(new URL("../lib/db/workflow-runtime-tenant.t
 const core = await import(new URL("../lib/contracts/executor-adapter.ts", import.meta.url).href) as typeof import("../lib/contracts/executor-adapter");
 const transport = await import(new URL("../lib/executors/openai-agents-executor.ts", import.meta.url).href) as typeof import("../lib/executors/openai-agents-executor");
 const local = await import(new URL("../lib/executors/executor-start-boundary.ts", import.meta.url).href) as typeof import("../lib/executors/executor-start-boundary");
+const authority = await import(new URL("../lib/executors/executor-current-authority.ts", import.meta.url).href) as typeof import("../lib/executors/executor-current-authority");
 const workspace = "00000000-0000-4000-8000-0000000000a1", fp = "b".repeat(64);
 type Client = import("../lib/db/workflow-runtime-store").WorkflowRuntimeSqlClient;
 async function tenant() {
@@ -28,8 +29,10 @@ function frozen(v: unknown) { if (v && typeof v === "object") { assert.ok(Object
 function failClosed(d: import("../lib/db/executor-start-store").DurableExecutorDecision) { assert.equal(d.verdict, "deny"); assert.equal(d.snapshot, null); assert.equal(d.startCapability, null); frozen(d); }
 function cannedRow(state = "prepared") {
   const c = executorConfiguration(), a = core.createExecutorAdapterContract(c).adapter; assert.ok(a);
+  const f = authority.deriveExecutorAuthorityFacts(c);
   const i = a.validateInvocation(executorRequest()).normalizedInvocation; assert.ok(i);
   return { project_key: "project-a", development_run_id: i.attempt.developmentRunId, attempt_number: i.attempt.number, attempt_kind: i.attempt.kind,
+    authority_generation: 1, canonical_run_fingerprint: f.canonicalRunFingerprint, admission_fingerprint: f.admissionFingerprint,
     plan_id: i.planId, task_id: i.taskId, executor_id: i.identity.id, executor_version: i.identity.version, invocation_id: i.invocationId,
     repository_id: i.repository.id, repository_baseline: i.repository.baseline, capability: i.capability, mode: i.mode,
     provider_id: "openai", provider_model_id: executorTarget().modelId, account_id: executorTarget().accountId,
@@ -38,7 +41,7 @@ function cannedRow(state = "prepared") {
     observed_input_tokens: null, observed_output_tokens: null, observed_total_tokens: null, provider_consumed_cents: null,
     created_ms: "1000", updated_ms: "2000", expires_ms: "61000", prepared_ms: "1500", started_ms: state === "prepared" ? null : "2000" };
 }
-async function mock(options: { failure?: string; error?: unknown; rollbackFails?: boolean; row?: Record<string, unknown>; approval?: unknown } = {}) {
+async function mock(options: { failure?: string; error?: unknown; rollbackFails?: boolean; row?: Record<string, unknown>; approval?: unknown; authority?: Record<string, unknown> | null } = {}) {
   let row = options.row ?? cannedRow(); const queries: string[] = [], released: boolean[] = [];
   const client = { async query(text: string) {
     queries.push(text);
@@ -47,6 +50,12 @@ async function mock(options: { failure?: string; error?: unknown; rollbackFails?
     const one = (value: Record<string, unknown>) => ({ rows: [value], rowCount: 1 });
     if (text.includes("executor:workspace")) return one({ domain_workspace_id: "workspace-primary", status: "active" });
     if (text.includes("executor:project")) return one({ status: "active" });
+    if (text.includes("executor:authority-lock")) { const f = authority.deriveExecutorAuthorityFacts(executorConfiguration());
+      if (options.authority === null) return { rows: [], rowCount: 0 };
+      return one({ project_key: "project-a", development_run_id: f.developmentRunId, plan_id: f.planId, task_id: f.taskId,
+        authority_generation: 1, authority_status: "active", current_attempt_number: f.attemptNumber, current_attempt_kind: f.attemptKind,
+        canonical_run_fingerprint: f.canonicalRunFingerprint, admission_fingerprint: f.admissionFingerprint, created_ms: "1000", updated_ms: "1000", revoked_ms: null, ...options.authority }); }
+    if (text.includes("executor:authority-journal-integrity")) return one({ count: 1 });
     if (text.includes("executor:budget-lock")) return one({ maximum_exposure_usd_micros: "20000", total_exposure_usd_micros: "1000000000", reservation_ttl_ms: 60000, held_exposure_usd_micros: "10000" });
     if (text.includes("executor:held-integrity")) return one({ held: "10000" });
     if (text.includes("executor:attempt-lock")) return one(row);
@@ -83,6 +92,8 @@ test("untrusted/hostile invocation, amount and fingerprints deny without DB work
   const bad = Object.defineProperty({}, "maximumExposureUsdMicros", { enumerable: true, get() { touched++; throw Error("private"); } });
   for (const exposure of [bad, new Proxy({}, {}), {}, { maximumExposureUsdMicros: 9999 }, { maximumExposureUsdMicros: 20001 }, { maximumExposureUsdMicros: 1.5 }, { maximumExposureUsdMicros: 10000, workspaceId: workspace }]) failClosed(await store.reserve(executorRequest(), exposure));
   for (const raw of [null, {}, new Proxy(executorRequest(), {}), { ...executorRequest(), workspaceId: workspace }, { ...executorRequest(), attempt: { ...executorRequest().attempt, number: 2 } }]) failClosed(await store.reserve(raw, { maximumExposureUsdMicros: 10000 }));
+  for (const field of ["authorityGeneration", "authorityStatus", "canonicalRunFingerprint", "admissionFingerprint", "ownerApprovalGranted"])
+    failClosed(await store.commitProviderStart({ ...executorRequest(), [field]: field.endsWith("Fingerprint") ? fp : 1 }, fp));
   for (const fingerprint of [null, {}, "x".repeat(65), "bad\nfingerprint"]) failClosed(await store.commitProviderStart(executorRequest(), fingerprint));
   assert.equal(queries.length, 0); assert.equal(touched, 0);
 });
@@ -134,4 +145,20 @@ test("production OpenAI transport rejects durable capability with zero credentia
   const root = readFileSync(new URL("../lib/composition/durable-development-executor.server.ts", import.meta.url), "utf8"); assert.match(root, /import "server-only"/u);
   const implementation = readFileSync(new URL("../lib/composition/durable-development-executor.ts", import.meta.url), "utf8");
   assert.match(implementation, /authorizeStart: \(\) => false/u); assert.ok(!/store\.commitProviderStart|credential|fetch\(/u.test(implementation.replace(/\/\/[^\n]*/gu, "")));
+});
+for (const change of [null, { authority_status: "revoked", revoked_ms: "1000" }, { current_attempt_number: 2, current_attempt_kind: "corrective" },
+  { canonical_run_fingerprint: "c".repeat(64) }, { admission_fingerprint: "c".repeat(64) }, { plan_id: "other-plan" }, { task_id: "other-task" }])
+  test(`current authority mismatch denies stale bind/start ${JSON.stringify(change)}`, async () => {
+    const { store, queries } = await mock({ authority: change });
+    failClosed(await store.bindRequest(executorRequest(), { files: [] })); failClosed(await store.commitProviderStart(executorRequest(), fp));
+    assert.ok(!queries.some(q => q.includes("executor:budget-lock") || q.includes("executor:start")));
+  });
+for (const [field, value] of [["authority_generation", 2], ["canonical_run_fingerprint", "d".repeat(64)], ["admission_fingerprint", "e".repeat(64)]] as const)
+  test(`exposure immutable authority binding ${field} mismatch denies start`, async () => {
+    const { store } = await mock({ row: { ...cannedRow(), [field]: value } }); failClosed(await store.commitProviderStart(executorRequest(), fp));
+  });
+test("current lock order precedes budget and attempt locks", async () => {
+  const { store, queries } = await mock(); await store.commitProviderStart(executorRequest(), fp);
+  const order = ["executor:workspace", "executor:project", "executor:authority-lock", "executor:budget-lock", "executor:attempt-lock"].map(tag => queries.findIndex(q => q.includes(tag)));
+  assert.ok(order.every((index, n) => index >= 0 && (n === 0 || index > order[n - 1])));
 });
