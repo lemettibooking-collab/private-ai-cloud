@@ -10,7 +10,7 @@ export type ExecutorBudgetReservation = Readonly<{ kind: "executor_exposure_rese
 export type ExecutorStartTicket = Readonly<{ kind: "process_local_test_start" }>;
 export type ExecutorExposureSnapshot = Readonly<{
   reservationId: string; identity: ExecutorIdentity; invocationId: string; taskId: string; planId: string;
-  repository: ExecutorRepositoryRef; target: ExecutorTarget; requestFingerprint: string; expiresAt: number;
+  repository: ExecutorRepositoryRef; target: ExecutorTarget; requestFingerprint: string | null; expiresAt: number;
   state: "reserved" | "cancelled" | "started" | "reconciliation_required";
   maximumExposureUsdMicros: number; exposureHeldUsdMicros: number;
   reconciliation: "not_started" | "usage_unknown" | "partially_observed" | "reconciliation_required";
@@ -19,7 +19,7 @@ export type ExecutorExposureSnapshot = Readonly<{
 }>;
 type Binding = { invocation: NormalizedExecutorInvocation; target: ExecutorTarget; fingerprint: string };
 type Permit = Binding & { expiresAt: number; used: boolean; revoked: boolean };
-type Reservation = Binding & { id: string; expiresAt: number; amount: number; state: ExecutorExposureSnapshot["state"];
+type Reservation = Omit<Binding, "fingerprint"> & { fingerprint: string | null; id: string; expiresAt: number; amount: number; state: ExecutorExposureSnapshot["state"];
   reconciliation: ExecutorExposureSnapshot["reconciliation"]; usage: ExecutorExposureSnapshot["observedUsage"] };
 type Ticket = Binding & { permit: Permit; reservation: Reservation; dispatched: boolean; now: () => number };
 const tickets = new WeakMap<object, Ticket>();
@@ -34,7 +34,7 @@ export function normalizeExecutorTarget(input: unknown): ExecutorTarget {
 function sameTarget(a: ExecutorTarget, b: ExecutorTarget): boolean {
   return a.providerId === b.providerId && a.modelId === b.modelId && a.accountId === b.accountId;
 }
-function matches(binding: Binding, invocation: unknown, target: ExecutorTarget, fingerprint: string): boolean {
+function matches(binding: Binding | Reservation, invocation: unknown, target: ExecutorTarget, fingerprint: string): boolean {
   return binding.invocation === invocation && sameTarget(binding.target, target) && binding.fingerprint === fingerprint;
 }
 function snapshot(r: Reservation): ExecutorExposureSnapshot {
@@ -85,7 +85,7 @@ export function observeExecutorUsage(ticket: unknown, input: unknown, ambiguous:
 /**
  * Trusted composition factory. Keep issuer methods out of caller-facing surfaces.
  * Distinct execution and financial provenance; no ModelInvocation/Workflow Run authority.
- * Atomicity is ONLY synchronous in one process/isolate. No durable/provider-side cap.
+ * Atomicity is ONLY synchronous in one process/isolate. No durable financial/start authority.
  */
 export function createExecutorStartBoundary(configuration: unknown, policyInput: unknown, clock: () => number = Date.now) {
   const configured = createExecutorAdapterContract(configuration);
@@ -109,10 +109,13 @@ export function createExecutorStartBoundary(configuration: unknown, policyInput:
   const receipts = new WeakSet<object>(), permits = new WeakMap<object, Permit>(), reservations = new WeakMap<object, Reservation>();
   const reservationIds = new Set<string>(), startedInvocations = new Set<string>(), startedTuples = new Set<string>();
   const tuple = (i: NormalizedExecutorInvocation) => JSON.stringify([i.identity.id, i.identity.version, i.repository.id, i.repository.baseline, i.planId, i.taskId, i.capability, i.mode]);
+  const receiptTarget = (invocation: unknown, targetInput: unknown): Omit<Binding, "fingerprint"> => {
+    if (!invocation || typeof invocation !== "object" || !receipts.has(invocation)) throw Error("invalid_executor_binding");
+    return { invocation: invocation as NormalizedExecutorInvocation, target: normalizeExecutorTarget(targetInput) };
+  };
   const binding = (invocation: unknown, targetInput: unknown, fingerprint: unknown): Binding => {
-    if (!invocation || typeof invocation !== "object" || !receipts.has(invocation)
-      || typeof fingerprint !== "string" || !/^[a-f0-9]{64}$/u.test(fingerprint)) throw Error("invalid_executor_binding");
-    return { invocation: invocation as NormalizedExecutorInvocation, target: normalizeExecutorTarget(targetInput), fingerprint };
+    if (typeof fingerprint !== "string" || !/^[a-f0-9]{64}$/u.test(fingerprint)) throw Error("invalid_executor_binding");
+    return { ...receiptTarget(invocation, targetInput), fingerprint };
   };
   const validateInvocation = (input: unknown) => {
     const d = contract.validateInvocation(input); if (d.normalizedInvocation) receipts.add(d.normalizedInvocation); return d;
@@ -135,7 +138,7 @@ export function createExecutorStartBoundary(configuration: unknown, policyInput:
   const budgetAuthority = {
     reserve(invocation: unknown, target: unknown, fingerprint: unknown, input: unknown): Readonly<{ verdict: "allow" | "deny"; reservation: ExecutorBudgetReservation | null }> {
       try {
-        const b = binding(invocation, target, fingerprint), time = now();
+        const b = fingerprint === null ? { ...receiptTarget(invocation, target), fingerprint: null } : binding(invocation, target, fingerprint), time = now();
         const r = exactRecord(boundedData(input), ["reservationId", "maximumExposureUsdMicros"]);
         if (!id(r.reservationId) || !integer(r.maximumExposureUsdMicros, maximum) || r.maximumExposureUsdMicros === 0
           || held + r.maximumExposureUsdMicros > total || reservationIds.size >= maxEntries || reservationIds.has(r.reservationId)
@@ -147,6 +150,31 @@ export function createExecutorStartBoundary(configuration: unknown, policyInput:
         reservationIds.add(r.reservationId); held += r.maximumExposureUsdMicros;
         return freezeDeep({ verdict: "allow", reservation });
       } catch { return freezeDeep({ verdict: "deny", reservation: null }); }
+    },
+    /** Financial admission precedes canonical request construction. Never trust caller monetary fields. */
+    forPreparation(input: unknown, invocation: unknown, target: unknown): ExecutorExposureSnapshot | null {
+      try {
+        const r = input && typeof input === "object" ? reservations.get(input) : null;
+        const b = receiptTarget(invocation, target), time = now();
+        if (!r || r.invocation !== b.invocation || !sameTarget(r.target, b.target) || r.state !== "reserved" || time >= r.expiresAt
+          || startedInvocations.has(b.invocation.invocationId) || startedTuples.has(tuple(b.invocation))) return null;
+        return snapshot(r);
+      } catch { return null; }
+    },
+    /** One-way binding: unbound reservations cannot start; an existing fingerprint is never rewritten. */
+    bindRequest(input: unknown, invocation: unknown, target: unknown, fingerprint: string): boolean {
+      try {
+        binding(invocation, target, fingerprint);
+        if (!budgetAuthority.forPreparation(input, invocation, target)) return false;
+        const r = reservations.get(input as object)!;
+        if (r.fingerprint !== null && r.fingerprint !== fingerprint) return false;
+        r.fingerprint = fingerprint; return true;
+      } catch { return false; }
+    },
+    isStartReservation(ticket: unknown, input: unknown): boolean {
+      const t = ticket && typeof ticket === "object" ? tickets.get(ticket) : null;
+      const r = input && typeof input === "object" ? reservations.get(input) : null;
+      return Boolean(t && r && t.reservation === r);
     },
     cancel(input: unknown): boolean {
       const r = input && typeof input === "object" ? reservations.get(input) : null;

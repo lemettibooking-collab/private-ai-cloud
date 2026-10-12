@@ -14,7 +14,8 @@ export function createDevelopmentExecutorComposition(configuration: unknown, fin
     prepare(input: unknown, context: unknown) {
       const decision = boundary.validateInvocation(input);
       if (!decision.normalizedInvocation) return Object.freeze({ verdict: "deny" as const, reason: "executor_invocation_denied", prepared: null });
-      return transport.prepare(decision.normalizedInvocation, context);
+      // No financial issuer is exposed here. An unreserved request cannot be prepared, even while live dispatch is locked.
+      return transport.prepare(decision.normalizedInvocation, context, null);
     },
     invoke() {
       // No reservation, credentials or external side effect until a durable executor fence exists.

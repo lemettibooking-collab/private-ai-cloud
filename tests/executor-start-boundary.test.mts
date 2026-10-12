@@ -165,3 +165,36 @@ test("final ticket consumption rechecks expiry/revocation after the process-loca
     assert.equal(bridge.consumeExecutorStartTicket(d.ticket, i, target, fingerprint, "test"), false);
   }
 });
+
+test("unbound financial reservation cannot start; binding is one-way and requires factual receipt/target", () => {
+  const { b, i, issue } = setup();
+  const d = b.budgetAuthority.reserve(i, target, null, { reservationId: "unbound", maximumExposureUsdMicros: 1000 }); assert.ok(d.reservation);
+  const r = d.reservation;
+  assert.equal(b.budgetAuthority.inspect(r)?.requestFingerprint, null);
+  blocked(b.providerStartFence.start(i, target, fingerprint, issue(), r));
+  for (const input of [null, { ...r }, new Proxy(r, {})]) {
+    assert.equal(b.budgetAuthority.forPreparation(input, i, target), null);
+    assert.equal(b.budgetAuthority.bindRequest(input, i, target, fingerprint), false);
+  }
+  assert.equal(b.budgetAuthority.forPreparation(r, { ...i }, target), null);
+  assert.equal(b.budgetAuthority.forPreparation(r, i, { ...target, accountId: "other" }), null);
+  assert.equal(b.budgetAuthority.bindRequest(r, i, target, "invalid"), false);
+  assert.equal(b.budgetAuthority.bindRequest(r, i, target, fingerprint), true);
+  assert.equal(b.budgetAuthority.bindRequest(r, i, target, fingerprint), true);
+  assert.equal(b.budgetAuthority.bindRequest(r, i, target, "c".repeat(64)), false);
+  assert.equal(b.budgetAuthority.inspect(r)?.requestFingerprint, fingerprint);
+  const started = b.providerStartFence.start(i, target, fingerprint, issue(), r); assert.ok(started.ticket);
+  assert.equal(b.budgetAuthority.forPreparation(r, i, target), null);
+  assert.equal(b.budgetAuthority.bindRequest(r, i, target, fingerprint), false);
+  assert.equal(b.budgetAuthority.isStartReservation(started.ticket, r), true);
+  assert.equal(b.budgetAuthority.isStartReservation({ ...started.ticket }, r), false);
+});
+test("financial preparation denies expiry/clock failure without releasing any exposure", () => {
+  for (const time of [999, 1200]) {
+    const { b, i, advance } = setup();
+    const d = b.budgetAuthority.reserve(i, target, null, { reservationId: "unbound", maximumExposureUsdMicros: 1000 }); assert.ok(d.reservation);
+    advance(time); assert.equal(b.budgetAuthority.forPreparation(d.reservation, i, target), null);
+    assert.equal(b.budgetAuthority.bindRequest(d.reservation, i, target, fingerprint), false);
+    assert.equal(b.budgetAuthority.inspect(d.reservation)?.exposureHeldUsdMicros, 1000);
+  }
+});

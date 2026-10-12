@@ -73,20 +73,20 @@ function proposal(input: unknown, i: NormalizedExecutorInvocation): ExecutorResu
   return { schemaVersion: 1, identity: i.identity, invocationId: i.invocationId, status: "succeeded", failureCode: null,
     changes, report: { content: p.report, sha256: sha256(p.report) } };
 }
-function failure(i: NormalizedExecutorInvocation, status: "rejected" | "failed" | "outcome_unknown"): ExecutorResultInput {
+function failure(i: NormalizedExecutorInvocation, status: "rejected" | "failed" | "outcome_unknown", budgetExceeded = false): ExecutorResultInput {
   return { schemaVersion: 1, identity: i.identity, invocationId: i.invocationId, status,
-    failureCode: status === "outcome_unknown" ? "ambiguous_outcome" : status === "rejected" ? "policy_rejected" : "timeout", changes: [], report: null };
+    failureCode: status === "outcome_unknown" ? "ambiguous_outcome" : status === "rejected" ? "policy_rejected" : budgetExceeded ? "provider_failure" : "timeout", changes: [], report: null };
 }
 /** Bounded supported SSE subset, not a copy of the SDK schema or a PAC-owned agent loop. */
-async function readTurn(response: Response, target: ExecutorTarget, credential: string, signal: AbortSignal): Promise<{
-  terminal: "completed" | "failed" | null; answer: string | null; observedUsage: unknown;
+async function readTurn(response: Response, target: ExecutorTarget, credential: string, signal: AbortSignal, spendLimitCents: number): Promise<{
+  terminal: "completed" | "failed" | null; answer: string | null; observedUsage: unknown; budgetExceeded: boolean;
 }> {
   if (!response.headers.get("content-type")?.startsWith("text/event-stream") || !response.body) invalid();
   const reader = response.body.getReader(), decoder = new TextDecoder("utf-8", { fatal: true });
   const cancelReader = () => { void reader.cancel().catch(() => {}); };
   signal.addEventListener("abort", cancelReader, { once: true });
   let bytes = 0, chunks = 0, buffer = "", sessionId = "", turnId = "", answer: string | null = null;
-  let terminal: "completed" | "failed" | null = null, observedUsage: unknown = null;
+  let terminal: "completed" | "failed" | null = null, observedUsage: unknown = null, budgetExceeded = false;
   const ids = new Set<string>();
   const handle = (input: unknown): void => {
     const e = input as Record<string, unknown>; if (!e || typeof e !== "object" || Array.isArray(e)) invalid();
@@ -94,8 +94,11 @@ async function readTurn(response: Response, target: ExecutorTarget, credential: 
     if (terminal) invalid();
     if (e.type === "agent.session.created") {
       record(e, ["type", "event_id", "session"]); if (sessionId) invalid();
-      const s = record(e.session, ["id", "object", "agent", "environment", "error", "status", "required_actions", "vault_ids", "usage", "created_at", "last_active_at", "metadata"],
-        ["id", "object", "agent", "environment", "error", "status", "required_actions", "vault_ids"]);
+      const s = record(e.session, ["id", "object", "agent", "environment", "error", "status", "required_actions", "vault_ids", "usage", "created_at", "last_active_at", "metadata", "spend_control"],
+        ["id", "object", "agent", "environment", "error", "status", "required_actions", "vault_ids", "spend_control"]);
+      const spend = exactRecord(s.spend_control, ["limit", "consumed"]);
+      if (!Number.isSafeInteger(spend.limit) || spend.limit !== spendLimitCents
+        || !(spend.consumed === null || (Number.isSafeInteger(spend.consumed) && (spend.consumed as number) >= 0))) invalid();
       const a = record(s.agent, ["id", "model", "instructions", "multi_agent", "tools", "name", "reasoning", "service_tier", "text"], ["model", "multi_agent", "tools"]);
       const multi = record(a.multi_agent, ["enabled", "max_concurrent_subagents"], ["enabled"]);
       const env = exactRecord(s.environment, ["type"]);
@@ -127,6 +130,12 @@ async function readTurn(response: Response, target: ExecutorTarget, credential: 
       if (t.id !== turnId || t.session_id !== sessionId || t.object !== "agent.session.turn" || t.subagent_id !== null) invalid();
       const completed = e.type === "agent.session.turn.completed";
       if (t.status !== (completed ? "completed" : e.type.endsWith("cancelled") ? "cancelled" : "failed") || (completed && t.error !== null)) invalid();
+      if (e.type === "agent.session.turn.failed" && t.error !== null) {
+        const error = exactRecord(t.error, ["code", "message"]);
+        identifier(error.code); if (typeof error.message !== "string") invalid();
+        // Documented terminal category only; the untrusted message is never projected or used for settlement.
+        budgetExceeded = error.code === "session_budget_exceeded";
+      }
       terminal = completed ? "completed" : "failed"; observedUsage = usage(t.usage); return;
     }
     // Progress is bounded and ignored, but unknown event types or fields never become success.
@@ -145,7 +154,7 @@ async function readTurn(response: Response, target: ExecutorTarget, credential: 
   try {
     while (!terminal) {
       if (signal.aborted) throw Error("executor_aborted");
-      const chunk = await reader.read(); if (chunk.done) return { terminal: null, answer: null, observedUsage: null };
+      const chunk = await reader.read(); if (chunk.done) return { terminal: null, answer: null, observedUsage: null, budgetExceeded: false };
       bytes += chunk.value.byteLength; if (bytes > limits.responseBytes || ++chunks > limits.chunks) invalid();
       buffer += decoder.decode(chunk.value, { stream: true }); buffer = buffer.replace(/\r\n/gu, "\n");
       let end: number;
@@ -162,7 +171,7 @@ async function readTurn(response: Response, target: ExecutorTarget, credential: 
       }
     }
     if (buffer.trim()) invalid();
-    return { terminal, answer, observedUsage };
+    return { terminal, answer, observedUsage, budgetExceeded };
   } finally { signal.removeEventListener("abort", cancelReader); cancelReader(); }
 }
 
@@ -171,19 +180,24 @@ function build(boundary: Boundary, settings: Settings, fakeFetch: ExecutorFetch 
   if (!Number.isSafeInteger(settings.timeoutMs) || settings.timeoutMs < 1 || settings.timeoutMs > limits.timeoutMs || typeof settings.credential !== "function") throw Error("invalid_executor_transport_configuration");
   const timeoutMs = settings.timeoutMs, credentialProvider = settings.credential;
   const deny = (reason: string, reconciliation: ExecutorExposureSnapshot | null = null): ExecutorTransportDecision => freezeDeep({ verdict: "deny", reason, normalizedResult: null, reconciliation });
-  const prepare = (input: unknown, contextInput: unknown) => {
+  const prepare = (input: unknown, contextInput: unknown, reservation: unknown) => {
     try {
       if (!boundary.isValidatedInvocation(input)) invalid(); const i = input;
       const payload = { invocationId: i.invocationId, identity: i.identity, planId: i.planId, taskId: i.taskId, repository: i.repository,
         capability: i.capability, mode: i.mode, task: i.task, allowedPaths: i.allowedPaths, context: context(contextInput, i) };
+      const financial = boundary.budgetAuthority.forPreparation(reservation, i, target); if (!financial) invalid();
+      // 1 USD cent = 10,000 USD micros. Preserve full local exposure; NEVER round provider authority up.
+      const spendLimitCents = Math.floor(financial.maximumExposureUsdMicros / 10000);
+      if (!Number.isSafeInteger(spendLimitCents) || spendLimitCents < 1 || spendLimitCents * 10000 > financial.maximumExposureUsdMicros) invalid();
       const body = JSON.stringify({ agent: { model: target.modelId, instructions, multi_agent: { enabled: false },
         tools: [{ type: "programmatic_tool_calling", enabled: false }], text: { format: { type: "text" }, verbosity: "low" } },
-        environment: { type: "none" }, input: JSON.stringify(payload), stream: true });
+        environment: { type: "none" }, input: JSON.stringify(payload), stream: true, spend_control: { limit: spendLimitCents } });
       if (Buffer.byteLength(body) > limits.requestBytes) invalid(); safe(body); const requestFingerprint = sha256(body);
+      if (!boundary.budgetAuthority.bindRequest(reservation, i, target, requestFingerprint)) invalid();
       const invoke = async (ticket: unknown, abortSignal?: AbortSignal): Promise<ExecutorTransportDecision> => {
         // Immutable production lock: no environment variable, credential, timeout or caller flag opens it.
         if (fakeFetch === null) return deny("durable_executor_fence_required");
-        if (!isExecutorTestStart(ticket, i, target, requestFingerprint)) return deny("executor_start_blocked");
+        if (!boundary.budgetAuthority.isStartReservation(ticket, reservation) || !isExecutorTestStart(ticket, i, target, requestFingerprint)) return deny("executor_start_blocked");
         let transmitted = false, timer: ReturnType<typeof setTimeout> | undefined;
         const controller = new AbortController();
         const aborted = () => controller.abort(); abortSignal?.addEventListener("abort", aborted, { once: true });
@@ -206,8 +220,9 @@ function build(boundary: Boundary, settings: Settings, fakeFetch: ExecutorFetch 
               headers: { "Content-Type": "application/json", Accept: "text/event-stream", "OpenAI-Beta": "agents=v1", Authorization: `Bearer ${key}` }, body });
             if (controller.signal.aborted) { void response.body?.cancel().catch(() => {}); throw Error("executor_stopped"); }
             if (!response.ok) { void response.body?.cancel().catch(() => {}); return evaluated(failure(i, [400, 401, 403].includes(response.status) ? "rejected" : "outcome_unknown"), null, ![400, 401, 403].includes(response.status)); }
-            const turn = await readTurn(response, target, key, controller.signal);
+            const turn = await readTurn(response, target, key, controller.signal, spendLimitCents);
             if (controller.signal.aborted) throw Error("executor_stopped");
+            if (turn.budgetExceeded) return evaluated(failure(i, "failed", true), turn.observedUsage, true);
             if (turn.terminal !== "completed") return evaluated(failure(i, "outcome_unknown"), turn.observedUsage, true);
             if (turn.answer === null) invalid(); return evaluated(proposal(JSON.parse(turn.answer), i), turn.observedUsage, false);
           };
