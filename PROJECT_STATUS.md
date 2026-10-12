@@ -20,7 +20,7 @@ Private AI Cloud is a **vendor-neutral AI Engineering Control Plane**. The canon
 ## What Exists
 
 - The Owner Console (RU / EN): Dashboard, My Attention, Projects, Tasks, Runs and Approvals read real runtime data read-only; the remaining prototype pages use mocked data.
-- A PostgreSQL 16 schema with raw SQL migrations `0001`–`0012` and the Smart Algorithms demo seed.
+- A PostgreSQL 16 schema with raw SQL migrations `0001`–`0013` and the Smart Algorithms demo seed (executor migration `0013` IN REVIEW).
 - A server-only workflow runtime:
   - command lifecycle, claims and executions;
   - approvals and the invocation ledger;
@@ -47,12 +47,13 @@ Private AI Cloud is a **vendor-neutral AI Engineering Control Plane**. The canon
 - AI-041.0 (IN REVIEW): separate pure ExecutorAdapter contract with configured identity/capabilities, existing FeaturePlan admission, immutable invocation validation and bounded hashed patch-proposal/report evidence. Rejected, failed and ambiguous outcomes remain distinct. No execute method, dispatch authority, real executor, provider, runtime/DB/UI binding or Git authority; AI-040a metadata remains inert. See [contract v1](docs/architecture/executor-adapter-contract-v1.md).
 - AI-041.1 (IN REVIEW) / AI-041.1a corrective (DONE / COMMITTED / PUSHED): separate managed Agents API protocol transport (`environment: none`, no executable tools/subagents), explicit dispatch authority, financial admission/exposure reservation, process-local single-consumer test fence and usage reconciliation. Official sources re-checked 2026-10-12: current Agents API exposes `spend_control.limit` in whole USD cents. PAC binds the reservation-derived, rounded-down cap into exact fingerprinted request bytes; full local micros remain held. Returned consumption is best-effort evidence, never settlement. This provider-side defense in depth does not replace durable PAC reservation/fence, aggregate budget, replay protection, Owner authorization or tenant/account binding. Fake transport evidence only. Production/live dispatch remains BLOCKED; server composition cannot read credentials or dispatch and no caller flag enables it. See [boundary, official sources and limitations](docs/architecture/openai-agents-executor-v1.md).
 
-- AI-041.1b0 Trusted Executor Attempt Identity — IN REVIEW: prerequisite discovered by AI-041.1b STOP, not roadmap expansion. Existing AI-011 attempt identity is explicit at the adapter boundary, derived from separately trusted canonical implementation state, bound to invocation/result and process-local test exposure. One managed start per factual attempt; invocation ID is correlation only. AI-041.1b Durable Executor Start & Exposure Fence resumes only after independent b0 re-gate. No migration or durable authority; AI-041.1 production dispatch remains BLOCKED. AI-041.1a passed independent re-gate and is DONE / COMMITTED / PUSHED as `fc924885781ed9e651fb8d5e47588fd6a5ea1773`.
+- AI-041.1b0 Trusted Executor Attempt Identity — DONE / COMMITTED / PUSHED as `2109545f829dfe4e63a23e95301893c534e75947` after independent re-gate. Existing AI-011 attempt identity is derived from separately trusted canonical implementation state; invocation ID remains correlation only.
+- AI-041.1b Durable Executor Start & Exposure Fence — IN REVIEW: PostgreSQL reservation and aggregate lock, immutable request binding, at-most-one start commitment per workspace/Run/attempt, immutable journal and conservative reconciliation holds. Restart/independent-process and concurrency evidence uses temporary PostgreSQL only. The server-only composition exposes no start issuer; production/live dispatch remains BLOCKED with zero credential/network calls. No general recovery/settlement platform or durable DevelopmentExecution lifecycle is claimed. See [durable boundary](docs/architecture/durable-executor-start-v1.md).
 
 ## Not Yet Implemented
 
 - Runtime business APIs, and any UI action that starts a run, model, executor or repository change (the only exception is the AI-039.1 Owner-approved planning Run)
-- Enabled/live executor dispatch and durable executor financial/start authority, ExecutorRouter and ExecutionEnvironment (AI-041.1 supplies a locked transport and process-local test proof only)
+- Enabled/live executor dispatch, complete durable executor lifecycle/reconciliation, ExecutorRouter and ExecutionEnvironment (AI-041.1b's narrow durable financial/start boundary is IN REVIEW, not live enablement)
 - Automated Quality/Security Gate on executor output, and the corrective controller
 - RAG, real external integrations, staging/production deployment
 

@@ -6,11 +6,17 @@ Baseline: `bc9360eed0a4959fdbaca7ab787f3e511bb6336f`, branch `feature/developmen
 
 AI-041.1a corrective baseline: local HEAD and origin both `98a291533b1c953d1cac3b200847730688d35593` (`feat(executor): add AI-041.1 managed executor start boundary`). This is the factual pushed baseline despite the earlier report's no-commit/push claim; history is not rewritten. AI-041.1a passed independent re-gate and is DONE / COMMITTED / PUSHED as `fc924885781ed9e651fb8d5e47588fd6a5ea1773`. AI-041.1 remains IN REVIEW, not production-ready.
 
-## AI-041.1b0 — Trusted Executor Attempt Identity — IN REVIEW
+## AI-041.1b0 — Trusted Executor Attempt Identity — DONE / COMMITTED / PUSHED
 
 Prerequisite discovered by the AI-041.1b STOP condition; internal decomposition/corrective, not roadmap expansion. AI-011 attempts already exist. The pure adapter now binds `{developmentRunId, number, kind}` to separately configured, fully validated canonical DevelopmentExecution state (`implementing`, `submit_patch_or_failure`, one current `in_progress` attempt; initial #1, corrective #2/#3). Run plan/task must match admission. The caller transports identity but cannot establish it. Result identity comes from the original receipt, not executor output; canonical request bytes and financial snapshots include it. See [trusted source and limitations](executor-adapter-contract-v1.md).
 
-V1 permits at most one managed provider-start commitment per factual implementation attempt, not per invocation ID/capability/mode. There is no sub-dispatch model. Future durable uniqueness is conceptually trusted workspace + development Run ID + attempt number, with kind checked; corrective attempts remain distinct. The current bridge only proves this process-locally. AI-041.1b Durable Executor Start & Exposure Fence resumes only after independent b0 re-gate. No migration, durable start permit or production enablement is added; production dispatch remains **BLOCKED**.
+V1 permits at most one managed provider-start commitment per factual implementation attempt, not per invocation ID/capability/mode. There is no sub-dispatch model. B0 passed independent re-gate and was committed as `2109545f829dfe4e63a23e95301893c534e75947`; b0 itself added no migration or production enablement.
+
+## AI-041.1b — Durable Executor Start & Exposure Fence — IN REVIEW
+
+PostgreSQL is now the candidate future financial/start authority, not WeakMap/Set state. Migration `0013` adds a serialized workspace exposure budget, one durable record per workspace/development Run/attempt and an immutable transactional journal. The existing canonical capped-request builder is shared; provider bytes and AI-041.1a rounding are unchanged. A definitively committed prepared → start_committed winner alone receives an ephemeral single-use capability; no persisted bearer secret or restart reconstruction. Full exposure remains held after start or uncertainty. See [schema, operations, locking, crash semantics and residual debt](durable-executor-start-v1.md).
+
+Production/live dispatch remains **BLOCKED**. The new server-only composition exposes reservation/preparation/cancellation/read operations, but no start issuer or credentials; its invoke method denies. The production transport accepts neither durable capabilities nor caller unlock flags. Live PostgreSQL verification uses no provider network.
 
 ## Responsibilities
 
@@ -38,7 +44,7 @@ Hard **process-local** guarantees per boundary instance:
 - clock failure/rollback denies; expiry never automatically frees a reservation;
 - only a pre-start explicit cancellation releases exposure. Post-start failures, ambiguity, missing usage and even zero observed tokens do not release it.
 
-These process-local guarantees do **not** span processes, restarts, independent factory instances or machines. The configured provider session limit is defense in depth, not a PAC settlement guarantee or replacement for durable reservation, cancellation/pause/revision fence, executor ledger, tenant/account binding, replay protection, Owner authorization or aggregate budget enforcement. Those durable executor boundaries are not implemented. Test-only start tickets never authorize the production transport. Production/live dispatch must remain BLOCKED.
+These legacy process-local guarantees do **not** span processes, restarts, independent factory instances or machines. They remain test/defense-in-depth, not future production authority. AI-041.1b supplies the narrow durable reservation/start boundary described above, IN REVIEW; complete durable lifecycle, current-run pause/revision authority, settlement/recovery and live enablement remain separate. The provider limit is defense in depth. Test-only tickets and durable test capabilities never authorize the production transport. Production/live dispatch must remain BLOCKED.
 
 Observed usage is bounded nonnegative integer input/output/total token arithmetic, associated through the exact consumed ticket/reservation. It is best-effort accounting evidence, not financial authority. `observedCostUsdMicros` is always null: no token-derived fictional price or zero cost. Missing usage is `usage_unknown`, valid token evidence is `partially_observed`, malformed/contradictory/ambiguous evidence is `reconciliation_required`. Exposure remains held; the latter state is sticky. A future trusted durable reconciler, not this transport, must establish settlement.
 

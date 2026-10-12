@@ -175,6 +175,23 @@ async function readTurn(response: Response, target: ExecutorTarget, credential: 
   } finally { signal.removeEventListener("abort", cancelReader); cancelReader(); }
 }
 
+/** Pure canonical byte construction shared by local proof and durable preparation. No authority/IO. */
+export function createOpenAIAgentsCanonicalRequest(invocation: NormalizedExecutorInvocation, contextInput: unknown,
+  targetInput: ExecutorTarget, maximumExposureUsdMicros: number) {
+  const i = boundedData(invocation) as NormalizedExecutorInvocation;
+  const target = normalizeExecutorTarget(targetInput);
+  if (target.providerId !== "openai" || !Number.isSafeInteger(maximumExposureUsdMicros)
+    || maximumExposureUsdMicros < 10000 || maximumExposureUsdMicros > 1000000000) invalid();
+  const payload = { invocationId: i.invocationId, identity: i.identity, planId: i.planId, taskId: i.taskId, repository: i.repository, attempt: i.attempt,
+    capability: i.capability, mode: i.mode, task: i.task, allowedPaths: i.allowedPaths, context: context(contextInput, i) };
+  const spendLimitCents = Math.floor(maximumExposureUsdMicros / 10000);
+  const body = JSON.stringify({ agent: { model: target.modelId, instructions, multi_agent: { enabled: false },
+    tools: [{ type: "programmatic_tool_calling", enabled: false }], text: { format: { type: "text" }, verbosity: "low" } },
+    environment: { type: "none" }, input: JSON.stringify(payload), stream: true, spend_control: { limit: spendLimitCents } });
+  if (Buffer.byteLength(body) > limits.requestBytes) invalid(); safe(body);
+  return freezeDeep({ body, requestFingerprint: sha256(body), spendLimitCents });
+}
+
 function build(boundary: Boundary, settings: Settings, fakeFetch: ExecutorFetch | null) {
   const target = normalizeExecutorTarget({ providerId: "openai", modelId: settings.modelId, accountId: settings.accountId });
   if (!Number.isSafeInteger(settings.timeoutMs) || settings.timeoutMs < 1 || settings.timeoutMs > limits.timeoutMs || typeof settings.credential !== "function") throw Error("invalid_executor_transport_configuration");
@@ -183,16 +200,9 @@ function build(boundary: Boundary, settings: Settings, fakeFetch: ExecutorFetch 
   const prepare = (input: unknown, contextInput: unknown, reservation: unknown) => {
     try {
       if (!boundary.isValidatedInvocation(input)) invalid(); const i = input;
-      const payload = { invocationId: i.invocationId, identity: i.identity, planId: i.planId, taskId: i.taskId, repository: i.repository, attempt: i.attempt,
-        capability: i.capability, mode: i.mode, task: i.task, allowedPaths: i.allowedPaths, context: context(contextInput, i) };
       const financial = boundary.budgetAuthority.forPreparation(reservation, i, target); if (!financial) invalid();
       // 1 USD cent = 10,000 USD micros. Preserve full local exposure; NEVER round provider authority up.
-      const spendLimitCents = Math.floor(financial.maximumExposureUsdMicros / 10000);
-      if (!Number.isSafeInteger(spendLimitCents) || spendLimitCents < 1 || spendLimitCents * 10000 > financial.maximumExposureUsdMicros) invalid();
-      const body = JSON.stringify({ agent: { model: target.modelId, instructions, multi_agent: { enabled: false },
-        tools: [{ type: "programmatic_tool_calling", enabled: false }], text: { format: { type: "text" }, verbosity: "low" } },
-        environment: { type: "none" }, input: JSON.stringify(payload), stream: true, spend_control: { limit: spendLimitCents } });
-      if (Buffer.byteLength(body) > limits.requestBytes) invalid(); safe(body); const requestFingerprint = sha256(body);
+      const { body, requestFingerprint, spendLimitCents } = createOpenAIAgentsCanonicalRequest(i, contextInput, target, financial.maximumExposureUsdMicros);
       if (!boundary.budgetAuthority.bindRequest(reservation, i, target, requestFingerprint)) invalid();
       const invoke = async (ticket: unknown, abortSignal?: AbortSignal): Promise<ExecutorTransportDecision> => {
         // Immutable production lock: no environment variable, credential, timeout or caller flag opens it.
