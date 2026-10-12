@@ -9,6 +9,15 @@ type DepartmentFilter = "All" | DepartmentStatus | "locked";
 
 type DepartmentFilterPanelProps = {
   departments: Department[];
+  // Localized labels (server dictionary); filter / status VALUES stay the canonical tokens.
+  labels: Readonly<{
+    filters: Readonly<Record<DepartmentFilter, string>>;
+    status: Readonly<Record<DepartmentStatus, string>>;
+    primaryAssistant: string;
+    approvalRequirement: string;
+    keyWorkflows: string;
+    integrationsLater: string;
+  }>;
 };
 
 const filters: DepartmentFilter[] = [
@@ -27,6 +36,7 @@ const statusTone: Record<DepartmentStatus, StatusTone> = {
 
 export function DepartmentFilterPanel({
   departments,
+  labels,
 }: DepartmentFilterPanelProps) {
   const [activeFilter, setActiveFilter] = useState<DepartmentFilter>("All");
 
@@ -60,7 +70,7 @@ export function DepartmentFilterPanel({
             onClick={() => setActiveFilter(filter)}
             type="button"
           >
-            {filter}
+            {labels.filters[filter]}
           </button>
         ))}
       </div>
@@ -78,14 +88,14 @@ export function DepartmentFilterPanel({
                 </p>
               </div>
               <StatusBadge tone={statusTone[department.status]}>
-                {department.status}
+                {labels.status[department.status]}
               </StatusBadge>
             </div>
 
             <div className="mt-5 grid gap-3 lg:grid-cols-2">
               <div className="rounded-lg border border-slate-800 bg-slate-900/50 p-3">
                 <p className="text-xs font-medium uppercase text-slate-500">
-                  Primary assistant
+                  {labels.primaryAssistant}
                 </p>
                 <p className="mt-2 text-sm text-slate-100">
                   {department.primaryAssistant}
@@ -93,7 +103,7 @@ export function DepartmentFilterPanel({
               </div>
               <div className="rounded-lg border border-slate-800 bg-slate-900/50 p-3">
                 <p className="text-xs font-medium uppercase text-slate-500">
-                  Approval requirement
+                  {labels.approvalRequirement}
                 </p>
                 <p className="mt-2 text-sm leading-6 text-slate-300">
                   {department.approvalRequirement}
@@ -103,7 +113,7 @@ export function DepartmentFilterPanel({
 
             <div className="mt-4">
               <p className="text-xs font-medium uppercase text-slate-500">
-                Key workflows
+                {labels.keyWorkflows}
               </p>
               <div className="mt-2 flex flex-wrap gap-2">
                 {department.keyWorkflows.map((workflow) => (
@@ -116,7 +126,7 @@ export function DepartmentFilterPanel({
 
             <div className="mt-4">
               <p className="text-xs font-medium uppercase text-slate-500">
-                Integrations later
+                {labels.integrationsLater}
               </p>
               <div className="mt-2 flex flex-wrap gap-2">
                 {department.integrationsLater.map((integration) => (

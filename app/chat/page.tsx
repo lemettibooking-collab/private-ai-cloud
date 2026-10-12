@@ -7,32 +7,33 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { SectionCard } from "@/components/ui/section-card";
 import { StatusBadge } from "@/components/ui/status-badge";
-import {
-  assistantProfiles,
-  chatMessages,
-  chatThreads,
-  sourceCitations,
-} from "@/lib/mock-data";
+import { getI18n } from "@/lib/i18n/locale.server";
+import { prototypeContent } from "@/lib/i18n/prototype-content";
+import { prototypeMock } from "@/lib/i18n/prototype-mock";
+import { prototypePages } from "@/lib/i18n/prototype-pages";
 
-const selectedCollections = ["Product", "Support", "Engineering"];
-
-export default function ChatPage() {
+export default async function ChatPage() {
+  const { locale } = await getI18n();
+  const c = prototypePages[locale].chat;
+  const { chatMessages, chatThreads, sourceCitations, labels } = prototypeMock[locale];
+  const assistantProfiles = prototypeContent[locale].assistants.profiles;
+  const selectedCollections = c.collections;
   return (
     <AppShell>
       <PageHeader
-        action={<ActionButton disabled>Send to workflow</ActionButton>}
-        description="Source-grounded AI chat with assistant selection, citation cards, no-data state, and action previews."
-        eyebrow="RAG Chat"
-        title="Answers with sources"
+        action={<ActionButton disabled>{c.sendToWorkflow}</ActionButton>}
+        description={c.description}
+        eyebrow={c.eyebrow}
+        title={c.title}
       />
 
       <div className="grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
         <div className="space-y-6">
-          <SectionCard title="Chat threads">
-            <ChatThreadList threads={chatThreads} />
+          <SectionCard title={c.threads}>
+            <ChatThreadList threads={[...chatThreads]} />
           </SectionCard>
 
-          <SectionCard title="Assistant selector">
+          <SectionCard title={c.assistantSelector}>
             <div className="space-y-2">
               {assistantProfiles.slice(0, 6).map((assistant, index) => (
                 <button
@@ -50,7 +51,7 @@ export default function ChatPage() {
             </div>
           </SectionCard>
 
-          <SectionCard title="Selected collections">
+          <SectionCard title={c.selectedCollections}>
             <div className="flex flex-wrap gap-2">
               {selectedCollections.map((collection) => (
                 <StatusBadge key={collection} tone="info">
@@ -63,8 +64,8 @@ export default function ChatPage() {
 
         <div className="space-y-6">
           <SectionCard
-            action={<StatusBadge tone="info">source-grounded</StatusBadge>}
-            title="Messages"
+            action={<StatusBadge tone="info">{c.sourceGrounded}</StatusBadge>}
+            title={c.messages}
           >
             <div className="space-y-4">
               {chatMessages.map((message) => (
@@ -79,12 +80,12 @@ export default function ChatPage() {
             </div>
           </SectionCard>
 
-          <SectionCard title="Ask selected knowledge">
+          <SectionCard title={c.askTitle}>
             <div className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
               <textarea
                 className="min-h-24 w-full resize-none bg-transparent text-sm text-slate-100 outline-none placeholder:text-slate-600"
                 disabled
-                placeholder="Ask a question based on selected knowledge collections..."
+                placeholder={c.askPlaceholder}
               />
               <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-slate-800 pt-3">
                 <div className="flex flex-wrap gap-2">
@@ -94,41 +95,37 @@ export default function ChatPage() {
                     </StatusBadge>
                   ))}
                 </div>
-                <ActionButton disabled>Send disabled</ActionButton>
+                <ActionButton disabled>{c.sendDisabled}</ActionButton>
               </div>
             </div>
             <p className="mt-3 text-xs text-slate-500">
-              Mocked in prototype - no real LLM call is executed.
+              {c.mockedNote}
             </p>
             <div className="mt-4 flex flex-wrap gap-2">
               <ActionButton disabled variant="secondary">
-                Send to Support Reply workflow
+                {c.sendSupport}
               </ActionButton>
               <ActionButton disabled variant="secondary">
-                Send to Telegram Content workflow
+                {c.sendTelegram}
               </ActionButton>
               <ActionButton disabled variant="secondary">
-                Save useful answer
+                {c.saveAnswer}
               </ActionButton>
             </div>
           </SectionCard>
 
           <div className="grid gap-6 xl:grid-cols-3">
-            <SectionCard title="Source citations">
+            <SectionCard title={c.citations}>
               <div className="space-y-3">
                 {sourceCitations.map((citation) => (
-                  <SourceCitationCard citation={citation} key={citation.id} />
+                  <SourceCitationCard citation={citation} confidenceLabel={labels.confidence[citation.confidence]} key={citation.id} />
                 ))}
               </div>
             </SectionCard>
 
-            <SectionCard title="Answer actions">
+            <SectionCard title={c.answerActions}>
               <div className="grid gap-3">
-                {[
-                  ["Save useful answer", "MVP active"],
-                  ["Rate quality", "good / weak"],
-                  ["Export answer", "manual copy"],
-                ].map(([label, state]) => (
+                {c.actionRows.map(([label, state]) => (
                   <div
                     className="flex items-center justify-between rounded-lg border border-slate-800 bg-slate-900/50 p-3"
                     key={label}
@@ -140,20 +137,17 @@ export default function ChatPage() {
               </div>
             </SectionCard>
 
-            <SectionCard title="Send to workflow">
+            <SectionCard title={c.sendToWorkflow}>
               <div className="rounded-lg border border-amber-400/20 bg-amber-400/5 p-4">
-                <StatusBadge tone="warning">approval required</StatusBadge>
-                <p className="mt-3 text-sm leading-6 text-slate-300">
-                  Convert this answer into a Support Reply workflow. External
-                  send remains disabled until a human approves it.
-                </p>
+                <StatusBadge tone="warning">{c.approvalRequired}</StatusBadge>
+                <p className="mt-3 text-sm leading-6 text-slate-300">{c.convertBody}</p>
               </div>
             </SectionCard>
           </div>
 
           <EmptyState
-            description="When no relevant indexed source exists, the assistant should say so and suggest uploading a source or starting an approval workflow."
-            title="No data in knowledge base example"
+            description={c.noDataBody}
+            title={c.noDataTitle}
           />
         </div>
       </div>

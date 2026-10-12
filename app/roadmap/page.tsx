@@ -2,7 +2,8 @@ import { AppShell } from "@/components/shell/app-shell";
 import { PageHeader } from "@/components/ui/page-header";
 import { SectionCard } from "@/components/ui/section-card";
 import { StatusBadge } from "@/components/ui/status-badge";
-import { roadmapItems } from "@/lib/mock-data";
+import { getI18n } from "@/lib/i18n/locale.server";
+import { prototypeContent } from "@/lib/i18n/prototype-content";
 import type { StatusTone } from "@/types/app";
 
 const roadmapTone: Record<string, StatusTone> = {
@@ -11,33 +12,33 @@ const roadmapTone: Record<string, StatusTone> = {
   future: "neutral",
 };
 
-export default function RoadmapPage() {
+export default async function RoadmapPage() {
+  const { locale } = await getI18n();
+  const c = prototypeContent[locale].roadmap;
   return (
     <AppShell>
       <PageHeader
-        description="Product roadmap from the current Smart Algorithms internal demo to the future owned AI infrastructure layer."
-        eyebrow="Roadmap"
-        title="Private AI Cloud roadmap"
+        description={c.description}
+        eyebrow={c.eyebrow}
+        title={c.title}
       />
 
-      <SectionCard title="MVP focus">
+      <SectionCard title={c.focusTitle}>
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <p className="text-sm leading-6 text-slate-300">
-            The current prototype focuses on v0.1: Smart Algorithms Internal
-            Demo. Later versions are visible to show product direction, not to
-            imply implemented backend, integrations, or infrastructure.
+            {c.focusBody}
           </p>
-          <StatusBadge tone="success">current: v0.1</StatusBadge>
+          <StatusBadge tone="success">{c.currentBadge}</StatusBadge>
         </div>
       </SectionCard>
 
       <div className="mt-6 space-y-4">
-        {roadmapItems.map((item) => (
+        {c.items.map((item) => (
           <SectionCard key={item.version}>
             <div className="grid gap-4 xl:grid-cols-[220px_minmax(0,1fr)]">
               <div>
                 <StatusBadge tone={roadmapTone[item.status]}>
-                  {item.status}
+                  {c.status[item.status]}
                 </StatusBadge>
                 <p className="mt-4 text-3xl font-semibold text-slate-50">
                   {item.version}

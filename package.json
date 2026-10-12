@@ -13,16 +13,25 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit --incremental false",
-    "test": "node --test tests/*.test.mts"
+    "test": "node --test tests/*.test.mts",
+    "test:pg": "node --test tests/pg/*.test.mts",
+    "workflow:recovery": "node scripts/workflow-runtime-recovery.mts",
+    "workflow:provider-smoke": "node scripts/workflow-provider-smoke.mts",
+    "development:handoff": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/local-developer-handoff.mts"
   },
   "dependencies": {
+    "jose": "6.2.12",
     "next": "16.2.9",
+    "next-auth": "5.0.0-beta.32",
+    "openai": "7.5.0",
+    "pg": "^8.23.0",
     "react": "19.2.4",
     "react-dom": "19.2.4"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
