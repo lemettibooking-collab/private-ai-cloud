@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createHash } from "node:crypto";
+// @ts-expect-error Node direct TypeScript requires the runtime extension.
+import { withDevelopmentRun, initialAttempt } from "./fixtures/executor-attempt.mts";
 
 const contract = await import(new URL("../lib/contracts/executor-adapter.ts", import.meta.url).href) as typeof import("../lib/contracts/executor-adapter");
 const handoff = await import(new URL("../lib/local-handoff/local-handoff-policy.ts", import.meta.url).href) as typeof import("../lib/local-handoff/local-handoff-policy");
 const hash = (text: string) => createHash("sha256").update(text).digest("hex");
 
 function config() {
-  return {
+  return withDevelopmentRun({
     identity: { id: "test-executor", version: "1.0" },
     capabilities: { tasks: ["coding", "repository_analysis"], modes: ["patch_proposal", "analysis_only"], artifacts: ["patch", "report"] },
     repository: { id: "repo-a", baseline: "a".repeat(40) },
@@ -19,11 +21,11 @@ function config() {
         riskLevel: "low", priority: "P3", requiresOwnerApproval: true,
       }] },
     },
-  };
+  });
 }
 function request() {
   return { schemaVersion: 1, invocationId: "invocation-a", identity: config().identity, planId: "plan-a", taskId: "task-a",
-    repository: config().repository, capability: "coding", mode: "patch_proposal" };
+    repository: config().repository, capability: "coding", mode: "patch_proposal", attempt: initialAttempt() };
 }
 function adapter(input: unknown = config()) {
   const decision = contract.createExecutorAdapterContract(input);

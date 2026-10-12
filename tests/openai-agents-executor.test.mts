@@ -2,18 +2,20 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
+// @ts-expect-error Node direct TypeScript requires the runtime extension.
+import { withDevelopmentRun, initialAttempt } from "./fixtures/executor-attempt.mts";
 
 const bridge = await import(new URL("../lib/executors/executor-start-boundary.ts", import.meta.url).href) as typeof import("../lib/executors/executor-start-boundary");
 const concrete = await import(new URL("../lib/executors/openai-agents-executor.ts", import.meta.url).href) as typeof import("../lib/executors/openai-agents-executor");
 type Fetch = import("../lib/executors/openai-agents-executor").ExecutorFetch;
 function config() {
-  return { identity: { id: "openai-agents", version: "v1" },
+  return withDevelopmentRun({ identity: { id: "openai-agents", version: "v1" },
     capabilities: { tasks: ["coding", "repository_analysis"], modes: ["patch_proposal", "analysis_only"], artifacts: ["patch", "report"] },
     repository: { id: "repo-a", baseline: "a".repeat(40) },
     admission: { taskId: "task-a", completedTaskIds: [], activeTaskIds: [], repositoryAllowlist: ["src"], taskOwnerApprovalGranted: true,
       plan: { id: "plan-a", title: "Plan", goal: "Proposal", status: "approved", tasks: [{ id: "task-a", sequence: 1,
         title: "Task", goal: "Proposal", scope: ["Source"], nonGoals: ["No autonomous execution"], allowedPaths: ["src"],
-        acceptanceCriteria: ["Owner review"], verificationCommands: ["npm test"], dependencyIds: [], riskLevel: "low", priority: "P3", requiresOwnerApproval: true }] } } };
+        acceptanceCriteria: ["Owner review"], verificationCommands: ["npm test"], dependencyIds: [], riskLevel: "low", priority: "P3", requiresOwnerApproval: true }] } } });
 }
 const credential = "synthetic-test-credential-never-live";
 const proposal = () => ({ changes: [{ path: "src/a.ts", operation: "add", content: "export const answer = 42;\n" }], report: "Unverified proposal for Owner review." });
@@ -35,7 +37,7 @@ function response(values: unknown[] = events()) { return new Response(sse(values
 function setup(fetcher?: Fetch, timeoutMs = 1000, mode: "test" | "production" = "test") {
   let calls = 0, credentialReads = 0, captured: Parameters<Fetch> | null = null;
   const b = bridge.createExecutorStartBoundary(config(), { maximumExposureUsdMicros: 10000, totalExposureUsdMicros: 160000, permitTtlMs: 60000, reservationTtlMs: 60000, maxEntries: 16 }, () => 1000);
-  const raw = { schemaVersion: 1, invocationId: "invocation-a", identity: config().identity, planId: "plan-a", taskId: "task-a", repository: config().repository, capability: "coding", mode: "patch_proposal" };
+  const raw = { schemaVersion: 1, invocationId: "invocation-a", identity: config().identity, planId: "plan-a", taskId: "task-a", repository: config().repository, capability: "coding", mode: "patch_proposal", attempt: initialAttempt() };
   const d = b.validateInvocation(raw); assert.ok(d.normalizedInvocation); const i = d.normalizedInvocation;
   const settings = { modelId: "explicit-test-model", accountId: "account-a", timeoutMs, credential: () => { credentialReads++; return credential; } };
   const fake: Fetch = async (url, init) => { calls++; captured = [url, init]; return fetcher ? fetcher(url, init) : response(); };
@@ -70,6 +72,7 @@ test("exact managed request contains only admitted task and explicitly bounded c
   assert.equal(body.agent.model, "explicit-test-model"); assert.deepEqual(body.agent.multi_agent, { enabled: false });
   assert.deepEqual(body.agent.tools, [{ type: "programmatic_tool_calling", enabled: false }]);
   const input = JSON.parse(body.input); assert.deepEqual(input.task, s.i.task); assert.deepEqual(input.allowedPaths, ["src"]);
+  assert.deepEqual(input.attempt, s.i.attempt); assert.deepEqual(result.normalizedResult?.attempt, s.i.attempt);
   assert.deepEqual(input.context.files, [{ path: "src/a.ts", content: "// explicitly authorized context" }]);
   for (const absent of [credential, "verificationCommands", "selectedExecutor", "npm test", "previous_response_id", "conversation"])
     assert.ok(!captured[1].body.includes(absent));
@@ -118,7 +121,7 @@ test("bounded proposal goes through factual AI-041.0 evaluateResult, never provi
 });
 test("analysis-only report has no changes and remains unverified", async () => {
   const s = setup(async () => response(events({ changes: [], report: proposal().report })));
-  const raw = { schemaVersion: 1, invocationId: "analysis", identity: config().identity, planId: "plan-a", taskId: "task-a", repository: config().repository, capability: "repository_analysis", mode: "analysis_only" };
+  const raw = { schemaVersion: 1, invocationId: "analysis", identity: config().identity, planId: "plan-a", taskId: "task-a", repository: config().repository, capability: "repository_analysis", mode: "analysis_only", attempt: initialAttempt() };
   const d = s.b.validateInvocation(raw); assert.ok(d.normalizedInvocation);
   const budget = s.reserve(d.normalizedInvocation);
   const p = s.transport.prepare(d.normalizedInvocation, { files: [] }, budget); assert.ok(p.prepared);
@@ -228,7 +231,7 @@ test("timeout while reading provider stream cancels reader and retains exposure"
 test("another configured executor cannot consume executor A's ticket", async () => {
   const a = setup(), ticket = a.start(), c = config(); c.identity.id = "other-executor";
   const b = bridge.createExecutorStartBoundary(c, { maximumExposureUsdMicros: 10000, totalExposureUsdMicros: 10000, permitTtlMs: 60000, reservationTtlMs: 60000, maxEntries: 16 }, () => 1000);
-  const d = b.validateInvocation({ schemaVersion: 1, invocationId: "invocation-a", identity: c.identity, planId: "plan-a", taskId: "task-a", repository: c.repository, capability: "coding", mode: "patch_proposal" }); assert.ok(d.normalizedInvocation);
+  const d = b.validateInvocation({ schemaVersion: 1, invocationId: "invocation-a", identity: c.identity, planId: "plan-a", taskId: "task-a", repository: c.repository, capability: "coding", mode: "patch_proposal", attempt: initialAttempt() }); assert.ok(d.normalizedInvocation);
   let calls = 0;
   const transport = concrete.createOpenAIAgentsTestTransport(b, { modelId: "explicit-test-model", accountId: "account-a", timeoutMs: 1000, credential: () => credential }, async () => { calls++; return response(); });
   const budget = b.budgetAuthority.reserve(d.normalizedInvocation, { providerId: "openai", modelId: "explicit-test-model", accountId: "account-a" }, null,
@@ -249,7 +252,7 @@ function capped(amount: number, fetcher?: Fetch, production = false) {
   const b = bridge.createExecutorStartBoundary(config(), { maximumExposureUsdMicros: 1000000000, totalExposureUsdMicros: 1000000000,
     permitTtlMs: 60000, reservationTtlMs: 60000, maxEntries: 16 }, () => 1000);
   const d = b.validateInvocation({ schemaVersion: 1, invocationId: "invocation-a", identity: config().identity,
-    planId: "plan-a", taskId: "task-a", repository: config().repository, capability: "coding", mode: "patch_proposal" });
+    planId: "plan-a", taskId: "task-a", repository: config().repository, capability: "coding", mode: "patch_proposal", attempt: initialAttempt() });
   assert.ok(d.normalizedInvocation); const i = d.normalizedInvocation;
   const target = { providerId: "openai", modelId: "explicit-test-model", accountId: "account-a" };
   const r = b.budgetAuthority.reserve(i, target, null, { reservationId: "reservation-a", maximumExposureUsdMicros: amount });

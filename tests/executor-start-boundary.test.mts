@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+// @ts-expect-error Node direct TypeScript requires the runtime extension.
+import { withDevelopmentRun, initialAttempt } from "./fixtures/executor-attempt.mts";
 
 const bridge = await import(new URL("../lib/executors/executor-start-boundary.ts", import.meta.url).href) as typeof import("../lib/executors/executor-start-boundary");
 
 function configuration() {
-  return {
+  return withDevelopmentRun({
     identity: { id: "openai-agents", version: "v1" },
     capabilities: { tasks: ["coding", "repository_analysis"], modes: ["patch_proposal", "analysis_only"], artifacts: ["patch", "report"] },
     repository: { id: "repo-a", baseline: "a".repeat(40) },
@@ -12,7 +14,7 @@ function configuration() {
       plan: { id: "plan-a", title: "Plan", goal: "Bounded proposal", status: "approved", tasks: [{ id: "task-a", sequence: 1,
         title: "Task", goal: "Bounded proposal", scope: ["Source"], nonGoals: ["No external actions"], allowedPaths: ["src"],
         acceptanceCriteria: ["Owner reviews evidence"], verificationCommands: ["npm test"], dependencyIds: [], riskLevel: "low", priority: "P3", requiresOwnerApproval: true }] } },
-  };
+  });
 }
 const target = { providerId: "openai", modelId: "explicit-test-model", accountId: "account-a" };
 const fingerprint = "b".repeat(64);
@@ -21,7 +23,7 @@ function setup() {
   let now = 1000;
   const b = bridge.createExecutorStartBoundary(configuration(), policy, () => now);
   const raw = { schemaVersion: 1, invocationId: "invocation-a", identity: configuration().identity, planId: "plan-a", taskId: "task-a",
-    repository: configuration().repository, capability: "coding", mode: "patch_proposal" };
+    repository: configuration().repository, capability: "coding", mode: "patch_proposal", attempt: initialAttempt() };
   const d = b.validateInvocation(raw); assert.ok(d.normalizedInvocation);
   const i = d.normalizedInvocation;
   const issue = () => { const d = b.dispatchAuthority.issue(i, target, fingerprint); assert.equal(d.verdict, "allow"); assert.ok(d.permit); return d.permit; };

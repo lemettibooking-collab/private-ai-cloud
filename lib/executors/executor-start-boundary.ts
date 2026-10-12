@@ -1,4 +1,4 @@
-import type { ExecutorIdentity, ExecutorRepositoryRef, NormalizedExecutorInvocation } from "../contracts/executor-adapter";
+import type { ExecutorAttemptIdentity, ExecutorIdentity, ExecutorRepositoryRef, NormalizedExecutorInvocation } from "../contracts/executor-adapter";
 // @ts-expect-error Node direct TypeScript requires the runtime extension.
 import { createExecutorAdapterContract } from "../contracts/executor-adapter.ts";
 // @ts-expect-error Node direct TypeScript requires the runtime extension.
@@ -10,6 +10,7 @@ export type ExecutorBudgetReservation = Readonly<{ kind: "executor_exposure_rese
 export type ExecutorStartTicket = Readonly<{ kind: "process_local_test_start" }>;
 export type ExecutorExposureSnapshot = Readonly<{
   reservationId: string; identity: ExecutorIdentity; invocationId: string; taskId: string; planId: string;
+  attempt: ExecutorAttemptIdentity;
   repository: ExecutorRepositoryRef; target: ExecutorTarget; requestFingerprint: string | null; expiresAt: number;
   state: "reserved" | "cancelled" | "started" | "reconciliation_required";
   maximumExposureUsdMicros: number; exposureHeldUsdMicros: number;
@@ -40,6 +41,7 @@ function matches(binding: Binding | Reservation, invocation: unknown, target: Ex
 function snapshot(r: Reservation): ExecutorExposureSnapshot {
   const i = r.invocation;
   return freezeDeep({ reservationId: r.id, identity: { ...i.identity }, invocationId: i.invocationId, taskId: i.taskId, planId: i.planId,
+    attempt: { ...i.attempt },
     repository: { ...i.repository }, target: { ...r.target }, requestFingerprint: r.fingerprint, expiresAt: r.expiresAt,
     state: r.state, maximumExposureUsdMicros: r.amount, exposureHeldUsdMicros: r.state === "cancelled" ? 0 : r.amount,
     reconciliation: r.reconciliation, observedUsage: r.usage ? { ...r.usage } : null, observedCostUsdMicros: null });
@@ -108,7 +110,9 @@ export function createExecutorStartBoundary(configuration: unknown, policyInput:
   };
   const receipts = new WeakSet<object>(), permits = new WeakMap<object, Permit>(), reservations = new WeakMap<object, Reservation>();
   const reservationIds = new Set<string>(), startedInvocations = new Set<string>(), startedTuples = new Set<string>();
-  const tuple = (i: NormalizedExecutorInvocation) => JSON.stringify([i.identity.id, i.identity.version, i.repository.id, i.repository.baseline, i.planId, i.taskId, i.capability, i.mode]);
+  // V1 has one implementation outcome/start per factual attempt, not per caller correlation ID.
+  // Process-local proof ONLY; future durable uniqueness also requires trusted workspace scope.
+  const tuple = (i: NormalizedExecutorInvocation) => JSON.stringify([i.attempt.developmentRunId, i.attempt.number]);
   const receiptTarget = (invocation: unknown, targetInput: unknown): Omit<Binding, "fingerprint"> => {
     if (!invocation || typeof invocation !== "object" || !receipts.has(invocation)) throw Error("invalid_executor_binding");
     return { invocation: invocation as NormalizedExecutorInvocation, target: normalizeExecutorTarget(targetInput) };

@@ -4,13 +4,19 @@ Status: **IN REVIEW**, not DONE. **Production/live dispatch: BLOCKED.**
 
 Baseline: `bc9360eed0a4959fdbaca7ab787f3e511bb6336f`, branch `feature/development-agent-module`. The Owner explicitly excluded prerequisite AI-041.0 / Decomposition gates, without waiving security invariants, and authorized a separate executor budget/fence bridge. No prior gate is declared passed.
 
-AI-041.1a corrective baseline: local HEAD and origin both `98a291533b1c953d1cac3b200847730688d35593` (`feat(executor): add AI-041.1 managed executor start boundary`). This is the factual pushed baseline despite the earlier report's no-commit/push claim; history is not rewritten. This corrective remains IN REVIEW.
+AI-041.1a corrective baseline: local HEAD and origin both `98a291533b1c953d1cac3b200847730688d35593` (`feat(executor): add AI-041.1 managed executor start boundary`). This is the factual pushed baseline despite the earlier report's no-commit/push claim; history is not rewritten. AI-041.1a passed independent re-gate and is DONE / COMMITTED / PUSHED as `fc924885781ed9e651fb8d5e47588fd6a5ea1773`. AI-041.1 remains IN REVIEW, not production-ready.
+
+## AI-041.1b0 — Trusted Executor Attempt Identity — IN REVIEW
+
+Prerequisite discovered by the AI-041.1b STOP condition; internal decomposition/corrective, not roadmap expansion. AI-011 attempts already exist. The pure adapter now binds `{developmentRunId, number, kind}` to separately configured, fully validated canonical DevelopmentExecution state (`implementing`, `submit_patch_or_failure`, one current `in_progress` attempt; initial #1, corrective #2/#3). Run plan/task must match admission. The caller transports identity but cannot establish it. Result identity comes from the original receipt, not executor output; canonical request bytes and financial snapshots include it. See [trusted source and limitations](executor-adapter-contract-v1.md).
+
+V1 permits at most one managed provider-start commitment per factual implementation attempt, not per invocation ID/capability/mode. There is no sub-dispatch model. Future durable uniqueness is conceptually trusted workspace + development Run ID + attempt number, with kind checked; corrective attempts remain distinct. The current bridge only proves this process-locally. AI-041.1b Durable Executor Start & Exposure Fence resumes only after independent b0 re-gate. No migration, durable start permit or production enablement is added; production dispatch remains **BLOCKED**.
 
 ## Responsibilities
 
 `ExecutorAdapter validation → bounded context/target → ExecutorBudgetAuthority → canonical capped request/fingerprint → ExecutorDispatchAuthority → ExecutorProviderStartFence → ConcreteExecutorTransport → Usage/Reconciliation`
 
-- AI-041.0 is unchanged: validation receipts are not dispatch permits. Human-operated `selectedExecutor` stays inert. ModelInvocation and Workflow Run authority are not accepted.
+- AI-041.0 validation receipts remain non-authorizing; b0 adds factual attempt binding only. Human-operated `selectedExecutor` stays inert. ModelInvocation and Workflow Run authority are not accepted.
 - `executor-start-boundary.ts` creates three separate frozen facades around private provenance/state. Trusted composition owns the issuers; no route/action exposes them. Calling an issuer is an explicit trusted dispatch/financial decision, not a consequence of validation. Ordinary shaped/cloned objects cannot confer authority. This is not protection against arbitrary code execution inside the trusted server.
 - `openai-agents-executor.ts` owns vendor protocol fields. No SDK/vendor shape enters core contracts. Prepared calls bind the exact factual receipt, target and SHA-256 of the exact canonical request bytes.
 - `development-executor.server.ts` is a server-only, currently unbound composition root. It exposes no issuers and cannot prepare an unreserved request. Production transport is structurally locked: no fetch, enable flag, environment switch or credential can open it. The separately named test factory takes ONLY a trusted injected in-process fake; passing network code to that seam violates its contract.
@@ -27,7 +33,7 @@ Hard **process-local** guarantees per boundary instance:
 - reservation + permit eligibility/expiry/bindings are checked synchronously without an `await` between checks and consumption;
 - exactly one process-local test start ticket may consume a reservation, and that ticket may be dispatched once;
 - expiry/revocation are rechecked immediately before the fake call;
-- started invocation and task/repository/mode tuples are never automatically replayed, including under new invocation IDs;
+- started invocation IDs and factual development Run/attempt tuples are never automatically replayed, including under new invocation IDs or capability/mode changes;
 - entry exhaustion denies; no eviction removes replay protection;
 - clock failure/rollback denies; expiry never automatically frees a reservation;
 - only a pre-start explicit cancellation releases exposure. Post-start failures, ambiguity, missing usage and even zero observed tokens do not release it.

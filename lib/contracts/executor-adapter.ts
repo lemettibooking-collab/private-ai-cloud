@@ -1,4 +1,8 @@
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
+import type { DevelopmentExecutionRun } from "./development-execution";
+// @ts-expect-error Node direct TypeScript requires the runtime extension.
+import { developmentExecutionLimits, validateAndNormalizeDevelopmentExecutionRun } from "./development-execution.ts";
 import type { DevelopmentTask } from "./development-plan";
 import type { DevelopmentTaskAdmissionInput } from "./development-task-policy";
 // @ts-expect-error Node direct TypeScript requires the runtime extension.
@@ -25,15 +29,19 @@ export type ExecutorCapabilities = Readonly<{
   artifacts: readonly ("patch" | "report")[];
 }>;
 export type ExecutorRepositoryRef = Readonly<{ id: string; baseline: string }>;
+/** Serializable PAC identity, NOT execution authority. Derived from trusted AI-011 state. */
+export type ExecutorAttemptIdentity = Readonly<{ developmentRunId: string; number: number; kind: "initial" | "corrective" }>;
 /** Trusted composition input, not an API registration or invocation request. */
 export type ExecutorAdapterConfiguration = Readonly<{
   identity: ExecutorIdentity; capabilities: ExecutorCapabilities;
   repository: ExecutorRepositoryRef; admission: DevelopmentTaskAdmissionInput;
+  developmentRun: DevelopmentExecutionRun;
 }>;
 export type ExecutorInvocationInput = Readonly<{
   schemaVersion: 1; invocationId: string; identity: ExecutorIdentity;
   planId: string; taskId: string; repository: ExecutorRepositoryRef;
   capability: ExecutorCapability; mode: ExecutorExecutionMode;
+  attempt: ExecutorAttemptIdentity;
 }>;
 export type NormalizedExecutorInvocation = ExecutorInvocationInput & Readonly<{
   task: Pick<DevelopmentTask, "title" | "goal" | "scope" | "nonGoals" | "acceptanceCriteria">;
@@ -53,11 +61,12 @@ export type ExecutorResultInput = Readonly<{
 }>;
 export type NormalizedExecutorResult = ExecutorResultInput & Readonly<{
   repository: ExecutorRepositoryRef; planId: string; taskId: string;
+  attempt: ExecutorAttemptIdentity;
   ownerDecisionRequired: true; verificationStatus: "not_run"; automaticRetryAllowed: false;
 }>;
 export type ExecutorReasonCode = "invalid_configuration" | "invalid_invocation" | "invalid_result" | "identity_mismatch"
   | "task_admission_denied" | "invocation_binding_mismatch" | "unsupported_capability" | "invalid_receipt"
-  | "evidence_integrity_mismatch" | "evidence_path_denied" | "unsafe_evidence";
+  | "evidence_integrity_mismatch" | "evidence_path_denied" | "unsafe_evidence" | "invalid_attempt_state";
 export type ExecutorReason = Readonly<{ code: ExecutorReasonCode; path: string }>;
 export type ExecutorInvocationDecision = Readonly<{
   verdict: "allow" | "deny"; reasons: readonly ExecutorReason[];
@@ -124,6 +133,36 @@ function digest(content: string, claimed: unknown, path: string): string {
 }
 const sameIdentity = (a: ExecutorIdentity, b: ExecutorIdentity) => a.id === b.id && a.version === b.version;
 
+function currentAttempt(input: unknown): { run: DevelopmentExecutionRun; attempt: ExecutorAttemptIdentity } {
+  // Snapshot BEFORE the AI-011 parser: no accessors/proxy traps, and bounded work only.
+  const snapshot = boundedData(input);
+  const validation = validateAndNormalizeDevelopmentExecutionRun(snapshot);
+  // The source must already be canonical: normalization must not repair or drop fields.
+  if (!validation.ok || !isDeepStrictEqual(snapshot, boundedData(validation.value))) reject("invalid_attempt_state", "developmentRun");
+  const run = validation.value;
+  identifier(run.id, "developmentRun.id", "invalid_attempt_state");
+  identifier(run.planId, "developmentRun.planId", "invalid_attempt_state");
+  identifier(run.taskId, "developmentRun.taskId", "invalid_attempt_state");
+  safeEvidence(JSON.stringify(snapshot), "developmentRun");
+  const active = run.attempts.filter(a => a.status === "in_progress");
+  if (run.status !== "implementing" || run.nextAction !== "submit_patch_or_failure" || active.length !== 1
+    || active[0].number !== run.currentAttemptNumber) reject("invalid_attempt_state", "developmentRun.currentAttemptNumber");
+  return { run, attempt: { developmentRunId: run.id, number: active[0].number, kind: active[0].kind } };
+}
+/** Pure factual consistency proof only; trusted composition, not this shape, establishes source authority. */
+export function resolveCurrentExecutorAttempt(input: unknown): Readonly<{
+  verdict: "allow" | "deny"; reasons: readonly ExecutorReason[]; attempt: ExecutorAttemptIdentity | null;
+}> {
+  try { return freezeDeep({ verdict: "allow", reasons: [], attempt: currentAttempt(input).attempt }); }
+  catch (error) { return freezeDeep({ verdict: "deny", reasons: reason(error, "invalid_attempt_state"), attempt: null }); }
+}
+function invocationAttempt(input: unknown): ExecutorAttemptIdentity {
+  const r = record(input, ["developmentRunId", "number", "kind"], "attempt", "invalid_invocation");
+  if (typeof r.number !== "number" || !Number.isSafeInteger(r.number) || r.number < 1 || r.number > developmentExecutionLimits.maxAttempts) reject("invalid_invocation", "attempt.number");
+  if (r.kind !== "initial" && r.kind !== "corrective") reject("invalid_invocation", "attempt.kind");
+  return { developmentRunId: identifier(r.developmentRunId, "attempt.developmentRunId", "invalid_invocation"), number: r.number, kind: r.kind };
+}
+
 /**
  * Trusted composition declares one known adapter and a task-policy snapshot. Never expose
  * this factory as a caller-controlled registration endpoint. Capabilities are declarations,
@@ -132,7 +171,7 @@ const sameIdentity = (a: ExecutorIdentity, b: ExecutorIdentity) => a.id === b.id
  */
 export function createExecutorAdapterContract(input: unknown): ExecutorAdapterConfigurationDecision {
   try {
-    const c = record(boundedData(input), ["identity", "capabilities", "repository", "admission"], "$", "invalid_configuration");
+    const c = record(boundedData(input), ["identity", "capabilities", "repository", "admission", "developmentRun"], "$", "invalid_configuration");
     const configuredIdentity = identity(c.identity, "identity", "invalid_configuration");
     const configuredRepository = repository(c.repository, "repository", "invalid_configuration");
     const caps = record(c.capabilities, ["tasks", "modes", "artifacts"], "capabilities", "invalid_configuration");
@@ -155,6 +194,10 @@ export function createExecutorAdapterContract(input: unknown): ExecutorAdapterCo
     safeEvidence(JSON.stringify(c), "$configuration");
     const paths = taskAdmission.normalizedAllowedPaths.map(safeRepositoryPath).sort(compare);
     const taskId = identifier(admission.taskId, "admission.taskId", "invalid_configuration");
+    const factual = currentAttempt(c.developmentRun);
+    if (factual.run.planId !== validation.value.id || factual.run.taskId !== taskId) reject("invocation_binding_mismatch", "developmentRun");
+    // Expected identity is captured from separate trusted configuration, never invocation input.
+    const configuredAttempt = factual.attempt;
     const task = validation.value.tasks.find(t => t.id === taskId)!;
     const taskData = { title: task.title, goal: task.goal, scope: [...task.scope], nonGoals: [...task.nonGoals], acceptanceCriteria: [...task.acceptanceCriteria] };
     // Do not forward verificationCommands as executable instructions or caller trusted options.
@@ -162,12 +205,15 @@ export function createExecutorAdapterContract(input: unknown): ExecutorAdapterCo
 
     const validateInvocation = (input: unknown): ExecutorInvocationDecision => {
       try {
-        const r = record(boundedData(input), ["schemaVersion", "invocationId", "identity", "planId", "taskId", "repository", "capability", "mode"], "$", "invalid_invocation");
+        const r = record(boundedData(input), ["schemaVersion", "invocationId", "identity", "planId", "taskId", "repository", "capability", "mode", "attempt"], "$", "invalid_invocation");
         if (r.schemaVersion !== 1) reject("invalid_invocation", "schemaVersion");
         const requestedIdentity = identity(r.identity, "identity", "invalid_invocation");
         if (!sameIdentity(requestedIdentity, configuredIdentity)) reject("identity_mismatch", "identity");
         const requestedRepository = repository(r.repository, "repository", "invalid_invocation");
         if (r.planId !== validation.value.id || r.taskId !== taskId || requestedRepository.id !== configuredRepository.id || requestedRepository.baseline !== configuredRepository.baseline) reject("invocation_binding_mismatch", "$binding");
+        const requestedAttempt = invocationAttempt(r.attempt);
+        if (requestedAttempt.developmentRunId !== configuredAttempt.developmentRunId
+          || requestedAttempt.number !== configuredAttempt.number || requestedAttempt.kind !== configuredAttempt.kind) reject("invocation_binding_mismatch", "attempt");
         if (!capabilities.tasks.includes(r.capability as ExecutorCapability) || !capabilities.modes.includes(r.mode as ExecutorExecutionMode)
           || !capabilities.artifacts.includes("report") || (r.mode === "patch_proposal" && !capabilities.artifacts.includes("patch"))
           || !((r.capability === "coding" && r.mode === "patch_proposal") || (r.capability === "repository_analysis" && r.mode === "analysis_only"))) reject("unsupported_capability", "capability");
@@ -175,6 +221,7 @@ export function createExecutorAdapterContract(input: unknown): ExecutorAdapterCo
         const normalizedInvocation: NormalizedExecutorInvocation = freezeDeep({
           schemaVersion: 1, invocationId: identifier(r.invocationId, "invocationId", "invalid_invocation"), identity: requestedIdentity,
           planId: validation.value.id, taskId, repository: requestedRepository,
+          attempt: { ...configuredAttempt },
           capability: r.capability as ExecutorCapability, mode: r.mode as ExecutorExecutionMode,
           task: { title: taskData.title, goal: taskData.goal, scope: [...taskData.scope], nonGoals: [...taskData.nonGoals], acceptanceCriteria: [...taskData.acceptanceCriteria] },
           allowedPaths: [...paths], invocationAuthorized: false,
@@ -227,6 +274,7 @@ export function createExecutorAdapterContract(input: unknown): ExecutorAdapterCo
           schemaVersion: 1, identity: resultIdentity, invocationId: receipt.invocationId,
           status: status as ExecutorOutcome, failureCode: r.failureCode as ExecutorFailureCode | null, changes, report,
           repository: { id: receipt.repository.id, baseline: receipt.repository.baseline }, planId: receipt.planId, taskId: receipt.taskId,
+          attempt: { ...receipt.attempt },
           ownerDecisionRequired: true, verificationStatus: "not_run", automaticRetryAllowed: false,
         };
         return freezeDeep({ verdict: "allow", reasons: [], normalizedResult });

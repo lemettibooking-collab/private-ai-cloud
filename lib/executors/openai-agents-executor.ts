@@ -183,7 +183,7 @@ function build(boundary: Boundary, settings: Settings, fakeFetch: ExecutorFetch 
   const prepare = (input: unknown, contextInput: unknown, reservation: unknown) => {
     try {
       if (!boundary.isValidatedInvocation(input)) invalid(); const i = input;
-      const payload = { invocationId: i.invocationId, identity: i.identity, planId: i.planId, taskId: i.taskId, repository: i.repository,
+      const payload = { invocationId: i.invocationId, identity: i.identity, planId: i.planId, taskId: i.taskId, repository: i.repository, attempt: i.attempt,
         capability: i.capability, mode: i.mode, task: i.task, allowedPaths: i.allowedPaths, context: context(contextInput, i) };
       const financial = boundary.budgetAuthority.forPreparation(reservation, i, target); if (!financial) invalid();
       // 1 USD cent = 10,000 USD micros. Preserve full local exposure; NEVER round provider authority up.
