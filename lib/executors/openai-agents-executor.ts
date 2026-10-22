@@ -11,6 +11,8 @@ import { createExecutorStartBoundary, isExecutorTestStart, consumeExecutorStartT
 import { boundedData, exactRecord, ensureSafeEvidence, freezeDeep, safeRepositoryPath, sha256, compare, HandoffBlocked } from "../local-handoff/local-handoff-policy.ts";
 // @ts-expect-error Node direct TypeScript requires the runtime extension.
 import { repositoryPathContains, isSystemForbiddenRepositoryPath } from "../contracts/development-task-policy.ts";
+// @ts-expect-error Node direct TypeScript requires the runtime extension.
+import { openAIAgentsFinalText, openAIAgentsProposal } from "./openai-agents-result.ts";
 
 type Boundary = ReturnType<typeof createExecutorStartBoundary>;
 type Settings = Readonly<{ modelId: string; accountId: string; timeoutMs: number; credential(): string; workspaceIdentity?: string }>;
@@ -65,19 +67,6 @@ function usage(input: unknown): unknown {
     return { inputTokens: u.input_tokens, outputTokens: u.output_tokens, totalTokens: u.total_tokens };
   } catch { return { invalidUsage: true }; }
 }
-function proposal(input: unknown, i: NormalizedExecutorInvocation): ExecutorResultInput {
-  const p = exactRecord(boundedData(input), ["changes", "report"]);
-  if (!Array.isArray(p.changes) || typeof p.report !== "string") invalid();
-  const changes = p.changes.map(value => {
-    const c = exactRecord(value, ["path", "operation", "content"]);
-    if (typeof c.path !== "string" || !["add", "modify", "delete"].includes(c.operation as string)
-      || !(c.content === null || typeof c.content === "string")) invalid();
-    return { path: c.path, operation: c.operation as "add" | "modify" | "delete", content: c.content as string | null,
-      sha256: typeof c.content === "string" ? sha256(c.content) : null };
-  });
-  return { schemaVersion: 1, identity: i.identity, invocationId: i.invocationId, status: "succeeded", failureCode: null,
-    changes, report: { content: p.report, sha256: sha256(p.report) } };
-}
 function failure(i: NormalizedExecutorInvocation, status: "rejected" | "failed" | "outcome_unknown", budgetExceeded = false): ExecutorResultInput {
   return { schemaVersion: 1, identity: i.identity, invocationId: i.invocationId, status,
     failureCode: status === "outcome_unknown" ? "ambiguous_outcome" : status === "rejected" ? "policy_rejected" : budgetExceeded ? "provider_failure" : "timeout", changes: [], report: null };
@@ -128,15 +117,8 @@ async function readTurn(response: Response, target: ExecutorTarget, credential: 
     if (e.type === "agent.session.turn.item.done") {
       record(e, ["type", "event_id", "session_id", "turn_id", "output_index", "item"]);
       if (!Number.isSafeInteger(e.output_index) || (e.output_index as number) < 0 || (e.output_index as number) > 63) invalid();
-      const item = e.item as Record<string, unknown>;
-      if (!item || item.turn_id !== turnId || item.status !== "completed") invalid(); identifier(item.id);
-      if (item.type === "reasoning") { record(item, ["id", "type", "status", "summary", "turn_id"], ["id", "type", "status", "summary", "turn_id"]); return; }
-      record(item, ["id", "type", "role", "status", "phase", "turn_id", "content"]);
-      if (item.type !== "message" || item.role !== "assistant" || !["commentary", "final_answer"].includes(item.phase as string)
-        || !Array.isArray(item.content) || item.content.length !== 1) invalid();
-      const content = exactRecord(item.content[0], ["type", "text"]);
-      if (content.type !== "output_text" || typeof content.text !== "string") invalid();
-      if (item.phase === "final_answer") { if (answer !== null) invalid(); answer = content.text; } return;
+      const text = openAIAgentsFinalText(e.item, turnId);
+      if (text !== null) { if (answer !== null) invalid(); answer = text; } return;
     }
     if (e.type === "agent.session.turn.completed" || e.type === "agent.session.turn.failed" || e.type === "agent.session.turn.cancelled") {
       record(e, ["type", "event_id", "session_id", "turn_id", "turn", "usage"], ["type", "event_id", "session_id", "turn_id", "turn"]);
@@ -257,7 +239,7 @@ function build(boundary: Boundary, settings: Settings, fakeFetch: ExecutorFetch 
             if (controller.signal.aborted) throw Error("executor_stopped");
             if (turn.budgetExceeded) return evaluated(failure(i, "failed", true), turn.observedUsage, true);
             if (turn.terminal !== "completed") return evaluated(failure(i, "outcome_unknown"), turn.observedUsage, true);
-            if (turn.answer === null) invalid(); return evaluated(proposal(JSON.parse(turn.answer), i), turn.observedUsage, false);
+            if (turn.answer === null) invalid(); return evaluated(openAIAgentsProposal(JSON.parse(turn.answer), i), turn.observedUsage, false);
           };
           return await Promise.race([work(), stopped]);
         } catch (error) {

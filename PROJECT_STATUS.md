@@ -9,7 +9,7 @@ Private AI Cloud is a **vendor-neutral AI Engineering Control Plane**. The canon
 | M1 Real Money Safety | DONE |
 | M2 Direct Model Provider Capability | IN REVIEW (M2.0 and M2.1 DONE; M2.2 DEFERRED BY OWNER) |
 | M3 Owner Product | ACTIVE / NOT DONE: AI-037.7, AI-038.0–AI-038.7, AI-039 and AI-039.1 DONE (direct API-key live smoke deferred by Owner); AI-039.2 Phase A committed, entitlement gate deferred by external supported-network blocker, Phase B blocked; AI-040a IN REVIEW |
-| M4 Vendor-Neutral Executor Platform | AI-041.0 / AI-041.1 IN REVIEW; durable start/current-authority/outcome slices committed; AI-041.1e provider identity IN REVIEW; production dispatch BLOCKED |
+| M4 Vendor-Neutral Executor Platform | AI-041.0 / AI-041.1 IN REVIEW; durable start/current-authority/outcome/identity slices committed; AI-041.1f retrieval-only reconciler IN REVIEW; production dispatch BLOCKED |
 | M5–M8 | PLANNED (M5 and M7 rebased in v1.4) |
 
 **Current local slices:** AI-040a Local Developer Handoff, AI-041.0 Vendor-Neutral Executor Adapter Contract and AI-041.1 executor transport/exposure bridge IN REVIEW (not DONE); AI-041.1 real dispatch and AI-039.2 Phase B stay blocked, with no inference proof. The full order is in `docs/ROADMAP.md` §9 / §11. M2.2 remains DEFERRED BY OWNER.\
@@ -20,7 +20,7 @@ Private AI Cloud is a **vendor-neutral AI Engineering Control Plane**. The canon
 ## What Exists
 
 - The Owner Console (RU / EN): Dashboard, My Attention, Projects, Tasks, Runs and Approvals read real runtime data read-only; the remaining prototype pages use mocked data.
-- A PostgreSQL 16 schema with raw SQL migrations `0001`–`0015` committed and `0016` provider identity IN REVIEW, plus the Smart Algorithms demo seed.
+- A PostgreSQL 16 schema with raw SQL migrations `0001`–`0016` committed, plus the Smart Algorithms demo seed. AI-041.1f adds no migration.
 - A server-only workflow runtime:
   - command lifecycle, claims and executions;
   - approvals and the invocation ledger;
@@ -51,12 +51,13 @@ Private AI Cloud is a **vendor-neutral AI Engineering Control Plane**. The canon
 - AI-041.1b Durable Executor Start & Exposure Fence — DONE / COMMITTED / PUSHED as `d72a439a456cb1370b49448fb354ea93b381907b`: durable reservation, aggregate serialization, immutable request/attempt journal and conservative holds. See [durable boundary](docs/architecture/durable-executor-start-v1.md).
 - AI-041.1c Durable Current Run / Attempt Authority Binding — DONE / COMMITTED / PUSHED as `bde59001b1a4bc28582bd6c76b6059d41cdcf74a`: migration `0014`, trusted register/adjacent-corrective advance/revoke, monotonic durable generation, canonical Run/admission fingerprints and same-transaction current-authority start recheck. Stale factories cannot override revoked/superseded authority. No durable AI-011 lifecycle, autonomous cancellation integration or Owner mutation UX is claimed. See [current-authority boundary](docs/architecture/executor-current-authority-v1.md).
 - AI-041.1d Durable Executor Outcome Capture & Exposure Settlement — DONE / COMMITTED / PUSHED as `c5299f5d19ae1addb38e5ef5335a24428b7074e4`: migration `0015`, bounded canonical terminal proposal, restart revalidation, atomic result + settled exposure + one held-counter release + journal. Ambiguous/unknown outcomes retain full exposure with no terminal result. Historical settlement works after authority revoke/advance or Project pause/archive. `settled` means concurrent exposure closed after a durable definitive terminal result, NOT exact monetary cost; observedCostUsdMicros stays null. This pulls forward only executor-specific AI-037.2 recovery; AI-037.2/.3/.8 and M4 remain unfinished. [Outcome boundary and residual debt](docs/architecture/executor-outcome-settlement-v1.md). Production/live dispatch remains BLOCKED.
-- AI-041.1e Durable Provider Execution Identity & Recovery Correlation — IN REVIEW: migration `0016`, exact-start correlation and write-once session/turn IDs, transactional identity journal, acknowledged correlation capability and bounded parser observer. No Create Session idempotency assumption, provider retrieval/listing, credential binding or production transport hookup. W2 uncertainty retains full exposure with no redispatch. [Identity and crash windows](docs/architecture/executor-provider-identity-v1.md).
+- AI-041.1e Durable Provider Execution Identity & Recovery Correlation — DONE / COMMITTED / PUSHED as `780a005c96233be1572eb5592433a0e58b8d7869`: migration `0016`, exact-start correlation and write-once session/turn IDs, transactional identity journal, acknowledged correlation capability and bounded parser observer. No Create Session idempotency assumption, credential binding or production transport hookup. W2 uncertainty retains full exposure with no redispatch. [Identity and crash windows](docs/architecture/executor-provider-identity-v1.md).
+- AI-041.1f OpenAI Agents Retrieval-Only Provider Reconciler — IN REVIEW: bounded fake GET-only saved session/turn/item recovery, exhaustive unique discovery, shared proposal validation and existing atomic terminal settlement. No Create/message/new turn, redispatch, production GET, credential read, live inference, new ledger or migration. Unknown/ambiguous state retains the hold; settlement never clears the sticky integrity flag. [Retrieval trust and limitations](docs/architecture/executor-provider-reconciliation-v1.md).
 
 ## Not Yet Implemented
 
 - Runtime business APIs, and any UI action that starts a run, model, executor or repository change (the only exception is the AI-039.1 Owner-approved planning Run)
-- Enabled/live executor dispatch, complete durable executor lifecycle/reconciliation, ExecutorRouter and ExecutionEnvironment (AI-041.1b/c/d committed; AI-041.1e IN REVIEW, not live enablement)
+- Enabled/live executor dispatch, complete durable executor lifecycle/reconciliation, ExecutorRouter and ExecutionEnvironment (AI-041.1b/c/d/e committed; AI-041.1f IN REVIEW, not live enablement)
 - Automated Quality/Security Gate on executor output, and the corrective controller
 - RAG, real external integrations, staging/production deployment
 

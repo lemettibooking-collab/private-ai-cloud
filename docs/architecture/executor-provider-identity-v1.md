@@ -1,6 +1,6 @@
 # AI-041.1e — Durable provider execution identity / recovery correlation
 
-Status: **IN REVIEW**. Baseline: `c5299f5d19ae1addb38e5ef5335a24428b7074e4` (AI-041.1d DONE / COMMITTED / PUSHED). The Live Readiness Review returned **BLOCKED**; AI-041.1 and production/live dispatch remain blocked/in review. No provider/OAuth/inference, listing/retrieval/polling, credential store, controller or new public surface is implemented.
+Status: **DONE / COMMITTED / PUSHED**, commit `780a005c96233be1572eb5592433a0e58b8d7869`. Implementation baseline: `c5299f5d19ae1addb38e5ef5335a24428b7074e4`. AI-041.1f [retrieval-only fake protocol/reconciler](executor-provider-reconciliation-v1.md) is IN REVIEW. The Live Readiness Review returned **BLOCKED**; AI-041.1 and production/live dispatch remain blocked/in review. No live provider/OAuth/inference, production retrieval, credential binding, controller or new public surface is implemented.
 
 ## Trust and schema
 
@@ -10,7 +10,7 @@ Only bounded non-secret IDs, digests, state/version and timestamps are stored. N
 
 Knowledge is monotonic: `correlation_prepared → session_observed → turn_observed`. A turn requires the exact saved session. A sticky `recovery_required` bit is independent of knowledge progression: a lost response can be unresolved with no IDs, or unresolved with IDs already known. It is never automatically cleared. This is not an executor/Run lifecycle.
 
-Session/turn writes are first-write-wins; exact replay is idempotent without a new journal version; conflicting IDs preserve the original and record recovery/incident state with full unsettled exposure. Multiple future metadata matches must be treated as an integrity incident, never arbitrary first-match selection. No code scans for matches here. Provider identity is historical evidence, not permission to start, settle, advance an attempt or apply a patch.
+Session/turn writes are first-write-wins; exact replay is idempotent without a new journal version; conflicting IDs preserve the original and record recovery/incident state with full unsettled exposure. Multiple metadata matches are an integrity incident, never arbitrary first-match selection. AI-041.1f scans only through a bounded injected fake GET client, outside this identity module. Provider identity is historical evidence, not permission to start, settle, advance an attempt or apply a patch.
 
 ## Canonical correlation without a hash cycle
 
@@ -57,7 +57,7 @@ Identity writes/readback work after authority revoke/advance and Project pause/a
 | W2: HTTP may have created session, no observed ID | Correlation exists before any observer-enabled transmission; it remains unresolved/held with no retry. Future trusted retrieval may find a unique proven match, but zero/multiple matches are not permission to redispatch. |
 | W3: session observed, before DB acknowledgement | Parser cannot proceed to success until session persistence ACK. If committed, fresh process reads it; rollback/unknown ACK retains hold. Physical crash between observation and durable write still reduces to lost-ID W2: no distributed atomicity is promised. |
 | W4: session persisted, turn observed before DB acknowledgement | Saved session survives; parser waits for turn persistence. Fresh process reads any committed turn; otherwise future retrieval must discover it under the exact session. |
-| W5: session+turn persisted, disconnect before terminal result | Exact IDs survive for a future retrieval-only reconciler; currently no retrieval is implemented. Full exposure and no terminal row remain. |
+| W5: session+turn persisted, disconnect before terminal result | Exact IDs survive; AI-041.1f can retrieve saved terminal output through fake GET only, validate it and settle through AI-041.1d. Otherwise full exposure and no terminal row remain. |
 
 This closes the previous unchecked observation/progression gap, not the fundamental remote-server/local-DB crash gap. Saved identity supports later reconciliation; it does not prove remote terminality or guarantee recovery availability.
 
@@ -75,4 +75,4 @@ These are public documentation facts, not live compatibility or entitlement proo
 
 ## Deferred gates
 
-Next: a separately scoped retrieval-only reconciler, then trusted account/credential and egress authorization/approved financial policy and isolated production composition. No live now: local development through AI-043.* → VPS transition gate → PostgreSQL/TLS/secrets/monitoring → deferred live gates → separately Owner-approved bounded executor smoke → AI-044. Full AI-037.2/.3/.8, AI-041.1 and M4 are not DONE.
+AI-041.1f retrieval-only reconciler is IN REVIEW, not live enablement. Next: trusted account/credential and egress authorization/approved financial policy and isolated production composition. No live now: local development through AI-043.* → VPS transition gate → PostgreSQL/TLS/secrets/monitoring → deferred live gates → separately Owner-approved bounded executor smoke → AI-044. Full AI-037.2/.3/.8, AI-041.1 and M4 are not DONE.
