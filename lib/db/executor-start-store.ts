@@ -24,6 +24,8 @@ import { deriveExecutorAuthorityFacts } from "../executors/executor-current-auth
 import { lockExecutorWorkspaceProject, lockExecutorAuthority, executorAuthorityMatches } from "./executor-current-authority-store.ts";
 // @ts-expect-error Node direct TypeScript requires the runtime extension.
 import { revalidateExecutorOutcome, readExecutorOutcomeEvidence, executorOutcomeJsonLimit } from "../executors/executor-outcome.ts";
+// @ts-expect-error Node direct TypeScript requires the runtime extension.
+import { createExecutorProviderIdentityOperations } from "./executor-provider-identity-store.ts";
 
 export type DurableExecutorState = "reserved" | "prepared" | "start_committed" | "cancelled" | "reconciliation_required" | "settled";
 export type DurableExecutorSnapshot = Readonly<{
@@ -51,7 +53,7 @@ export type PostgresExecutorConfiguration = Readonly<{
   // Trusted synchronous policy decision, not a caller flag. Never provider/slow work.
   authorizeStart(): boolean;
 }>;
-const capabilities = new WeakMap<object, { snapshot: DurableExecutorSnapshot; used: boolean }>();
+const capabilities = new WeakMap<object, { workspace: string; snapshot: DurableExecutorSnapshot; used: boolean }>();
 /** Only the acknowledged transaction winner owns this ephemeral reference; never reconstructed from a DB row. */
 export function consumeDurableExecutorStartCapability(input: unknown): DurableExecutorSnapshot | null {
   const c = input && typeof input === "object" ? capabilities.get(input) : null;
@@ -255,7 +257,7 @@ export function createPostgresExecutorStartStore(input: unknown) {
       if (!row || !["reserved", "prepared"].includes(row.state as string)) return denied("recovery_required");
       if (await clock(client) >= numeric(row.expires_ms)) return denied();
       let request: ReturnType<typeof createOpenAIAgentsCanonicalRequest>;
-      try { request = createOpenAIAgentsCanonicalRequest(i, context, target, numeric(row.maximum_exposure_usd_micros)); } catch { return denied(); }
+      try { request = createOpenAIAgentsCanonicalRequest(i, context, target, numeric(row.maximum_exposure_usd_micros), workspace); } catch { return denied(); }
       requireFact(request.spendLimitCents === numeric(row.provider_spend_limit_cents));
       if (row.request_fingerprint !== null) return row.request_fingerprint === request.requestFingerprint ? allowed("idempotent", snapshot(row, i)) : denied("conflict");
       // One statement timestamp for both columns: separate volatile clock_timestamp()
@@ -284,7 +286,7 @@ export function createPostgresExecutorStartStore(input: unknown) {
     if (result.status !== "start_committed" || !result.snapshot) return result;
     // ONLY AFTER definite COMMIT acknowledgement. Neither persisted state nor a replay mints this reference.
     const capability: DurableExecutorStartCapability = Object.freeze({ kind: "durable_executor_start" });
-    capabilities.set(capability, { snapshot: result.snapshot, used: false });
+    capabilities.set(capability, { workspace, snapshot: result.snapshot, used: false });
     return freezeDeep({ ...result, startCapability: capability });
   }
   async function cancel(raw: unknown): Promise<DurableExecutorDecision> {
@@ -425,6 +427,14 @@ export function createPostgresExecutorStartStore(input: unknown) {
     });
     return freezeDeep({ ...d, normalizedResult: d.verdict === "allow" ? result : null, resultFingerprint: d.verdict === "allow" ? resultFingerprint : null });
   }
-  return Object.freeze({ reserve, bindRequest, commitProviderStart, cancel, markReconciliationRequired, recordEvidence, inspect,
+  const providerIdentity = createExecutorProviderIdentityOperations({ workspace, target,
+    run: (raw, operation) => run(raw, false, false, (client, i, _held, row) => row ? operation(client, i, snapshot(row, i)) : Promise.resolve(denied())),
+    takeStart(capability) {
+      const c = capability && typeof capability === "object" ? capabilities.get(capability) : null;
+      return c?.workspace === workspace ? consumeDurableExecutorStartCapability(capability) : null;
+    },
+    async markUnknown(client, i, exposure) { if (exposure.state === "start_committed") await reconcile(client, i); },
+  });
+  return Object.freeze({ reserve, bindRequest, commitProviderStart, cancel, markReconciliationRequired, recordEvidence, inspect, ...providerIdentity,
     recordDefinitiveOutcomeAndSettle, inspectOutcome, realDispatch: "blocked" as const });
 }

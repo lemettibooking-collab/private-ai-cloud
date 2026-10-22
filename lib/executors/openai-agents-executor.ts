@@ -1,5 +1,10 @@
 import type { NormalizedExecutorInvocation, NormalizedExecutorResult, ExecutorResultInput } from "../contracts/executor-adapter";
 import type { ExecutorTarget, ExecutorExposureSnapshot } from "./executor-start-boundary";
+import type { ExecutorProviderIdentityObserver } from "./executor-provider-identity";
+// @ts-expect-error Node direct TypeScript requires the runtime extension.
+import { deriveExecutorProviderCorrelation, providerObservation } from "./executor-provider-identity.ts";
+// @ts-expect-error Node direct TypeScript requires the runtime extension.
+import { capturedMethod } from "../db/executor-start-transaction.ts";
 // @ts-expect-error Node direct TypeScript requires the runtime extension.
 import { createExecutorStartBoundary, isExecutorTestStart, consumeExecutorStartTicket, observeExecutorUsage, normalizeExecutorTarget } from "./executor-start-boundary.ts";
 // @ts-expect-error Node direct TypeScript requires the runtime extension.
@@ -8,7 +13,7 @@ import { boundedData, exactRecord, ensureSafeEvidence, freezeDeep, safeRepositor
 import { repositoryPathContains, isSystemForbiddenRepositoryPath } from "../contracts/development-task-policy.ts";
 
 type Boundary = ReturnType<typeof createExecutorStartBoundary>;
-type Settings = Readonly<{ modelId: string; accountId: string; timeoutMs: number; credential(): string }>;
+type Settings = Readonly<{ modelId: string; accountId: string; timeoutMs: number; credential(): string; workspaceIdentity?: string }>;
 export type ExecutorFetch = (url: string, init: Readonly<{ method: "POST"; headers: Readonly<Record<string, string>>;
   body: string; redirect: "error"; signal: AbortSignal }>) => Promise<Response>;
 export type ExecutorTransportDecision = Readonly<{ verdict: "allow" | "deny"; reason: string | null;
@@ -78,7 +83,8 @@ function failure(i: NormalizedExecutorInvocation, status: "rejected" | "failed" 
     failureCode: status === "outcome_unknown" ? "ambiguous_outcome" : status === "rejected" ? "policy_rejected" : budgetExceeded ? "provider_failure" : "timeout", changes: [], report: null };
 }
 /** Bounded supported SSE subset, not a copy of the SDK schema or a PAC-owned agent loop. */
-async function readTurn(response: Response, target: ExecutorTarget, credential: string, signal: AbortSignal, spendLimitCents: number): Promise<{
+async function readTurn(response: Response, target: ExecutorTarget, credential: string, signal: AbortSignal, spendLimitCents: number,
+  observer: ExecutorProviderIdentityObserver | null, correlationFingerprint: string): Promise<{
   terminal: "completed" | "failed" | null; answer: string | null; observedUsage: unknown; budgetExceeded: boolean;
 }> {
   if (!response.headers.get("content-type")?.startsWith("text/event-stream") || !response.body) invalid();
@@ -88,7 +94,14 @@ async function readTurn(response: Response, target: ExecutorTarget, credential: 
   let bytes = 0, chunks = 0, buffer = "", sessionId = "", turnId = "", answer: string | null = null;
   let terminal: "completed" | "failed" | null = null, observedUsage: unknown = null, budgetExceeded = false;
   const ids = new Set<string>();
-  const handle = (input: unknown): void => {
+  let observedSession = false, observedTurn = false;
+  const acknowledge = async () => {
+    if (!observer || !sessionId) return;
+    const observation = providerObservation(sessionId, observedSession ? turnId || null : null);
+    if (!observation || signal.aborted || !await observer.observe(observation) || signal.aborted) invalid();
+    if (!observedSession) observedSession = true; else if (turnId) observedTurn = true;
+  };
+  const handle = async (input: unknown): Promise<void> => {
     const e = input as Record<string, unknown>; if (!e || typeof e !== "object" || Array.isArray(e)) invalid();
     const eventId = identifier(e.event_id); if (ids.has(eventId) || ids.size >= limits.events) invalid(); ids.add(eventId);
     if (terminal) invalid();
@@ -106,10 +119,12 @@ async function readTurn(response: Response, target: ExecutorTarget, credential: 
         || a.model !== target.modelId || multi.enabled !== false || !Array.isArray(a.tools) || a.tools.length !== 1
         || !Array.isArray(s.required_actions) || s.required_actions.length || !Array.isArray(s.vault_ids) || s.vault_ids.length) invalid();
       const tool = exactRecord(a.tools[0], ["type", "enabled"]); if (tool.type !== "programmatic_tool_calling" || tool.enabled !== false) invalid();
-      sessionId = identifier(s.id); return;
+      if (observer && exactRecord(s.metadata, ["pac_execution"]).pac_execution !== correlationFingerprint) invalid();
+      sessionId = identifier(s.id); await acknowledge(); return;
     }
     if (!sessionId || e.session_id !== sessionId) invalid();
     const currentTurn = identifier(e.turn_id); if (turnId && turnId !== currentTurn) invalid(); turnId = currentTurn;
+    if (!observedTurn) await acknowledge();
     if (e.type === "agent.session.turn.item.done") {
       record(e, ["type", "event_id", "session_id", "turn_id", "output_index", "item"]);
       if (!Number.isSafeInteger(e.output_index) || (e.output_index as number) < 0 || (e.output_index as number) > 63) invalid();
@@ -167,7 +182,7 @@ async function readTurn(response: Response, target: ExecutorTarget, credential: 
           else if (!line.startsWith("event:") && !line.startsWith("id:")) invalid();
         }
         if (!data.length) continue; const text = data.join("\n"); if (text.includes(credential)) invalid();
-        handle(boundedData(JSON.parse(text)));
+        await handle(boundedData(JSON.parse(text)));
       }
     }
     if (buffer.trim()) invalid();
@@ -177,7 +192,7 @@ async function readTurn(response: Response, target: ExecutorTarget, credential: 
 
 /** Pure canonical byte construction shared by local proof and durable preparation. No authority/IO. */
 export function createOpenAIAgentsCanonicalRequest(invocation: NormalizedExecutorInvocation, contextInput: unknown,
-  targetInput: ExecutorTarget, maximumExposureUsdMicros: number) {
+  targetInput: ExecutorTarget, maximumExposureUsdMicros: number, workspaceIdentity: unknown = "test-only") {
   const i = boundedData(invocation) as NormalizedExecutorInvocation;
   const target = normalizeExecutorTarget(targetInput);
   if (target.providerId !== "openai" || !Number.isSafeInteger(maximumExposureUsdMicros)
@@ -185,24 +200,30 @@ export function createOpenAIAgentsCanonicalRequest(invocation: NormalizedExecuto
   const payload = { invocationId: i.invocationId, identity: i.identity, planId: i.planId, taskId: i.taskId, repository: i.repository, attempt: i.attempt,
     capability: i.capability, mode: i.mode, task: i.task, allowedPaths: i.allowedPaths, context: context(contextInput, i) };
   const spendLimitCents = Math.floor(maximumExposureUsdMicros / 10000);
-  const body = JSON.stringify({ agent: { model: target.modelId, instructions, multi_agent: { enabled: false },
+  const base = { agent: { model: target.modelId, instructions, multi_agent: { enabled: false },
     tools: [{ type: "programmatic_tool_calling", enabled: false }], text: { format: { type: "text" }, verbosity: "low" } },
-    environment: { type: "none" }, input: JSON.stringify(payload), stream: true, spend_control: { limit: spendLimitCents } });
+    environment: { type: "none" }, input: JSON.stringify(payload), stream: true, spend_control: { limit: spendLimitCents } };
+  const baseRequestFingerprint = sha256(JSON.stringify(base));
+  const correlationFingerprint = deriveExecutorProviderCorrelation({ workspaceIdentity, developmentRunId: i.attempt.developmentRunId,
+    attemptNumber: i.attempt.number, requestFingerprint: baseRequestFingerprint, ...target, executorIdentity: i.identity });
+  if (!correlationFingerprint) invalid();
+  const body = JSON.stringify({ ...base, metadata: { pac_execution: correlationFingerprint } });
   if (Buffer.byteLength(body) > limits.requestBytes) invalid(); safe(body);
-  return freezeDeep({ body, requestFingerprint: sha256(body), spendLimitCents });
+  return freezeDeep({ body, requestFingerprint: sha256(body), baseRequestFingerprint, correlationFingerprint, spendLimitCents });
 }
 
-function build(boundary: Boundary, settings: Settings, fakeFetch: ExecutorFetch | null) {
+function build(boundary: Boundary, settings: Settings, fakeFetch: ExecutorFetch | null,
+  observer: ExecutorProviderIdentityObserver | null = null) {
   const target = normalizeExecutorTarget({ providerId: "openai", modelId: settings.modelId, accountId: settings.accountId });
   if (!Number.isSafeInteger(settings.timeoutMs) || settings.timeoutMs < 1 || settings.timeoutMs > limits.timeoutMs || typeof settings.credential !== "function") throw Error("invalid_executor_transport_configuration");
-  const timeoutMs = settings.timeoutMs, credentialProvider = settings.credential;
+  const timeoutMs = settings.timeoutMs, credentialProvider = settings.credential, workspaceIdentity = settings.workspaceIdentity ?? "test-only";
   const deny = (reason: string, reconciliation: ExecutorExposureSnapshot | null = null): ExecutorTransportDecision => freezeDeep({ verdict: "deny", reason, normalizedResult: null, reconciliation });
   const prepare = (input: unknown, contextInput: unknown, reservation: unknown) => {
     try {
       if (!boundary.isValidatedInvocation(input)) invalid(); const i = input;
       const financial = boundary.budgetAuthority.forPreparation(reservation, i, target); if (!financial) invalid();
       // 1 USD cent = 10,000 USD micros. Preserve full local exposure; NEVER round provider authority up.
-      const { body, requestFingerprint, spendLimitCents } = createOpenAIAgentsCanonicalRequest(i, contextInput, target, financial.maximumExposureUsdMicros);
+      const { body, requestFingerprint, correlationFingerprint, spendLimitCents } = createOpenAIAgentsCanonicalRequest(i, contextInput, target, financial.maximumExposureUsdMicros, workspaceIdentity);
       if (!boundary.budgetAuthority.bindRequest(reservation, i, target, requestFingerprint)) invalid();
       const invoke = async (ticket: unknown, abortSignal?: AbortSignal): Promise<ExecutorTransportDecision> => {
         // Immutable production lock: no environment variable, credential, timeout or caller flag opens it.
@@ -217,6 +238,8 @@ function build(boundary: Boundary, settings: Settings, fakeFetch: ExecutorFetch 
         };
         try {
           if (abortSignal?.aborted) return evaluated(failure(i, "failed"), null, false);
+          if (observer && !await observer.beforeTransmission(requestFingerprint)) return deny("provider_identity_unavailable");
+          if (abortSignal?.aborted) return deny("executor_start_blocked");
           const key = credentialProvider();
           if (typeof key !== "string" || !/^[a-zA-Z0-9_-]{16,512}$/u.test(key) || body.includes(key)) return deny("executor_credential_unavailable");
           if (!consumeExecutorStartTicket(ticket, i, target, requestFingerprint, "test")) return deny("executor_start_blocked");
@@ -230,7 +253,7 @@ function build(boundary: Boundary, settings: Settings, fakeFetch: ExecutorFetch 
               headers: { "Content-Type": "application/json", Accept: "text/event-stream", "OpenAI-Beta": "agents=v1", Authorization: `Bearer ${key}` }, body });
             if (controller.signal.aborted) { void response.body?.cancel().catch(() => {}); throw Error("executor_stopped"); }
             if (!response.ok) { void response.body?.cancel().catch(() => {}); return evaluated(failure(i, [400, 401, 403].includes(response.status) ? "rejected" : "outcome_unknown"), null, ![400, 401, 403].includes(response.status)); }
-            const turn = await readTurn(response, target, key, controller.signal, spendLimitCents);
+            const turn = await readTurn(response, target, key, controller.signal, spendLimitCents, observer, correlationFingerprint);
             if (controller.signal.aborted) throw Error("executor_stopped");
             if (turn.budgetExceeded) return evaluated(failure(i, "failed", true), turn.observedUsage, true);
             if (turn.terminal !== "completed") return evaluated(failure(i, "outcome_unknown"), turn.observedUsage, true);
@@ -238,7 +261,9 @@ function build(boundary: Boundary, settings: Settings, fakeFetch: ExecutorFetch 
           };
           return await Promise.race([work(), stopped]);
         } catch (error) {
+          if (transmitted && observer) { try { await observer.uncertain(); } catch { /* retained hold; never redispatch */ } }
           const reconciliation = observeExecutorUsage(ticket, null, transmitted);
+          if (observer) return deny("provider_identity_or_response_unavailable", reconciliation);
           if (error instanceof InvalidResponse || error instanceof SyntaxError || error instanceof HandoffBlocked) return deny("invalid_executor_response", reconciliation);
           return evaluated(failure(i, transmitted ? "outcome_unknown" : "failed"), null, transmitted);
         } finally { if (timer !== undefined) clearTimeout(timer); controller.abort(); abortSignal?.removeEventListener("abort", aborted); }
@@ -252,3 +277,14 @@ function build(boundary: Boundary, settings: Settings, fakeFetch: ExecutorFetch 
 export function createOpenAIAgentsTransport(boundary: Boundary, settings: Settings) { return build(boundary, settings, null); }
 /** Trusted TEST HARNESS ONLY. Inject in-process fake transport; never pass fetch, SDK or a network wrapper here. */
 export function createOpenAIAgentsTestTransport(boundary: Boundary, settings: Settings, fakeFetch: ExecutorFetch) { return build(boundary, settings, fakeFetch); }
+/** TEST ONLY identity-observer seam; no real fetch or production unlocking. Invalid ports
+ * fail before credential access. Existing legacy ticket is still test evidence only. */
+export function createOpenAIAgentsIdentityTestTransport(boundary: Boundary, settings: Settings, fakeFetch: ExecutorFetch, port: unknown) {
+  const before = capturedMethod(port, "beforeTransmission"), observe = capturedMethod(port, "observe"), uncertain = capturedMethod(port, "uncertain");
+  if (!before || !observe || !uncertain) throw Error("invalid_executor_identity_observer");
+  return build(boundary, settings, fakeFetch, Object.freeze({
+    beforeTransmission: async fp => await Reflect.apply(before, undefined, [fp]) === true,
+    observe: async value => await Reflect.apply(observe, undefined, [value]) === true,
+    uncertain: async () => { await Reflect.apply(uncertain, undefined, []); },
+  }));
+}

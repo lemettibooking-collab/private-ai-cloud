@@ -55,7 +55,7 @@ export async function controlledTransport(id: string, kind: "success" | "timeout
     }
     return new Response(values.map(e => `data: ${JSON.stringify(e)}\n\n`).join(""), { headers: { "content-type": "text/event-stream" } });
   };
-  const settings = { modelId: t.modelId, accountId: t.accountId, timeoutMs: 10, credential() { credentials++; return "synthetic-test-credential-never-live"; } };
+  const settings = { modelId: t.modelId, accountId: t.accountId, workspaceIdentity: "00000000-0000-4000-8000-0000000000a1", timeoutMs: 10, credential() { credentials++; return "synthetic-test-credential-never-live"; } };
   const p = kind === "production" ? transport.createOpenAIAgentsTransport(b, settings) : transport.createOpenAIAgentsTestTransport(b, settings, fake);
   const r = b.budgetAuthority.reserve(i, t, null, { reservationId: "result-test", maximumExposureUsdMicros: 10000 }); assert.ok(r.reservation);
   const prepared = p.prepare(i, context(), r.reservation).prepared; assert.ok(prepared);

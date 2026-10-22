@@ -26,11 +26,17 @@ Commit: `bde59001b1a4bc28582bd6c76b6059d41cdcf74a`.
 
 Migration `0014` adds narrow durable current authority, not a second AI-011 lifecycle. Reserve/prepare/start lock and validate the active current generation and canonical Run/admission grant; the exposure permanently binds these facts. Trusted revocation or canonical corrective advancement fences stale factories across processes. Full details and deferred cancellation/Owner integration: [current authority](executor-current-authority-v1.md). No production transport enablement, credentials, network, OAuth or inference is added.
 
-## AI-041.1d — Durable outcome capture / exposure settlement — IN REVIEW
+## AI-041.1d — Durable outcome capture / exposure settlement — DONE / COMMITTED / PUSHED
+
+Commit: `c5299f5d19ae1addb38e5ef5335a24428b7074e4`. The subsequent Live Readiness Review returned **BLOCKED**, not production-ready.
 
 Migration `0015` and the unbound internal server-only outcome ingress capture a bounded canonical definitive proposal and close concurrent held exposure in the same acknowledged transaction. A restart read revalidates the full result through the existing adapter, exact attempt/invocation/repository/request bindings and its digest, without provider redispatch. Revoke/advance/pause/archive after start cannot discard historical output. Ambiguous transport decisions, including failed-shaped `session_budget_exceeded`, keep FULL exposure and no terminal result. The narrow transport observation bridge derives definitive evidence only for coherent success/rejection; failures stay conservative unless a separately trusted producer proves terminality. No existing transport classification is relaxed.
 
 `settled` means exposure closed after a durable definitive terminal result, not exact cost or financial reconciliation. `observedCostUsdMicros` remains null. [Schema, lock graph, restart and future reconciliation limitations](executor-outcome-settlement-v1.md). Production/live dispatch remains BLOCKED; no actual provider reconciliation, Quality Gate, corrective attempt or AI-037.2/.3/.8/M4 completion is claimed.
+
+## AI-041.1e — Durable provider identity / recovery correlation — IN REVIEW
+
+Migration `0016` adds exact-start correlation, write-once session/turn IDs and a transactional identity journal. New capped canonical bodies include only opaque `metadata.pac_execution` before their final SHA-256. A base-request digest avoids a self-referential hash; durable construction supplies the trusted workspace. The bounded internal observer awaits identity persistence before parser success, with no DB in the parser. A genuine acknowledged start plus acknowledged correlation can produce one future transmission capability, never from a replay/row/local ticket. No current production transport accepts it. Known IDs survive restart, but listing/retrieval/reconciliation is deliberately not implemented. W2 without an ID remains unresolved and held; metadata is not provider Create idempotency. [Protocol sources, schema, W1–W5 and lock graph](executor-provider-identity-v1.md).
 
 ## Responsibilities
 
@@ -58,7 +64,7 @@ Hard **process-local** guarantees per boundary instance:
 - clock failure/rollback denies; expiry never automatically frees a reservation;
 - only a pre-start explicit cancellation releases exposure. Post-start failures, ambiguity, missing usage and even zero observed tokens do not release it.
 
-These legacy process-local guarantees do **not** span processes, restarts, independent factory instances or machines. They remain test/defense-in-depth, not future production authority. AI-041.1b supplies the narrow durable reservation/start boundary described above, IN REVIEW; complete durable lifecycle, current-run pause/revision authority, settlement/recovery and live enablement remain separate. The provider limit is defense in depth. Test-only tickets and durable test capabilities never authorize the production transport. Production/live dispatch must remain BLOCKED.
+These legacy process-local guarantees do **not** span processes, restarts, independent factory instances or machines. They remain test/defense-in-depth, not future production authority. AI-041.1b/c/d provide committed durable start, current-authority and terminal-settlement primitives; full lifecycle producers, provider retrieval/recovery and live enablement remain separate. The provider limit is defense in depth. Test-only tickets and durable capabilities never unlock the current production transport. Production/live dispatch must remain BLOCKED.
 
 Observed usage is bounded nonnegative integer input/output/total token arithmetic, associated through the exact consumed ticket/reservation. It is best-effort accounting evidence, not financial authority. `observedCostUsdMicros` is always null: no token-derived fictional price or zero cost. Missing usage is `usage_unknown`, valid token evidence is `partially_observed`, malformed/contradictory/ambiguous evidence is `reconciliation_required`. Exposure remains held; the latter state is sticky. A future trusted durable reconciler, not this transport, must establish settlement.
 

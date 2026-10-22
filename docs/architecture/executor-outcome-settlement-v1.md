@@ -1,6 +1,6 @@
 # AI-041.1d — Durable executor outcome / exposure settlement
 
-Status: IN REVIEW, baseline `bde59001b1a4bc28582bd6c76b6059d41cdcf74a` (AI-041.1c DONE / COMMITTED / PUSHED). Production/live dispatch remains BLOCKED. This is an executor-only pull-forward of AI-037.2, not completion of AI-037.2/.3/.8, AI-041.1 or M4.
+Status: DONE / COMMITTED / PUSHED as `c5299f5d19ae1addb38e5ef5335a24428b7074e4`; implementation baseline `bde59001b1a4bc28582bd6c76b6059d41cdcf74a`. The Live Readiness Review returned BLOCKED. AI-041.1e provider identity is IN REVIEW. Production/live dispatch remains BLOCKED. This is an executor-only pull-forward of AI-037.2, not completion of AI-037.2/.3/.8, AI-041.1 or M4.
 
 ## Trust and canonical result
 
@@ -14,7 +14,7 @@ Existing limits are unchanged: cumulative strings 256 KiB, depth 10, 10,000 node
 
 Validated `succeeded`, `rejected`, `failed` are eligible ONLY with trusted `definitive_terminal`, compatible `rejected_before_execution` or `not_transmitted` evidence. A valid failed result alone is insufficient. `outcome_unknown`, transmitted timeout/disconnect, 429/5xx, malformed transmitted output and `session_budget_exceeded` remain ambiguous: reconciliation_required, FULL exposure, NO terminal row, NO automatic retry/start/corrective attempt.
 
-The narrow trusted transport observation bridge accepts coherent success/rejection with non-ambiguous accounting state; all failure-shaped transport results remain conservative. A future trusted reconciler can close a historical ambiguous start only after independently obtaining definitive evidence for that exact start through the same ingress. Observed session/turn IDs are currently internal to transport, not persisted and not proven retrievable: provider-specific identity/retrieval support remains debt, never fabricated.
+The narrow trusted transport observation bridge accepts coherent success/rejection with non-ambiguous accounting state; all failure-shaped transport results remain conservative. A future trusted reconciler can close a historical ambiguous start only after independently obtaining definitive evidence for that exact start through the same ingress. AI-041.1e adds [durable identity/correlation and an internal parser observer](executor-provider-identity-v1.md), not retrieval or network reconciliation. Legacy starts receive no invented IDs. ID persistence failure prevents terminal success and retains exposure. D semantics remain unchanged: historical definitive settlement does not require current authority and provider identity does not itself authorize settlement.
 
 ## PostgreSQL and locking
 

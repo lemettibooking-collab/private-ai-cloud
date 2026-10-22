@@ -268,7 +268,7 @@ test("PG production composition remains blocked: zero credential reads/network, 
   assert.equal(t.calls, 0); assert.equal(t.credentials, 0); assert.equal(t.decision.verdict, "deny"); assert.equal(t.decision.normalizedResult, null);
   assert.equal((await v.s.inspectOutcome(v.raw)).normalizedResult, null); assert.deepEqual(await facts("production-outcome"), f);
 });
-test("PG populated 0013 → 0014 → 0015 preserves all legacy evidence without fabricated authority/results", async () => {
+test("PG populated 0013 → 0014 → 0015 → 0016 preserves all legacy evidence without fabricated authority/results/provider IDs", async () => {
   const name = `aipc_pgtest_legacy_${randomUUID().replaceAll("-", "")}`, maintenance = live.adminClient(live.databaseUrl("postgres"));
   await maintenance.connect(); await maintenance.query(`create database "${name}"`); const admin = live.adminClient(live.databaseUrl(name));
   try {
@@ -300,7 +300,7 @@ test("PG populated 0013 → 0014 → 0015 preserves all legacy evidence without 
     assert.deepEqual(await evidence(), before);
     assert.deepEqual((await admin.query("select * from executor_attempt_events order by development_run_id,event_version")).rows, journalBefore);
     assert.deepEqual((await admin.query("select * from executor_exposure_budgets")).rows, budgetBefore);
-    for (const table of ["executor_run_authorities", "executor_authority_events", "executor_attempt_results"]) assert.equal((await admin.query(`select count(*)::int as n from ${table}`)).rows[0].n, 0);
+    for (const table of ["executor_run_authorities", "executor_authority_events", "executor_attempt_results", "executor_provider_executions", "executor_provider_identity_events"]) assert.equal((await admin.query(`select count(*)::int as n from ${table}`)).rows[0].n, 0);
     assert.equal((await admin.query("select held_exposure_usd_micros::text as n from executor_exposure_budgets")).rows[0].n, "40000");
     for (const phase of ["reserved", "prepared"]) {
       const v = await setup(`legacy-${phase}`, 1, live.primaryWorkspace.domain, live.databaseUrl(name));

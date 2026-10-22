@@ -66,7 +66,8 @@ test("exact managed request contains only admitted task and explicitly bounded c
   assert.equal(captured[0], "https://api.openai.com/v1/agents/sessions");
   assert.equal(captured[1].method, "POST"); assert.equal(captured[1].redirect, "error");
   assert.equal(captured[1].headers["OpenAI-Beta"], "agents=v1"); assert.equal(captured[1].headers.Authorization, `Bearer ${credential}`);
-  const body = JSON.parse(captured[1].body); assert.deepEqual(Object.keys(body), ["agent", "environment", "input", "stream", "spend_control"]);
+  const body = JSON.parse(captured[1].body); assert.deepEqual(Object.keys(body), ["agent", "environment", "input", "stream", "spend_control", "metadata"]);
+  assert.deepEqual(Object.keys(body.metadata), ["pac_execution"]); assert.match(body.metadata.pac_execution, /^[a-f0-9]{64}$/u);
   assert.deepEqual(body.spend_control, { limit: 1 });
   assert.deepEqual(body.environment, { type: "none" }); assert.equal(body.stream, true);
   assert.equal(body.agent.model, "explicit-test-model"); assert.deepEqual(body.agent.multi_agent, { enabled: false });
