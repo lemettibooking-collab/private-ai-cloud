@@ -265,9 +265,16 @@ test("PG COMMIT ambiguity: acknowledged server commit with lost client acknowled
 });
 test("PG corruption: counter drift/impossible state fails closed before start", async () => {
   const { s, raw, fingerprint } = await prepared("corrupt-counter"), before = await held();
-  await db.admin.query("update executor_exposure_budgets set held_exposure_usd_micros=held_exposure_usd_micros+1 where workspace_id=$1", [live.primaryWorkspace.id]);
-  try { failClosed(await s.commitProviderStart(raw, fingerprint)); assert.equal((await rows("corrupt-counter"))[0].state, "prepared"); }
-  finally { await db.admin.query("update executor_exposure_budgets set held_exposure_usd_micros=$2 where workspace_id=$1", [live.primaryWorkspace.id, before]); }
+  const corrupt = () => db.admin.query("update executor_exposure_budgets set held_exposure_usd_micros=held_exposure_usd_micros+1 where workspace_id=$1", [live.primaryWorkspace.id]);
+  // 0015 now rejects ordinary drift writes. Privileged fault injection is ONLY in this
+  // disposable test database; retain the independent store corruption defense as well.
+  await assert.rejects(corrupt(), (e: { code?: string }) => e.code === "23514");
+  await db.admin.query("alter table executor_exposure_budgets disable trigger executor_budget_held_integrity");
+  try { await corrupt(); failClosed(await s.commitProviderStart(raw, fingerprint)); assert.equal((await rows("corrupt-counter"))[0].state, "prepared"); }
+  finally {
+    await db.admin.query("update executor_exposure_budgets set held_exposure_usd_micros=$2 where workspace_id=$1", [live.primaryWorkspace.id, before]);
+    await db.admin.query("alter table executor_exposure_budgets enable trigger executor_budget_held_integrity");
+  }
 });
 test("PG direct writes: constraints/FKs reject invalid shapes, cross-tenant project, duplicate attempt and missing audit", async () => {
   const { raw } = await prepared("constraints");

@@ -15,7 +15,7 @@ Private AI Cloud is a **vendor-neutral AI Engineering Control Plane**. The canon
 **Current local slices:** AI-040a Local Developer Handoff, AI-041.0 Vendor-Neutral Executor Adapter Contract and AI-041.1 executor transport/exposure bridge IN REVIEW (not DONE); AI-041.1 real dispatch and AI-039.2 Phase B stay blocked, with no inference proof. The full order is in `docs/ROADMAP.md` §9 / §11. M2.2 remains DEFERRED BY OWNER.\
 **First implementation task created by the v1.4 rebase:** AI-041.0.
 
-**Current AI-041.1 exception:** the Owner explicitly excluded the prerequisite independent AI-041.0 / Decomposition gates for this implementation. This is not a PASS declaration. Security invariants are unchanged. AI-041.1 is IN REVIEW; real executor dispatch remains BLOCKED pending current-authority review/integration, sufficient exposure policy, durable reconciliation and approved live smoke.
+**Current AI-041.1 exception:** the Owner explicitly excluded the prerequisite independent AI-041.0 / Decomposition gates for this implementation. This is not a PASS declaration. Security invariants are unchanged. AI-041.1 is IN REVIEW; real executor dispatch remains BLOCKED pending authority/transport integration, outcome-settlement review, sufficient exposure policy, durable reconciliation and approved live smoke.
 
 ## What Exists
 
@@ -49,12 +49,13 @@ Private AI Cloud is a **vendor-neutral AI Engineering Control Plane**. The canon
 
 - AI-041.1b0 Trusted Executor Attempt Identity — DONE / COMMITTED / PUSHED as `2109545f829dfe4e63a23e95301893c534e75947` after independent re-gate. Existing AI-011 attempt identity is derived from separately trusted canonical implementation state; invocation ID remains correlation only.
 - AI-041.1b Durable Executor Start & Exposure Fence — DONE / COMMITTED / PUSHED as `d72a439a456cb1370b49448fb354ea93b381907b`: durable reservation, aggregate serialization, immutable request/attempt journal and conservative holds. See [durable boundary](docs/architecture/durable-executor-start-v1.md).
-- AI-041.1c Durable Current Run / Attempt Authority Binding — IN REVIEW: migration `0014`, trusted register/adjacent-corrective advance/revoke, monotonic durable generation, canonical Run/admission fingerprints and same-transaction current-authority start recheck. Stale factories cannot override revoked/superseded authority. Temporary PostgreSQL evidence only; production/live dispatch remains BLOCKED. No durable AI-011 lifecycle, autonomous cancellation integration or Owner mutation UX is claimed. See [current-authority boundary](docs/architecture/executor-current-authority-v1.md).
+- AI-041.1c Durable Current Run / Attempt Authority Binding — DONE / COMMITTED / PUSHED as `bde59001b1a4bc28582bd6c76b6059d41cdcf74a`: migration `0014`, trusted register/adjacent-corrective advance/revoke, monotonic durable generation, canonical Run/admission fingerprints and same-transaction current-authority start recheck. Stale factories cannot override revoked/superseded authority. No durable AI-011 lifecycle, autonomous cancellation integration or Owner mutation UX is claimed. See [current-authority boundary](docs/architecture/executor-current-authority-v1.md).
+- AI-041.1d Durable Executor Outcome Capture & Exposure Settlement — IN REVIEW: migration `0015`, bounded canonical terminal proposal, restart revalidation, atomic result + settled exposure + one held-counter release + journal. Ambiguous/unknown outcomes retain full exposure with no terminal result. Historical settlement works after authority revoke/advance or Project pause/archive. `settled` means concurrent exposure closed after a durable definitive terminal result, NOT exact monetary cost; observedCostUsdMicros stays null. This pulls forward only executor-specific AI-037.2 recovery; AI-037.2/.3/.8 and M4 remain unfinished. [Outcome boundary and residual debt](docs/architecture/executor-outcome-settlement-v1.md). Production/live dispatch remains BLOCKED.
 
 ## Not Yet Implemented
 
 - Runtime business APIs, and any UI action that starts a run, model, executor or repository change (the only exception is the AI-039.1 Owner-approved planning Run)
-- Enabled/live executor dispatch, complete durable executor lifecycle/reconciliation, ExecutorRouter and ExecutionEnvironment (AI-041.1b is committed; AI-041.1c is IN REVIEW, not live enablement)
+- Enabled/live executor dispatch, complete durable executor lifecycle/reconciliation, ExecutorRouter and ExecutionEnvironment (AI-041.1b/c are committed; AI-041.1d is IN REVIEW, not live enablement)
 - Automated Quality/Security Gate on executor output, and the corrective controller
 - RAG, real external integrations, staging/production deployment
 

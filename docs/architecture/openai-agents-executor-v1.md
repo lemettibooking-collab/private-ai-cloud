@@ -20,9 +20,17 @@ PostgreSQL is now the candidate future financial/start authority, not WeakMap/Se
 
 Production/live dispatch remains **BLOCKED**. The new server-only composition exposes reservation/preparation/cancellation/read operations, but no start issuer or credentials; its invoke method denies. The production transport accepts neither durable capabilities nor caller unlock flags. Live PostgreSQL verification uses no provider network.
 
-## AI-041.1c — Current Run / Attempt Authority — IN REVIEW
+## AI-041.1c — Current Run / Attempt Authority — DONE / COMMITTED / PUSHED
+
+Commit: `bde59001b1a4bc28582bd6c76b6059d41cdcf74a`.
 
 Migration `0014` adds narrow durable current authority, not a second AI-011 lifecycle. Reserve/prepare/start lock and validate the active current generation and canonical Run/admission grant; the exposure permanently binds these facts. Trusted revocation or canonical corrective advancement fences stale factories across processes. Full details and deferred cancellation/Owner integration: [current authority](executor-current-authority-v1.md). No production transport enablement, credentials, network, OAuth or inference is added.
+
+## AI-041.1d — Durable outcome capture / exposure settlement — IN REVIEW
+
+Migration `0015` and the unbound internal server-only outcome ingress capture a bounded canonical definitive proposal and close concurrent held exposure in the same acknowledged transaction. A restart read revalidates the full result through the existing adapter, exact attempt/invocation/repository/request bindings and its digest, without provider redispatch. Revoke/advance/pause/archive after start cannot discard historical output. Ambiguous transport decisions, including failed-shaped `session_budget_exceeded`, keep FULL exposure and no terminal result. The narrow transport observation bridge derives definitive evidence only for coherent success/rejection; failures stay conservative unless a separately trusted producer proves terminality. No existing transport classification is relaxed.
+
+`settled` means exposure closed after a durable definitive terminal result, not exact cost or financial reconciliation. `observedCostUsdMicros` remains null. [Schema, lock graph, restart and future reconciliation limitations](executor-outcome-settlement-v1.md). Production/live dispatch remains BLOCKED; no actual provider reconciliation, Quality Gate, corrective attempt or AI-037.2/.3/.8/M4 completion is claimed.
 
 ## Responsibilities
 

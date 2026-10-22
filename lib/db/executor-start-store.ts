@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { NormalizedExecutorResult } from "../contracts/executor-adapter";
 import type { NormalizedExecutorInvocation, ExecutorAttemptIdentity, ExecutorIdentity, ExecutorRepositoryRef } from "../contracts/executor-adapter";
 import type { ExecutorTarget } from "../executors/executor-start-boundary";
 import type { WorkflowRuntimeDatabase, WorkflowRuntimeSqlClient } from "./workflow-runtime-store";
@@ -21,8 +22,10 @@ import { createOpenAIAgentsCanonicalRequest } from "../executors/openai-agents-e
 import { deriveExecutorAuthorityFacts } from "../executors/executor-current-authority.ts";
 // @ts-expect-error Node direct TypeScript requires the runtime extension.
 import { lockExecutorWorkspaceProject, lockExecutorAuthority, executorAuthorityMatches } from "./executor-current-authority-store.ts";
+// @ts-expect-error Node direct TypeScript requires the runtime extension.
+import { revalidateExecutorOutcome, readExecutorOutcomeEvidence, executorOutcomeJsonLimit } from "../executors/executor-outcome.ts";
 
-export type DurableExecutorState = "reserved" | "prepared" | "start_committed" | "cancelled" | "reconciliation_required";
+export type DurableExecutorState = "reserved" | "prepared" | "start_committed" | "cancelled" | "reconciliation_required" | "settled";
 export type DurableExecutorSnapshot = Readonly<{
   projectId: string; attempt: ExecutorAttemptIdentity; identity: ExecutorIdentity; invocationId: string;
   planId: string; taskId: string; repository: ExecutorRepositoryRef; capability: string; mode: string; target: ExecutorTarget;
@@ -32,13 +35,15 @@ export type DurableExecutorSnapshot = Readonly<{
   observedUsage: Readonly<{ inputTokens: number; outputTokens: number; totalTokens: number }> | null;
   providerConsumedCents: number | null; observedCostUsdMicros: null;
   createdAt: number; updatedAt: number; expiresAt: number; preparedAt: number | null; startedAt: number | null;
+  terminalResultFingerprint: string | null; settledAt: number | null;
 }>;
 export type DurableExecutorStartCapability = Readonly<{ kind: "durable_executor_start" }>;
 export type DurableExecutorDecision = Readonly<{
   verdict: "allow" | "deny";
-  status: "reserved" | "prepared" | "start_committed" | "cancelled" | "recorded" | "observed" | "idempotent" | "denied" | "conflict" | "recovery_required";
+  status: "reserved" | "prepared" | "start_committed" | "cancelled" | "settled" | "recorded" | "observed" | "idempotent" | "denied" | "conflict" | "recovery_required";
   snapshot: DurableExecutorSnapshot | null; startCapability: DurableExecutorStartCapability | null;
 }>;
+export type DurableExecutorOutcomeDecision = DurableExecutorDecision & Readonly<{ normalizedResult: NormalizedExecutorResult | null; resultFingerprint: string | null }>;
 export type ExecutorFinancialPolicy = Readonly<{ maximumExposureUsdMicros: number; totalExposureUsdMicros: number; reservationTtlMs: number }>;
 export type PostgresExecutorConfiguration = Readonly<{
   database: WorkflowRuntimeDatabase; tenant: ResolvedWorkflowRuntimeTenant; projectId: string;
@@ -75,7 +80,8 @@ const rowSelect = `project_key, development_run_id, attempt_number, attempt_kind
   observed_input_tokens::text, observed_output_tokens::text, observed_total_tokens::text, provider_consumed_cents::text,
   floor(extract(epoch from created_at)*1000)::text as created_ms, floor(extract(epoch from updated_at)*1000)::text as updated_ms,
   floor(extract(epoch from expires_at)*1000)::text as expires_ms, floor(extract(epoch from prepared_at)*1000)::text as prepared_ms,
-  floor(extract(epoch from started_at)*1000)::text as started_ms`;
+  floor(extract(epoch from started_at)*1000)::text as started_ms,
+  terminal_result_fingerprint, floor(extract(epoch from settled_at)*1000)::text as settled_ms`;
 
 /** Trusted server port ONLY. No route, network, credential read, retry or production dispatch. */
 export function createPostgresExecutorStartStore(input: unknown) {
@@ -83,7 +89,8 @@ export function createPostgresExecutorStartStore(input: unknown) {
   const connect = c && capturedMethod(c.database, "connect");
   if (!c || !connect || !isResolvedWorkflowRuntimeTenant(c.tenant) || !id(c.projectId) || typeof c.authorizeStart !== "function") throw Error("invalid_durable_executor_configuration");
   const tenant = c.tenant, workspace = tenant.workspaceDatabaseId, projectId = c.projectId, authorizeStart = c.authorizeStart as () => boolean;
-  const configured = createExecutorAdapterContract(c.configuration);
+  const configuration = freezeDeep(boundedData(c.configuration));
+  const configured = createExecutorAdapterContract(configuration);
   if (!configured.adapter) throw Error("invalid_durable_executor_configuration");
   const contract = configured.adapter;
   const authorityFacts = deriveExecutorAuthorityFacts(c.configuration);
@@ -123,7 +130,7 @@ export function createPostgresExecutorStartStore(input: unknown) {
     const held = numeric(row.held_exposure_usd_micros, total);
     // Integrity check under the SAME serialization lock, never an unlocked SUM → INSERT race.
     const sum = await client.query(`/* executor:held-integrity */ select coalesce(sum(maximum_exposure_usd_micros),0)::text as held
-      from executor_attempt_exposures where workspace_id = $1 and state <> 'cancelled'`, [workspace]);
+      from executor_attempt_exposures where workspace_id = $1 and state not in ('cancelled','settled')`, [workspace]);
     requireFact(sum.rowCount === 1 && numeric(sum.rows[0].held, total) === held);
     return held;
   }
@@ -148,18 +155,23 @@ export function createPostgresExecutorStartStore(input: unknown) {
     requireFact((input === null && output === null && tokens === null) || (input !== null && output !== null && tokens === input + output));
     requireFact((state === "reserved" && row.request_fingerprint === null && prepared === null && started === null)
       || (state === "prepared" && fingerprint(row.request_fingerprint) && prepared !== null && started === null)
-      || (["start_committed", "reconciliation_required"].includes(state) && fingerprint(row.request_fingerprint) && prepared !== null && started !== null)
+      || (["start_committed", "reconciliation_required", "settled"].includes(state) && fingerprint(row.request_fingerprint) && prepared !== null && started !== null)
       || (state === "cancelled" && started === null && ((row.request_fingerprint === null && prepared === null) || (fingerprint(row.request_fingerprint) && prepared !== null))));
     requireFact((["reserved", "prepared", "cancelled"].includes(state) && row.reconciliation === "not_started" && input === null && consumed === null)
-      || (state === "start_committed" && ((row.reconciliation === "usage_unknown" && input === null) || (row.reconciliation === "partially_observed" && input !== null)))
+      || (["start_committed", "settled"].includes(state) && ((row.reconciliation === "usage_unknown" && input === null) || (row.reconciliation === "partially_observed" && input !== null)))
       || (state === "reconciliation_required" && row.reconciliation === "reconciliation_required"));
+    // Missing new columns in old test doubles mean NULL, never settlement authority.
+    const settled = nullableNumber(row.settled_ms ?? null), terminal = row.terminal_result_fingerprint ?? null;
+    requireFact(state === "settled" ? fingerprint(terminal) && settled !== null && started !== null && settled >= started && settled === updated && (consumed === null || consumed <= cap)
+      : terminal === null && settled === null);
     return freezeDeep({ projectId, attempt: { ...i.attempt }, identity: { ...i.identity }, invocationId: i.invocationId, planId: i.planId, taskId: i.taskId,
       authorityGeneration: row.authority_generation as number | null, canonicalRunFingerprint: row.canonical_run_fingerprint as string | null,
       admissionFingerprint: row.admission_fingerprint as string | null,
       repository: { ...i.repository }, capability: i.capability, mode: i.mode, target: { ...target }, maximumExposureUsdMicros: amount,
-      heldExposureUsdMicros: state === "cancelled" ? 0 : amount, providerSpendLimitCents: cap, requestFingerprint: row.request_fingerprint as string | null,
+      heldExposureUsdMicros: ["cancelled", "settled"].includes(state) ? 0 : amount, providerSpendLimitCents: cap, requestFingerprint: row.request_fingerprint as string | null,
       state, reconciliation: row.reconciliation as string, observedUsage: input === null ? null : { inputTokens: input, outputTokens: output!, totalTokens: tokens! },
-      providerConsumedCents: consumed, observedCostUsdMicros: null, createdAt: created, updatedAt: updated, expiresAt: expires, preparedAt: prepared, startedAt: started });
+      providerConsumedCents: consumed, observedCostUsdMicros: null, createdAt: created, updatedAt: updated, expiresAt: expires, preparedAt: prepared, startedAt: started,
+      terminalResultFingerprint: terminal as string | null, settledAt: settled });
   }
   async function audit(client: WorkflowRuntimeSqlClient, i: NormalizedExecutorInvocation, row: Record<string, unknown>, operation: string) {
     const r = await client.query(`/* executor:audit */ insert into executor_attempt_events
@@ -178,7 +190,9 @@ export function createPostgresExecutorStartStore(input: unknown) {
     try {
       return await inTransaction(database, async client => {
         if (!await lockExecutorWorkspaceProject(client, tenant, projectId, active)) return denied();
-        const authority = await lockExecutorAuthority(client, workspace, authorityFacts.developmentRunId);
+        // Historical operations use the compatible subsequence workspace → Project → budget → exposure.
+        // Current authority controls START, never receipt of historical output after revocation/advance.
+        const authority = active ? await lockExecutorAuthority(client, workspace, authorityFacts.developmentRunId) : null;
         // Reserve, prepare AND start share the same current-authority predicate under lock.
         // Historical cancel/evidence/read do not reactivate authority and remain usable.
         if (active && (!authority || authority.status !== "active" || !executorAuthorityMatches(authority, projectId, authorityFacts))) return denied("conflict");
@@ -189,12 +203,15 @@ export function createPostgresExecutorStartStore(input: unknown) {
         if (row) {
           requireFact((row.authority_generation === null && row.canonical_run_fingerprint === null && row.admission_fingerprint === null)
             || (integer(row.authority_generation, 1000000) && row.authority_generation > 0 && fingerprint(row.canonical_run_fingerprint) && fingerprint(row.admission_fingerprint)));
+          if (row.authority_generation !== null) requireFact(row.canonical_run_fingerprint === authorityFacts.canonicalRunFingerprint
+            && row.admission_fingerprint === authorityFacts.admissionFingerprint);
           if (active && (row.authority_generation !== authority!.generation
             || row.canonical_run_fingerprint !== authority!.canonicalRunFingerprint || row.admission_fingerprint !== authority!.admissionFingerprint)) return denied("conflict");
           snapshot(row, i);
           const a = await client.query(`/* executor:audit-integrity */ select count(*)::int as count from executor_attempt_events
             where workspace_id = $1 and development_run_id = $2 and attempt_number = $3 and event_version = $4 and state = $5`, [...key(i), row.event_version, row.state]);
           requireFact(a.rowCount === 1 && a.rows[0].count === 1);
+          if (row.state === "settled") await readOutcome(client, i, row);
         }
         return operation(client, i, held, row, authority);
       });
@@ -210,7 +227,7 @@ export function createPostgresExecutorStartStore(input: unknown) {
     return run(raw, true, true, async (client, i, held, row, authority) => {
       if (row) {
         if (numeric(row.maximum_exposure_usd_micros) !== amount) return denied("conflict");
-        if (["start_committed", "reconciliation_required"].includes(row.state as string)) return denied("recovery_required");
+        if (["start_committed", "reconciliation_required", "settled"].includes(row.state as string)) return denied("recovery_required");
         if (row.state === "cancelled" || await clock(client) >= numeric(row.expires_ms)) return denied();
         return allowed("idempotent", snapshot(row, i));
       }
@@ -255,7 +272,7 @@ export function createPostgresExecutorStartStore(input: unknown) {
     try { if (Reflect.apply(authorizeStart, undefined, []) !== true) return denied(); } catch { return denied(); }
     const result = await run(raw, false, true, async (client, i, _held, row) => {
       if (!row) return denied();
-      if (["start_committed", "reconciliation_required"].includes(row.state as string)) return denied("recovery_required");
+      if (["start_committed", "reconciliation_required", "settled"].includes(row.state as string)) return denied("recovery_required");
       if (row.state !== "prepared" || row.request_fingerprint !== requestFingerprint || await clock(client) >= numeric(row.expires_ms)) return denied();
       const u = await client.query(`/* executor:start */ update executor_attempt_exposures set state = 'start_committed', reconciliation = 'usage_unknown',
         started_at = statement_timestamp(), updated_at = statement_timestamp(), event_version = event_version + 1
@@ -288,11 +305,14 @@ export function createPostgresExecutorStartStore(input: unknown) {
     return run(raw, false, false, async (client, i, _held, row) => {
       if (!row || !["start_committed", "reconciliation_required"].includes(row.state as string)) return denied();
       if (row.state === "reconciliation_required") return allowed("idempotent", snapshot(row, i));
-      const u = await client.query(`/* executor:reconcile */ update executor_attempt_exposures set state = 'reconciliation_required', reconciliation = 'reconciliation_required',
-        updated_at = clock_timestamp(), event_version = event_version + 1 where workspace_id = $1 and development_run_id = $2 and attempt_number = $3 and state = 'start_committed'`, key(i));
-      requireFact(u.rowCount === 1); const fresh = await read(client, i); requireFact(fresh); await audit(client, i, fresh!, "reconcile");
+      const fresh = await reconcile(client, i);
       return allowed("recorded", snapshot(fresh!, i));
     });
+  }
+  async function reconcile(client: WorkflowRuntimeSqlClient, i: NormalizedExecutorInvocation) {
+    const u = await client.query(`/* executor:reconcile */ update executor_attempt_exposures set state = 'reconciliation_required', reconciliation = 'reconciliation_required',
+      updated_at = clock_timestamp(), event_version = event_version + 1 where workspace_id = $1 and development_run_id = $2 and attempt_number = $3 and state = 'start_committed'`, key(i));
+    requireFact(u.rowCount === 1); const fresh = await read(client, i); requireFact(fresh); await audit(client, i, fresh!, "reconcile"); return fresh!;
   }
   async function recordEvidence(raw: unknown, evidenceInput: unknown): Promise<DurableExecutorDecision> {
     let e: Record<string, unknown>;
@@ -322,5 +342,89 @@ export function createPostgresExecutorStartStore(input: unknown) {
     });
   }
   const inspect = (raw: unknown): Promise<DurableExecutorDecision> => run(raw, false, false, async (_client, i, _held, row) => row ? allowed("observed", snapshot(row, i)) : denied());
-  return Object.freeze({ reserve, bindRequest, commitProviderStart, cancel, markReconciliationRequired, recordEvidence, inspect, realDispatch: "blocked" as const });
+  // Restart read independently validates canonical payload, derived bindings, digest, metadata
+  // and the cyclic DB relation. It never reconstructs provider-start authority.
+  async function readOutcome(client: WorkflowRuntimeSqlClient, i: NormalizedExecutorInvocation, row: Record<string, unknown>) {
+    const r = await client.query(`/* executor:outcome-read */ select request_fingerprint,result_fingerprint,outcome,failure_code,payload,provenance,exposure_state,
+      floor(extract(epoch from recorded_at)*1000)::text as recorded_ms from executor_attempt_results
+      where workspace_id=$1 and development_run_id=$2 and attempt_number=$3 limit 2`, key(i));
+    requireFact(r.rowCount === 1 && r.rows.length === 1); const saved = r.rows[0];
+    requireFact(typeof saved.payload === "string" && Buffer.byteLength(saved.payload as string, "utf8") <= executorOutcomeJsonLimit);
+    const validated = revalidateExecutorOutcome(configuration, invocationInput(i), JSON.parse(saved.payload as string));
+    requireFact(validated && validated.normalizedResult.status !== "outcome_unknown" && saved.exposure_state === "settled"
+      && saved.request_fingerprint === row.request_fingerprint && saved.result_fingerprint === row.terminal_result_fingerprint
+      && saved.result_fingerprint === validated.resultFingerprint && saved.payload === validated.canonicalJson
+      && saved.outcome === validated.normalizedResult.status && saved.failure_code === validated.normalizedResult.failureCode
+      && numeric(saved.recorded_ms) === numeric(row.settled_ms)
+      && (saved.provenance === "definitive_terminal" || (saved.provenance === "rejected_before_execution" && saved.outcome === "rejected")
+        || (saved.provenance === "not_transmitted" && saved.outcome === "failed")));
+    return validated!;
+  }
+  const invocationInput = (i: NormalizedExecutorInvocation) => ({ schemaVersion: i.schemaVersion, identity: i.identity, invocationId: i.invocationId,
+    planId: i.planId, taskId: i.taskId, repository: i.repository, capability: i.capability, mode: i.mode, attempt: i.attempt });
+  async function recordDefinitiveOutcomeAndSettle(raw: unknown, requestFingerprint: unknown, receipt: unknown): Promise<DurableExecutorOutcomeDecision> {
+    let result: NormalizedExecutorResult | null = null, resultFingerprint: string | null = null;
+    const d = !fingerprint(requestFingerprint) ? denied() : await run(raw, false, false, async (client, i, _held, row) => {
+      const evidence = readExecutorOutcomeEvidence(receipt, i, requestFingerprint);
+      if (!evidence || !row || row.request_fingerprint !== requestFingerprint) return denied("conflict");
+      if (row.state === "settled") {
+        const saved = await readOutcome(client, i, row);
+        if (evidence.terminality === "ambiguous" || saved.resultFingerprint !== evidence.resultFingerprint) return denied("conflict");
+        const previous = snapshot(row, i);
+        if ((evidence.providerConsumedCents !== null && evidence.providerConsumedCents !== previous.providerConsumedCents)
+          || (evidence.usage !== null && JSON.stringify(evidence.usage) !== JSON.stringify(previous.observedUsage))) return denied("conflict");
+        result = saved.normalizedResult; resultFingerprint = saved.resultFingerprint;
+        return allowed("idempotent", snapshot(row, i));
+      }
+      if (!["start_committed", "reconciliation_required"].includes(row.state as string)) return denied();
+      if (evidence.terminality === "ambiguous") {
+        if (row.state === "start_committed") await reconcile(client, i);
+        return denied("recovery_required"); // Durable ambiguity, no terminal row, FULL exposure.
+      }
+      const validated = revalidateExecutorOutcome(configuration, invocationInput(i), evidence.normalizedResult);
+      if (!validated || validated.normalizedResult.status === "outcome_unknown" || validated.resultFingerprint !== evidence.resultFingerprint) return denied();
+      const previous = snapshot(row, i), usage = evidence.usage ?? previous.observedUsage;
+      const consumed = evidence.providerConsumedCents ?? previous.providerConsumedCents;
+      if ((usage && previous.observedUsage && (usage.inputTokens < previous.observedUsage.inputTokens || usage.outputTokens < previous.observedUsage.outputTokens))
+        || (consumed !== null && (consumed > previous.providerSpendLimitCents || (previous.providerConsumedCents !== null && consumed < previous.providerConsumedCents)))) {
+        if (row.state === "start_committed") await reconcile(client, i);
+        return denied("recovery_required");
+      }
+      // INSERT precedes release. Deferred FKs and aggregate integrity require ALL four facts
+      // at COMMIT. No success/result escapes if the COMMIT acknowledgement is lost.
+      const inserted = await client.query(`/* executor:outcome-insert */ insert into executor_attempt_results
+        (workspace_id,development_run_id,attempt_number,request_fingerprint,result_fingerprint,outcome,failure_code,payload,provenance)
+        values($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [...key(i), requestFingerprint, validated.resultFingerprint,
+        validated.normalizedResult.status, validated.normalizedResult.failureCode, validated.canonicalJson, evidence.terminality]);
+      requireFact(inserted.rowCount === 1);
+      const settled = await client.query(`/* executor:settle */ update executor_attempt_exposures set state='settled',terminal_result_fingerprint=$4,
+        settled_at=r.recorded_at,updated_at=r.recorded_at,event_version=event_version+1,
+        observed_input_tokens=$5,observed_output_tokens=$6,observed_total_tokens=$7,provider_consumed_cents=$8,reconciliation=$9
+        from executor_attempt_results r where executor_attempt_exposures.workspace_id=$1 and executor_attempt_exposures.development_run_id=$2
+          and executor_attempt_exposures.attempt_number=$3 and executor_attempt_exposures.state in ('start_committed','reconciliation_required')
+          and r.workspace_id=$1 and r.development_run_id=$2 and r.attempt_number=$3 and r.result_fingerprint=$4`,
+        [...key(i), validated.resultFingerprint, usage?.inputTokens ?? null, usage?.outputTokens ?? null, usage?.totalTokens ?? null,
+          consumed, usage === null ? "usage_unknown" : "partially_observed"]);
+      requireFact(settled.rowCount === 1);
+      const released = await client.query(`/* executor:settlement-release */ update executor_exposure_budgets
+        set held_exposure_usd_micros=held_exposure_usd_micros-$2,updated_at=clock_timestamp()
+        where workspace_id=$1 and held_exposure_usd_micros >= $2`, [workspace, previous.maximumExposureUsdMicros]);
+      requireFact(released.rowCount === 1);
+      const fresh = await read(client, i); requireFact(fresh); await audit(client, i, fresh!, "settle");
+      const saved = await readOutcome(client, i, fresh!); result = saved.normalizedResult; resultFingerprint = saved.resultFingerprint;
+      return allowed("settled", snapshot(fresh!, i));
+    });
+    return freezeDeep({ ...d, normalizedResult: d.verdict === "allow" ? result : null, resultFingerprint: d.verdict === "allow" ? resultFingerprint : null });
+  }
+  async function inspectOutcome(raw: unknown): Promise<DurableExecutorOutcomeDecision> {
+    let result: NormalizedExecutorResult | null = null, resultFingerprint: string | null = null;
+    const d = await run(raw, false, false, async (client, i, _held, row) => {
+      if (!row || row.state !== "settled") return denied("recovery_required");
+      const saved = await readOutcome(client, i, row); result = saved.normalizedResult; resultFingerprint = saved.resultFingerprint;
+      return allowed("observed", snapshot(row, i));
+    });
+    return freezeDeep({ ...d, normalizedResult: d.verdict === "allow" ? result : null, resultFingerprint: d.verdict === "allow" ? resultFingerprint : null });
+  }
+  return Object.freeze({ reserve, bindRequest, commitProviderStart, cancel, markReconciliationRequired, recordEvidence, inspect,
+    recordDefinitiveOutcomeAndSettle, inspectOutcome, realDispatch: "blocked" as const });
 }
