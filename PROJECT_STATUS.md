@@ -4,6 +4,18 @@
 
 Private AI Cloud is a **vendor-neutral AI Engineering Control Plane**. The canonical status lives in [`docs/ROADMAP.md`](docs/ROADMAP.md). This file is a short summary and does not override the roadmap.
 
+**AI-042.1 task checkpoint (2026-10-23):** the Owner accepted AI-041.1 at
+`c9c04d94217847e6bbe5066f54f8d69897693862`; the earlier AI-041.1 IN REVIEW
+entries below describe the preceding implementation checkpoints, not live
+enablement. AI-042.1 / AI-042.1a Sandbox Execution Contract is **IN REVIEW**: pure
+admission/lifecycle/policy/evidence and persistence/CAS proposal schema only.
+No OS sandbox, durable adapter, command execution, physical cleanup or enforced
+CPU/RAM/network limits. Corrective coverage adds cleanup-only authority across
+policy rotation, resource-generation fencing, coherent maxFiles and normative
+HTTPS-only network policy with pure DNS/peer probes. All contract decisions deny runtime dispatch capability.
+Production/live dispatch remains **BLOCKED**; AI-042.2 is not started.
+See [contract v1](docs/architecture/sandbox-execution-contract-v1.md).
+
 | Milestone | Status |
 |---|---|
 | M1 Real Money Safety | DONE |

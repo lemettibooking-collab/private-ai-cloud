@@ -907,6 +907,25 @@ The safety requirements are kept as environment capability/policy requirements t
 - budgets and changed-file limits
 - artifact and verification-output collection back to the control plane
 
+#### AI-042.1 / AI-042.1a — Sandbox Execution Contract — IN REVIEW
+
+Owner-authorized contract/policy foundation on accepted AI-041.1 baseline
+`c9c04d94217847e6bbe5066f54f8d69897693862`. Pure provider-neutral spec,
+bounded admission, lifecycle/evidence, command/path/network/secret/resource
+policies, restart-validated snapshot and CAS/fencing proposal contract.
+AI-042.1a corrective separates historical validation/current execution admission
+and resource-generation-bound cleanup-only authority; unifies effective maxFiles
+at platform max 64; defines HTTPS-only Network Contract v1 with public-peer,
+DNS-rebinding/TLS/platform checks and deny-redirect semantics; and adds isolated
+mutation-sensitive regressions. These remain proposals/pure probes, not runtime.
+It does not create a sandbox or acquire a durable lease. Runtime/resource/network
+enforcement, physical cleanup and persistence adapter are **not implemented**;
+all decisions retain `runtimeDispatchAllowed: false`. No migration, real worktree,
+container, shell/provider/OAuth call or production enablement. Production/live
+dispatch stays **BLOCKED**. AI-042.2 requires a separate task and gate; this slice
+does not change the managed-first environment strategy or build an agent loop.
+See [contract, trust boundary and residual limitations](architecture/sandbox-execution-contract-v1.md).
+
 ### Removed from PAC-owned scope (v1.4)
 
 | Former/implicit plan | v1.4 decision | Where it lives instead |
