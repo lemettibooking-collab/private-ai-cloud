@@ -4,7 +4,18 @@
 
 Private AI Cloud is a **vendor-neutral AI Engineering Control Plane**. The canonical status lives in [`docs/ROADMAP.md`](docs/ROADMAP.md). This file is a short summary and does not override the roadmap.
 
-**AI-042.1 task checkpoint (2026-10-23):** the Owner accepted AI-041.1 at
+**AI-042.2 task checkpoint (2026-10-24):** AI-042.1/042.1a are Owner-accepted
+and committed at `f63e79b8cfb8e3ae1c369b7f31c00bf9944ca36e`.
+AI-042.2 Local Git Worktree Isolation is **IN REVIEW**: physical detached local
+worktree creation from exact baseline, resource identity, cleanup-only removal,
+factual restart/discovery and a mandatory trusted storage/authority port.
+No production store/composition or VPS-safety claim; restart/concurrency evidence
+uses a disposable durable fixture port. No container, coding agent, generic shell,
+CPU/RAM/network/DNS enforcement, secrets or provider/live dispatch.
+`runtimeDispatchAllowed=false`; production/live dispatch remains **BLOCKED**.
+See [worktree boundary and limits](docs/architecture/git-worktree-isolation-v1.md).
+
+**Historical AI-042.1 implementation checkpoint (2026-10-23):** the Owner accepted AI-041.1 at
 `c9c04d94217847e6bbe5066f54f8d69897693862`; the earlier AI-041.1 IN REVIEW
 entries below describe the preceding implementation checkpoints, not live
 enablement. AI-042.1 / AI-042.1a Sandbox Execution Contract is **IN REVIEW**: pure
@@ -13,7 +24,7 @@ No OS sandbox, durable adapter, command execution, physical cleanup or enforced
 CPU/RAM/network limits. Corrective coverage adds cleanup-only authority across
 policy rotation, resource-generation fencing, coherent maxFiles and normative
 HTTPS-only network policy with pure DNS/peer probes. All contract decisions deny runtime dispatch capability.
-Production/live dispatch remains **BLOCKED**; AI-042.2 is not started.
+At that checkpoint production/live dispatch remained **BLOCKED** and AI-042.2 was not started.
 See [contract v1](docs/architecture/sandbox-execution-contract-v1.md).
 
 | Milestone | Status |

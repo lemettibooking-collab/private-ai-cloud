@@ -907,7 +907,7 @@ The safety requirements are kept as environment capability/policy requirements t
 - budgets and changed-file limits
 - artifact and verification-output collection back to the control plane
 
-#### AI-042.1 / AI-042.1a — Sandbox Execution Contract — IN REVIEW
+#### AI-042.1 / AI-042.1a — Sandbox Execution Contract — CLOSED
 
 Owner-authorized contract/policy foundation on accepted AI-041.1 baseline
 `c9c04d94217847e6bbe5066f54f8d69897693862`. Pure provider-neutral spec,
@@ -924,7 +924,29 @@ all decisions retain `runtimeDispatchAllowed: false`. No migration, real worktre
 container, shell/provider/OAuth call or production enablement. Production/live
 dispatch stays **BLOCKED**. AI-042.2 requires a separate task and gate; this slice
 does not change the managed-first environment strategy or build an agent loop.
+Owner accepted and integrated this contract foundation as
+`f63e79b8cfb8e3ae1c369b7f31c00bf9944ca36e`. It does not enable live dispatch.
 See [contract, trust boundary and residual limitations](architecture/sandbox-execution-contract-v1.md).
+
+#### AI-042.2 — Git Worktree Isolation — IN REVIEW
+
+Physical local detached Git worktree lifecycle behind WorktreePort: trusted
+repository identity, exact local immutable baseline and post-create HEAD checks,
+private generation-specific paths, structured resource/evidence records,
+cleanup-only historical authority, guarded removal and factual restart/discovery.
+Primary checkout/HEAD/index/dirty files and protected branches remain untouched.
+No remote Git, generic command runner, coding agent or provider dispatch.
+
+The persistence/authority port is mandatory; no production durable adapter,
+migration or service composition is supplied. Real temporary Git tests use an
+external disposable durable fixture journal; this is not VPS/concurrency/store
+production readiness. Future store must durably CAS intents, exclude all writers
+across processes and never span Git work with an open DB transaction. Known
+same-UID filesystem TOCTOU and resource quota limits are explicit.
+Docker/Podman, agent process, CPU/RAM/network/DNS enforcement, secrets and live
+execution remain absent; `runtimeDispatchAllowed=false`. Production/live dispatch
+stays **BLOCKED**. Independent re-gate is required before advancing.
+See [physical worktree boundary, recovery and limits](architecture/git-worktree-isolation-v1.md).
 
 ### Removed from PAC-owned scope (v1.4)
 
