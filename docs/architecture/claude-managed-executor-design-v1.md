@@ -735,8 +735,20 @@ durable prerequisites and this document's design decisions remain unchanged.
 
 ### AI-041.2b1 implementation checkpoint
 
-**IN REVIEW**: [predecessor quiescence barrier](executor-predecessor-quiescence-v1.md).
+**DONE**, integrated at `fca80a5a272ef734295cd250432f42ea2333db3b` after independent PASS:
+[predecessor quiescence barrier](executor-predecessor-quiescence-v1.md).
 Shared reserve/prepare/start predicate implements §11 without blocking factual
 authority advance or historical settlement. No migration/remote stop/Claude/live
 enablement. Separately gated AI-041.2b2 provider-constraint migration remains
 required before Claude fake adapter and cross-provider proof.
+
+### AI-041.2b2 implementation checkpoint
+
+**IN REVIEW**: [append-only provider constraint migration](executor-provider-constraint-migration-v1.md).
+`0017` changes only the parent provider CHECK from OpenAI-only to exactly
+`openai, anthropic`. Identity schema, financial semantics, correlation bytes and
+production TypeScript remain unchanged. Disposable PostgreSQL proofs use a
+test-only synthetic Anthropic policy, not a Claude protocol or transport.
+AI-041.2b and AI-041.2 remain NOT DONE. AI-041.2c fake adapter has not started
+and requires an independent migration gate first. `runtimeDispatchAllowed=false`;
+production/live dispatch remains BLOCKED.

@@ -283,7 +283,8 @@ test("PG populated 0015 → 0016 preserves terminal results, journals, exposures
   const admin = live.adminClient(live.databaseUrl(name)); await admin.connect();
   try {
     const migrations = readdirSync(new URL("../../db/migrations/", import.meta.url)).filter(p => /^\d{4}_.*\.sql$/u.test(p)).sort();
-    assert.equal(migrations.at(-1), "0016_executor_provider_execution_identity.sql");
+    assert.equal(migrations[15], "0016_executor_provider_execution_identity.sql");
+    assert.equal(migrations.at(-1), "0017_executor_provider_constraint.sql");
     for (const path of migrations.slice(0, 15)) await admin.query(readFileSync(new URL(`../../db/migrations/${path}`, import.meta.url), "utf8"));
     await live.insertWorkspace(admin, live.primaryWorkspace);
     await admin.query("insert into projects(workspace_id,project_key,display_name) values($1,'project-a','Legacy terminal')", [live.primaryWorkspace.id]);
@@ -348,6 +349,8 @@ test("PG seam: bad correlation preparation retains full exposure with no identit
   assert.equal(durable.consumeDurableExecutorStartCapability(f.start), null);
 });
 test("PG seam: future provider is representable but cannot reuse reserved OpenAI identity; schema stays unchanged", async () => {
+  const checks = () => db.admin.query("select pg_get_constraintdef(oid) as definition from pg_constraint where conrelid='executor_attempt_exposures'::regclass and contype='c' order by 1");
+  const before = (await checks()).rows;
   const f = await setup("policy-provider-swap");
   await f.store.reserve(f.raw, { maximumExposureUsdMicros: 10000 });
   const target = { ...f.config.target, providerId: "anthropic" };
@@ -357,6 +360,8 @@ test("PG seam: future provider is representable but cannot reuse reserved OpenAI
   const result = await s.bindRequest(f.raw, context()); assert.equal(result.status, "conflict");
   assert.equal(result.snapshot, null); assert.equal(result.startCapability, null);
   assert.equal((await f.store.inspect(f.raw)).snapshot?.state, "reserved");
-  const constraints = (await db.admin.query("select pg_get_constraintdef(oid) as definition from pg_constraint where conrelid='executor_attempt_exposures'::regclass and contype='c'")).rows;
-  assert.ok(constraints.some((r: { definition: string }) => r.definition.includes("provider_id = 'openai'")));
+  const constraints = (await checks()).rows;
+  assert.deepEqual(constraints, before);
+  assert.deepEqual(constraints.filter((r: { definition: string }) => r.definition.includes("provider_id")),
+    [{ definition: "CHECK ((provider_id = ANY (ARRAY['openai'::text, 'anthropic'::text])))" }]);
 });

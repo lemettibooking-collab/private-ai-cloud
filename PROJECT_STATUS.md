@@ -39,10 +39,14 @@ suitable supported interface; it is not an unconditional dependency.
 
 **AI-041.2a — DONE:** provider-neutral request/correlation seam and byte-compatible
 OpenAI extraction integrated at `f782e1e438b4030efeba1bd70b90485ab71a52e3` after independent PASS.
-**AI-041.2b1 — IN REVIEW:** [predecessor barrier](docs/architecture/executor-predecessor-quiescence-v1.md)
+**AI-041.2b1 — DONE**, integrated at `fca80a5a272ef734295cd250432f42ea2333db3b` after independent PASS:
+[predecessor barrier](docs/architecture/executor-predecessor-quiescence-v1.md)
 for reserve/prepare/start; factual authority advance and historical settlement remain allowed.
-AI-041.2 remains NOT DONE. No Claude/migration/live enablement; independently gated
-AI-041.2b2 provider-constraint migration remains the next prerequisite.
+**AI-041.2b2 — IN REVIEW:** append-only [provider CHECK migration](docs/architecture/executor-provider-constraint-migration-v1.md)
+`0017` permits exactly `openai, anthropic` in the shared parent row; no identity,
+financial or production TypeScript changes. AI-041.2b and AI-041.2 remain NOT DONE.
+No Claude implementation or live enablement. AI-041.2c Claude Managed Agents Fake
+Adapter may start only after the independent migration gate passes.
 
 **Intended execution path before AI-052:** managed Codex/OpenAI and Claude,
 only through factually supported, policy-compliant provider-managed environments

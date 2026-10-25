@@ -905,11 +905,15 @@ semantics remain unchanged. This task closes implementation/review, not live acc
 
 **AI-041.2a — DONE** at `f782e1e438b4030efeba1bd70b90485ab71a52e3` after independent PASS:
 [provider-neutral request seam](architecture/executor-provider-request-v1.md), unchanged OpenAI bytes.
-**AI-041.2b1 — IN REVIEW:** [predecessor quiescence barrier](architecture/executor-predecessor-quiescence-v1.md)
-over shared durable start/settlement facts. AI-041.2 remains NOT DONE; no Claude,
-migration or live grant. AI-041.2b2 append-only provider-constraint migration is a
-separate next prerequisite before Claude fake adapter/portability proof. Overall
-roadmap ordering and production/live BLOCKED status are unchanged.
+**AI-041.2b1 — DONE**, integrated at `fca80a5a272ef734295cd250432f42ea2333db3b` after independent PASS:
+[predecessor quiescence barrier](architecture/executor-predecessor-quiescence-v1.md)
+over shared durable start/settlement facts.
+**AI-041.2b2 — IN REVIEW:** append-only [provider CHECK migration](architecture/executor-provider-constraint-migration-v1.md)
+`0017`, exact `openai, anthropic` domain; identity/finance/runtime unchanged.
+AI-041.2b and AI-041.2 remain NOT DONE. AI-041.2c Claude Managed Agents Fake
+Adapter is next only after an independent migration gate; it has not started.
+Overall v1.5 ordering, `runtimeDispatchAllowed=false` and production/live BLOCKED
+status are unchanged. Schema eligibility is not a provider execution grant.
 
 Next active development target after integrated AI-042.2. Connect a genuinely
 independent second executor and prove portability without redesigning the PAC
