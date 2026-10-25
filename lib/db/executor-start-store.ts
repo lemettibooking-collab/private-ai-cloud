@@ -27,6 +27,8 @@ import { lockExecutorWorkspaceProject, lockExecutorAuthority, executorAuthorityM
 import { revalidateExecutorOutcome, readExecutorOutcomeEvidence, executorOutcomeJsonLimit } from "../executors/executor-outcome.ts";
 // @ts-expect-error Node direct TypeScript requires the runtime extension.
 import { createExecutorProviderIdentityOperations } from "./executor-provider-identity-store.ts";
+// @ts-expect-error Node direct TypeScript requires the runtime extension.
+import { executorPredecessorsClear } from "./executor-predecessor-barrier.ts";
 
 export type DurableExecutorState = "reserved" | "prepared" | "start_committed" | "cancelled" | "reconciliation_required" | "settled";
 export type DurableExecutorSnapshot = Readonly<{
@@ -203,6 +205,9 @@ export function createPostgresExecutorStartStore(input: unknown) {
         if (active && (!authority || authority.status !== "active" || !executorAuthorityMatches(authority, projectId, authorityFacts))) return denied("conflict");
         const held = await locks(client, initialize); if (held === null) return denied();
         if (uncertain) return denied("recovery_required");
+        // One shared barrier for reserve/prepare/start, AFTER budget serialization.
+        // Historical capture/settlement bypasses it and can close the predecessor hold.
+        if (active && !await executorPredecessorsClear(client, workspace, i.attempt.developmentRunId, i.attempt.number)) return denied("recovery_required");
         const row = await read(client, i);
         if (row && !matches(row, i)) return denied("conflict");
         if (row) {

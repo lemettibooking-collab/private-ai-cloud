@@ -727,7 +727,16 @@ READY FOR AI-041.2 IMPLEMENTATION TASK AUTHORING
 
 ### AI-041.2a implementation checkpoint
 
-**IN REVIEW**: [request/correlation seam v1](executor-provider-request-v1.md).
+**DONE**, integrated at `f782e1e438b4030efeba1bd70b90485ab71a52e3` after independent PASS:
+[request/correlation seam v1](executor-provider-request-v1.md).
 Pure OpenAI preparation is extracted behind the common trusted policy without
 changing historical bytes. No Claude/migration/live authorization; the separate
 durable prerequisites and this document's design decisions remain unchanged.
+
+### AI-041.2b1 implementation checkpoint
+
+**IN REVIEW**: [predecessor quiescence barrier](executor-predecessor-quiescence-v1.md).
+Shared reserve/prepare/start predicate implements §11 without blocking factual
+authority advance or historical settlement. No migration/remote stop/Claude/live
+enablement. Separately gated AI-041.2b2 provider-constraint migration remains
+required before Claude fake adapter and cross-provider proof.

@@ -903,11 +903,13 @@ semantics remain unchanged. This task closes implementation/review, not live acc
 
 ### AI-041.2 — Second Vendor / Portability Proof — NEXT
 
-**AI-041.2a — IN REVIEW:** narrow provider-neutral request/correlation extraction
-with unchanged OpenAI bytes, following accepted research/design at `1acd52cf791d67e7dd63dbac0b9f75ed4608bfe3`.
-No Claude implementation, migration or live grant. Predecessor-quiescence barrier
-and append-only provider constraint remain separate prerequisites; sequencing is
-unchanged. [Seam v1](architecture/executor-provider-request-v1.md).
+**AI-041.2a — DONE** at `f782e1e438b4030efeba1bd70b90485ab71a52e3` after independent PASS:
+[provider-neutral request seam](architecture/executor-provider-request-v1.md), unchanged OpenAI bytes.
+**AI-041.2b1 — IN REVIEW:** [predecessor quiescence barrier](architecture/executor-predecessor-quiescence-v1.md)
+over shared durable start/settlement facts. AI-041.2 remains NOT DONE; no Claude,
+migration or live grant. AI-041.2b2 append-only provider-constraint migration is a
+separate next prerequisite before Claude fake adapter/portability proof. Overall
+roadmap ordering and production/live BLOCKED status are unchanged.
 
 Next active development target after integrated AI-042.2. Connect a genuinely
 independent second executor and prove portability without redesigning the PAC
