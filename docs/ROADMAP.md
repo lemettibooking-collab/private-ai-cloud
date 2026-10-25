@@ -4,8 +4,8 @@
 **Date:** 2026-10-25\
 **Status:** AUTHORITATIVE / CURRENT\
 **Revision:** Owner-approved private execution sequencing (not an architecture rebase)\
-**Execution status aligned:** 2026-10-25 (post AI-042.2)\
-**Integrated checkpoint:** `47212635607c6c7a37f2af4a56f548c793af444a`\
+**Execution status aligned:** 2026-10-25 (post AI-041.2; B2 candidate)\
+**Integrated checkpoint:** `46456844aac0251763d41277decfa066cdfc65cf`\
 **Canonical source:** `docs/ROADMAP.md`
 
 > This Markdown file is the source of truth for the Private AI Cloud development roadmap. PDF versions are generated snapshots for reading, sharing, and review. If a PDF or an older roadmap conflicts with `docs/ROADMAP.md`, this file takes precedence until the Owner approves a newer roadmap version.
@@ -212,7 +212,8 @@ The census recorded the current hardening debt and moved development to mileston
 - **AI-042.1 / AI-042.1a Sandbox Execution Contract — DONE** (`f63e79b8cfb8e3ae1c369b7f31c00bf9944ca36e`; accepted pure contract, not physical enforcement)
 - **AI-042.2 Git Worktree Isolation — DONE** (`47212635607c6c7a37f2af4a56f548c793af444a`; reviewed local physical adapter behind mandatory trusted storage/authority port, not production runtime readiness)
 - **AI-042 Execution Environment — PARTIAL / IN PROGRESS** (`runtimeDispatchAllowed=false`; production/live dispatch BLOCKED)
-- **AI-041.2 Second Vendor / Portability Proof — NEXT** (next development target; preferred Claude candidate remains conditional on supported interface/access research)
+- **AI-041.2 Second Vendor / Portability Proof — DONE** (`46456844aac0251763d41277decfa066cdfc65cf`; consolidated independent PASS/integration; fake execution, not live enablement)
+- **B2 AI-041.3 + minimal managed AI-042 closure — READY FOR CONSOLIDATED INDEPENDENT RE-GATE** (policy-only candidate; neither stage is declared DONE by its author)
 - **AI-052 Private Execution Environment — PLANNED after AI-051** (first production-capable PAC-owned private/self-hosted coding environment; no implementation/dispatch authorization now)
 - **Roadmap v1.5 — Owner-approved private execution sequencing** (current; managed paths first, AI-052 after VPS + Telegram, local/VPS/private coding blocked until its gates)
 - **Roadmap Rebase v1.4 — preserved vendor-neutral architecture baseline** (`docs/ROADMAP_REBASE_V1.4.md`; historical rebase, not repeated by v1.5)
@@ -228,7 +229,7 @@ M1 Real Money Safety is DONE. The M1 Roadmap Review Gate first found one blocker
 | M1. Real Money Safety | DONE | Safely spend real money on model calls | No automatic duplicate paid dispatch; safe recovery path; timeout/lease guard; pool guard; minimum observability |
 | M2. Direct Model Provider Capability | IN REVIEW (M2.2 deferred by Owner) | Connect a real model through the `ModelProvider` abstraction | Real usage/cost/latency recorded; persistence failures do not silently create a second provider call |
 | M3. Owner Product | ACTIVE | Useful Projects-first Owner experience | Owner can understand projects, runs, approvals, blockers, cost and roadmap without tenant bypass |
-| M4. Vendor-Neutral Executor Platform | IN PROGRESS (AI-041.2 NEXT) | Replaceable managed executors behind `ExecutorAdapter`, routed by `ExecutorRouter`, over an `ExecutionEnvironment` abstraction | First executor works in the production path; a second, different managed executor proves portability without pipeline change |
+| M4. Vendor-Neutral Executor Platform | IN PROGRESS (AI-041.2 DONE; B2 Router/managed policy awaiting re-gate) | Replaceable managed executors behind `ExecutorAdapter`, routed by `ExecutorRouter`, over an `ExecutionEnvironment` abstraction | First executor works in the production path; a second, different managed executor proves portability without pipeline change |
 | M5. Roadmap-Driven Autonomy | REBASED in v1.4 | Deterministic control-plane controller advances an executable roadmap through executors (no PAC-owned generic agent loop) | No manual “go next” between ordinary technical steps; Owner appears only at gates |
 | M6. Automated Engineering Proof | PLANNED | Real Smart Algorithms feature → verified PR | Full pipeline passes; switching executor needs no pipeline change |
 | M7. Staging / Hardening | PLANNED (REBASED) | Production-like control-plane infrastructure | CI/CD, observability, TLS, backups, security and deployment gates |
@@ -821,8 +822,9 @@ Additional rules:
 M4 builds the executor platform, not an agent runtime. PAC owns the request, policy, routing, evidence, quality, security, approval and audit around execution. The selected executor owns how it reasons, which tools it calls in its own loop, its context management, its subagents and (when managed) its sandbox. Design input: `docs/architecture/executor-adapter-strategy-v0.1.md`.
 
 Current checkpoint: AI-041.1 and AI-042.1/042.1a/042.2 are **DONE** within
-their accepted slices; M4 and AI-042 overall are not DONE. AI-041.2 is **NEXT**,
-then AI-041.3 and minimal **managed** ExecutionEnvironment closure (§18). Production/live
+their accepted slices; M4 and AI-042 overall are not DONE. AI-041.2 is **DONE**;
+B2 combines AI-041.3 and minimal **managed** ExecutionEnvironment closure (§18),
+awaiting consolidated independent re-gate. Production/live
 dispatch remains **BLOCKED**; local worktree readiness is not execution authority.
 
 `PAC → ExecutorRouter → ExecutorAdapter → { OpenAIAgentsExecutor | ClaudeCodeExecutor | QwenExecutor | DeepSeekExecutor | LocalExecutor | future }`
@@ -901,7 +903,7 @@ approved financial policy and separately approved live smoke. The original live
 exit criterion is not met or claimed; FeaturePlan, QA, evidence and Owner approval
 semantics remain unchanged. This task closes implementation/review, not live access.
 
-### AI-041.2 — Second Vendor / Portability Proof — NEXT
+### AI-041.2 — Second Vendor / Portability Proof — DONE
 
 **AI-041.2a — DONE** at `f782e1e438b4030efeba1bd70b90485ab71a52e3` after independent PASS:
 [provider-neutral request seam](architecture/executor-provider-request-v1.md), unchanged OpenAI bytes.
@@ -911,18 +913,18 @@ over shared durable start/settlement facts.
 **AI-041.2b2 — DONE**, integrated at `45c55e56ed98df2e40822cee1e3c89ca90a54d1a` after independent PASS:
 append-only [provider CHECK migration](architecture/executor-provider-constraint-migration-v1.md)
 `0017`, exact `openai, anthropic` domain; identity/finance/runtime unchanged.
-AI-041.2b is DONE; AI-041.2 remains NOT DONE. The AI-041.2 Completion Delivery
-Block combines c fake adapter and d portability/adversarial proof: both READY FOR
-CONSOLIDATED RE-GATE, not DONE. The amended [authority rebind](architecture/executor-authority-rebinding-v1.md)
-prerequisite adds only `0018`; internal R checkpoint and full C revalidation passed.
+AI-041.2b is DONE. AI-041.2 c/d and the amended
+[authority rebind](architecture/executor-authority-rebinding-v1.md) (`0018`)
+passed consolidated independent re-gate and controlled integration at
+`46456844aac0251763d41277decfa066cdfc65cf`. AI-041.2 is DONE within fake
+architectural portability/durable semantics, not Claude live execution.
 [Portability proof](architecture/executor-portability-proof-v1.md) keeps one shared
-authority/exposure/identity/settlement core. One consolidated handoff, review patch,
-independent re-gate and controlled integration; no separate R/C commit. AI-041.3
-Executor Router remains next only after AI-041.2 consolidated PASS/integration.
+authority/exposure/identity/settlement core. No separate R/C commit. B2 follows
+with ExecutorRouter and managed environment policy; no live enablement.
 Overall v1.5 ordering, `runtimeDispatchAllowed=false` and production/live BLOCKED
 status are unchanged. Schema eligibility is not a provider execution grant.
 
-Next active development target after integrated AI-042.2. Connect a genuinely
+Accepted goal after integrated AI-042.2: connect a genuinely
 independent second executor and prove portability without redesigning the PAC
 engineering pipeline. Preferred candidate: **Claude Code / Claude executor**,
 only if capability/access research at implementation time confirms a suitable
@@ -947,13 +949,21 @@ Portability gate — with a different executor, PAC keeps:
 - same audit
 - same corrective orchestration
 
-### AI-041.3 — Executor Router — PLANNED
+### AI-041.3 — Executor Router — B2 CANDIDATE / AWAITING CONSOLIDATED RE-GATE
 
 Separate from the existing direct-model `ModelRouter` (`model-capability-routing-policy.ts`), which keeps serving `ModelProvider` calls. Routing inputs: capability, task class, risk, cost, latency, availability, data residency, privacy, context/repository needs, execution environment, access/payment mode, provider quotas/limits, historical eval quality, Owner preference. Introduced when there are at least two executors to choose between (no earlier than AI-041.2).
 
-AI-041.3 stays after the AI-041.2 portability proof: at least two factually
-supported executor paths must exist. It is not implemented by this alignment;
-quality and Owner policy remain routing dimensions alongside the inputs above.
+AI-041.3 follows accepted AI-041.2. B2 implements a bounded trusted immutable
+registry for both factual executor identities, admitted task/current attempt
+derivation, managed eligibility, hard filters, deterministic quality/cost/latency
+ranking and separate hard/soft Owner preference. Unknown required evidence denies;
+optional unknown metrics rank last, never as zero/perfect. Route fingerprints bind
+all normalized requirements/candidates/evidence/selection and policy version.
+Every route has `dispatchAuthorized=false`, `runtimeDispatchAllowed=false`.
+No ModelRouter coupling, public registration, route DB store, SDK, credentials,
+network, new migration or financial/authority lifecycle. No production supported
+route is assumed. [Router contract and trust](architecture/executor-router-v1.md).
+AI-041.3 is NOT DONE until consolidated independent re-gate/integration.
 
 ### Research / integration targets (not implementation tasks yet)
 
@@ -1036,6 +1046,15 @@ container stack, production WorktreeStoragePort or private process enforcement.
 AI-052 later supplies that private/self-hosted physical realization. Managed
 capabilities must still satisfy PAC's security requirements; an unavailable
 managed capability is denied, not replaced by an uncontained local process.
+
+**B2 minimal managed closure candidate — awaiting consolidated independent re-gate.**
+[ExecutionEnvironment policy](architecture/managed-execution-environment-v1.md)
+represents filesystem/path/network/secrets/time/resource/file/artifact/verification/
+residency/data-handling capabilities as supported/unsupported/unknown plus evidence.
+Required unknowns deny; supported without provenance is invalid. Conditional Codex
+Cloud needs factual interface evidence; no product-name assumption. No environment
+creation/physical enforcement or fallback to local/VPS/self_hosted. AI-042 overall
+remains PARTIAL / IN PROGRESS even after this managed-only slice is accepted.
 
 The safety requirements are kept as environment capability/policy requirements that every environment (managed or self-hosted) must satisfy or be denied:
 
@@ -1471,12 +1490,12 @@ now DONE, with production/live dispatch still BLOCKED.
 
 AI-038.2, AI-038.3, AI-038.3.1 and AI-038.3.2 are DONE: the Owner Console reads real runtime data with All Projects and real project switching, read-only. AI-038.4a (DONE) adds persistent Owner Tasks as read surfaces; AI-038.4b (DONE) adds Quick Create, the only UI write (draft task intent through the audited `createTask`). AI-039 (DONE) adds the second UI write: saving immutable draft FeaturePlan revisions of a ProjectTask, with no execution. AI-039.1 (DONE; direct API-key live smoke deferred by Owner) adds the Owner-approved planning request, which runs one budget-bounded planning Run and never saves a plan or changes the task. Other UI write actions need separate tasks.
 
-### Current development critical path — v1.5, post AI-042.2
+### Current development critical path — v1.5, post AI-041.2
 
 ```text
-AI-041.2 Second Vendor / Portability Proof (NEXT)
-  → AI-041.3 Executor Router
-  → AI-042 minimal managed ExecutionEnvironment closure
+AI-041.2 Second Vendor / Portability Proof (DONE)
+  → B2: AI-041.3 Executor Router (awaiting consolidated independent re-gate)
+  → B2: AI-042 minimal managed ExecutionEnvironment closure (same candidate/gate)
   → AI-043.* Roadmap-Driven Autonomy
   → AI-044 Real Smart Algorithms feature → Verified PR
   → AI-045 Production-like VPS Infrastructure
@@ -1586,7 +1605,8 @@ still belongs to the separate `ModelProvider` abstraction.
   v1.4 vendor-neutral control plane, managed-first approach, separate ModelProvider
   and ExecutorAdapter, provider-owned agent internals and conditional self-hosted capability.
 - Preserve AI-041.1, AI-042.1/042.1a and AI-042.2 DONE; AI-042 overall PARTIAL /
-  IN PROGRESS; AI-041.2 NEXT; M9/M10a/M10b NON-BLOCKING DEBT; production/live
+  IN PROGRESS; AI-041.2 was NEXT at alignment (now integrated DONE; B2 awaits re-gate);
+  M9/M10a/M10b NON-BLOCKING DEBT; production/live
   dispatch BLOCKED and runtimeDispatchAllowed=false.
 - Managed Codex/OpenAI and conditional Claude execution precede private runtime
   implementation; only factual supported interfaces and policy-compliant managed

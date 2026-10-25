@@ -4,8 +4,8 @@
 
 Private AI Cloud is a **vendor-neutral AI Engineering Control Plane**. The canonical status lives in [`docs/ROADMAP.md`](docs/ROADMAP.md). This file is a short summary and does not override the roadmap.
 
-**Current integrated checkpoint:** `47212635607c6c7a37f2af4a56f548c793af444a`
-(AI-042.2, committed/pushed after independent re-gate). Documentation now records
+**Current integrated checkpoint:** `46456844aac0251763d41277decfa066cdfc65cf`
+(AI-041.2 consolidated portability proof, independently accepted and integrated). Documentation records
 **v1.5 — Owner-approved private execution sequencing**, not an architecture rebase.
 The v1.4 vendor-neutral/managed-first architecture is preserved; the latest Owner
 decision defers the PAC-owned coding container/private runtime to AI-052 after
@@ -19,7 +19,7 @@ VPS and Telegram Owner Control through AI-051.
   `f63e79b8cfb8e3ae1c369b7f31c00bf9944ca36e`; cleanup-only authority,
   maxFiles consistency, Network Contract v1 and mutation-sensitive regressions.
   Pure contract/persistence proposals, not physical enforcement.
-- **AI-042.2 — DONE:** WorktreePort/local Git adapter at the checkpoint above;
+- **AI-042.2 — DONE:** WorktreePort/local Git adapter at `47212635607c6c7a37f2af4a56f548c793af444a`;
   exact immutable baseline, detached HEAD, primary checkout/index/ref protection,
   generation/fingerprint/revision/fence ownership, cleanup-only physical removal,
   restart/discovery, partial-failure reconciliation and adversarial proof.
@@ -32,10 +32,10 @@ VPS and Telegram Owner Control through AI-051.
 See [contract v1](docs/architecture/sandbox-execution-contract-v1.md) and
 [worktree boundary and limits](docs/architecture/git-worktree-isolation-v1.md).
 
-**Next development target: AI-041.2 — NEXT**, a genuinely independent second
-executor portability proof. Claude Code / Claude executor is the preferred
-candidate only if implementation-time capability/access research confirms a
-suitable supported interface; it is not an unconditional dependency.
+**Current Delivery Block: B2 — READY FOR CONSOLIDATED INDEPENDENT RE-GATE.**
+AI-041.3 Executor Router and minimal managed AI-042 capability/policy closure are
+implemented, NOT DONE until independent acceptance/integration. Read-only planning
+selection only, not dispatch. Next after PASS/integration: AI-043.* autonomy.
 
 **AI-041.2a — DONE:** provider-neutral request/correlation seam and byte-compatible
 OpenAI extraction integrated at `f782e1e438b4030efeba1bd70b90485ab71a52e3` after independent PASS.
@@ -46,15 +46,18 @@ for reserve/prepare/start; factual authority advance and historical settlement r
 append-only [provider CHECK migration](docs/architecture/executor-provider-constraint-migration-v1.md)
 `0017` permits exactly `openai, anthropic` in the shared parent row; no identity,
 financial or production TypeScript changes in that prerequisite. AI-041.2b is DONE.
-**AI-041.2 Completion Delivery Block — READY FOR CONSOLIDATED RE-GATE:**
-c Claude fake adapter and d portability proof share one candidate. The amended
-[authority rebind prerequisite](docs/architecture/executor-authority-rebinding-v1.md)
-(`0018`) passed its internal R checkpoint; complete C revalidation passed afterwards.
+**AI-041.2 — DONE:** c Claude fake adapter, d portability/adversarial proof and
+[authority rebind](docs/architecture/executor-authority-rebinding-v1.md) (`0018`)
+independently accepted and atomically integrated at the checkpoint above.
 [Portability evidence and limits](docs/architecture/executor-portability-proof-v1.md)
-cover both executor directions without a second durable lifecycle. c/d are READY
-FOR CONSOLIDATED RE-GATE, not independently DONE. AI-041.2 remains NOT DONE until
-independent acceptance. No separate R/C integration; no real provider access,
-Router or live enablement. After consolidated PASS/integration: AI-041.3 Executor Router.
+prove both directions over one shared lifecycle, not live Claude access.
+
+**B2 candidate:** [ExecutorRouter](docs/architecture/executor-router-v1.md) reuses
+factual Admission/current attempt, hard filters before deterministic ranking and
+Owner hard/soft preference. [Managed environment policy](docs/architecture/managed-execution-environment-v1.md)
+compares bounded evidence; required unknowns deny. No default supported routes,
+credential/SDK/health checks, dispatch grants, persistence or new migration.
+ModelRouter, current authority, financial and recovery lifecycles are unchanged.
 
 **Intended execution path before AI-052:** managed Codex/OpenAI and Claude,
 only through factually supported, policy-compliant provider-managed environments
@@ -62,8 +65,8 @@ and their applicable approval/security/live gates. Do not substitute an unmanage
 local Codex/Claude process on the PAC VPS. The intended route is not a claim of
 current access or production readiness.
 
-**Current critical path:** `AI-041.2 NEXT → AI-041.3 Executor Router → AI-042
-minimal managed ExecutionEnvironment closure → AI-043.* Roadmap-Driven Autonomy
+**Current critical path:** `AI-041.2 DONE → B2 (AI-041.3 Executor Router + AI-042
+minimal managed closure, awaiting consolidated re-gate) → AI-043.* Roadmap-Driven Autonomy
 → AI-044 Smart Algorithms / Verified PR → AI-045 VPS → AI-046 → AI-047 → AI-048
 → AI-048.1 → AI-049 → AI-050 → AI-051 Telegram Hardening → AI-052 Private
 Execution Environment` (canonical detail: roadmap §18). AI-042.2 is a DONE prerequisite.
@@ -110,7 +113,7 @@ suite. No corrective implementation is part of this status patch.
 | M1 Real Money Safety | DONE |
 | M2 Direct Model Provider Capability | IN REVIEW (M2.0 and M2.1 DONE; M2.2 DEFERRED BY OWNER) |
 | M3 Owner Product | ACTIVE / NOT DONE: AI-037.7, AI-038.0–AI-038.7, AI-039 and AI-039.1 DONE (direct API-key live smoke deferred by Owner); AI-039.2 Phase A committed, entitlement gate deferred by external supported-network blocker, Phase B blocked; AI-040a IN REVIEW |
-| M4 Vendor-Neutral Executor Platform | IN PROGRESS: AI-041.1 and AI-042.1/042.1a/042.2 DONE; AI-041.2 NEXT; AI-042 overall incomplete; AI-041.0 separate gate unchanged; production/live dispatch BLOCKED |
+| M4 Vendor-Neutral Executor Platform | IN PROGRESS: AI-041.1/041.2 and AI-042.1/042.1a/042.2 DONE; B2 Router/managed policy awaiting consolidated re-gate; AI-042 overall incomplete; AI-041.0 separate gate unchanged; production/live dispatch BLOCKED |
 | M5–M8 | PLANNED (M5 and M7 rebased in v1.4) |
 | Post-M8 Private Execution Environment | AI-052 PLANNED after AI-051; local/VPS/private coding blocked until its own gates |
 
@@ -161,7 +164,7 @@ suite. No corrective implementation is part of this status patch.
 
 - Runtime business APIs, and any UI action that starts a run, model, executor or repository change (the only exception is the AI-039.1 Owner-approved planning Run)
 - Enabled/live executor dispatch and production authority/account/transport/egress/recovery composition (AI-041.1 implementation/reconciliation foundation is DONE, not live enablement)
-- Second independent managed executor portability proof (AI-041.2 NEXT), ExecutorRouter (AI-041.3) and minimal managed ExecutionEnvironment closure; AI-042 overall remains incomplete
+- Accepted independent re-gate/integration of B2 ExecutorRouter + minimal managed ExecutionEnvironment policy candidate; AI-042 overall remains incomplete. AI-041.2 fake portability proof is DONE, not live execution.
 - AI-052 private/self-hosted coding runtime, deferred until after VPS + Telegram hardening: production worktree storage/CAS, cross-host concurrency, OS/process/file containment, CPU/RAM/disk/process/duration limits, network/DNS enforcement, scoped secrets, evidence/recovery and private executor/models; physical local Git worktrees alone provide none of these
 - Automated Quality/Security Gate on executor output, and the corrective controller
 - RAG, real external integrations, staging/production deployment
