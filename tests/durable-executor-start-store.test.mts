@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { DatabaseError } from "pg";
 // @ts-expect-error Node direct TypeScript requires the runtime extension.
-import { executorConfiguration, executorRequest, financialPolicy, executorTarget } from "./fixtures/durable-executor.mts";
+import { executorConfiguration, executorRequest, financialPolicy, executorTarget, executorRequestPolicy } from "./fixtures/durable-executor.mts";
 const location = new URL("../lib/db/executor-start-store.ts", import.meta.url);
 const durable = existsSync(location) ? await import(location.href) as typeof import("../lib/db/executor-start-store") : null;
 for (const fact of ["restart-safe reservation", "cross-instance aggregate exposure", "cross-instance single start", "durable factual-attempt replay prevention"])
@@ -65,7 +65,7 @@ async function mock(options: { failure?: string; error?: unknown; rollbackFails?
     return { rows: [], rowCount: 1 };
   }, release(destroy = false) { released.push(destroy); } } as Client;
   const config = { database: { connect: async () => client }, tenant: await tenant(), projectId: "project-a", configuration: executorConfiguration(),
-    target: executorTarget(), financialPolicy: financialPolicy(), authorizeStart: () => Object.hasOwn(options, "approval") ? options.approval : true };
+    target: executorTarget(), requestPolicy: executorRequestPolicy(), financialPolicy: financialPolicy(), authorizeStart: () => Object.hasOwn(options, "approval") ? options.approval : true };
   const store = durable!.createPostgresExecutorStartStore(config);
   return { store, config, queries, released };
 }
@@ -81,6 +81,14 @@ test("different provider cannot reuse the OpenAI account/exposure route", async 
   const { config, queries } = await mock();
   assert.throws(() => durable!.createPostgresExecutorStartStore({ ...config, target: { ...executorTarget(), providerId: "other-provider" } }));
   assert.equal(queries.length, 0);
+});
+test("request policy is explicit, provenance-checked and bound to provider before DB work", async () => {
+  const { config, queries } = await mock(); let traps = 0;
+  const getter = Object.defineProperty({}, "providerId", { enumerable: true, get() { traps++; throw Error("private"); } });
+  for (const requestPolicy of [undefined, null, {}, { ...config.requestPolicy }, structuredClone(config.requestPolicy), new Proxy(config.requestPolicy, {}), getter])
+    assert.throws(() => durable!.createPostgresExecutorStartStore({ ...config, requestPolicy }));
+  assert.throws(() => durable!.createPostgresExecutorStartStore({ ...config, target: { ...config.target, providerId: "anthropic" } }));
+  assert.equal(queries.length, 0); assert.equal(traps, 0);
 });
 for (const policy of [{ ...financialPolicy(), maximumExposureUsdMicros: 9999 }, { ...financialPolicy(), totalExposureUsdMicros: 19999 },
   { ...financialPolicy(), reservationTtlMs: 0 }, { ...financialPolicy(), reservationTtlMs: 60001 }, { ...financialPolicy(), totalExposureUsdMicros: 1000000001 }])

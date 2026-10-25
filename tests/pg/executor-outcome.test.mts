@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 // @ts-expect-error Node direct TypeScript requires the runtime extension.
-import { executorConfiguration, executorRequest, financialPolicy, executorTarget, context } from "../fixtures/durable-executor.mts";
+import { executorConfiguration, executorRequest, financialPolicy, executorTarget, context, executorRequestPolicy } from "../fixtures/durable-executor.mts";
 // @ts-expect-error Node direct TypeScript requires the runtime extension.
 import { normalizedResult, receipt, frozen, denied, controlledTransport, digest } from "../fixtures/executor-outcome.mts";
 const live = await import(new URL("./helpers/live-pg.ts", import.meta.url).href) as typeof import("./helpers/live-pg");
@@ -23,7 +23,7 @@ afterEach(async () => { await Promise.all(pools.splice(0).map(p => p.close())); 
 async function setup(id: string, n = 1, domain: string = live.primaryWorkspace.domain, url = db.url) {
   const database = postgres.createWorkflowRuntimePostgresDatabase({ connectionString: url, maxConnections: 1 }); pools.push(database);
   const tenant = await tenants.createPostgresWorkflowRuntimeTenantResolver(database).resolve(domain); assert.ok(tenant);
-  const config = { database, tenant, projectId: "project-a", configuration: executorConfiguration(n, id), target: executorTarget(), financialPolicy: financialPolicy() };
+  const config = { database, tenant, projectId: "project-a", configuration: executorConfiguration(n, id), target: executorTarget(), requestPolicy: executorRequestPolicy(), financialPolicy: financialPolicy() };
   const a = authority.createPostgresExecutorCurrentAuthorityStore({ database, tenant, projectId: config.projectId, configuration: config.configuration });
   return { config, a, raw: executorRequest(n, id), s: durable.createPostgresExecutorStartStore({ ...config, authorizeStart: () => true }) };
 }
@@ -87,7 +87,7 @@ test("PG independent OS-process restart recovers result, never reconstructs prov
     const d=await import(new URL('lib/db/executor-start-store.ts',root)), f=await import(new URL('tests/fixtures/durable-executor.mts',root));
     const database=p.createWorkflowRuntimePostgresDatabase({connectionString:process.env.OUTCOME_TEST_DB,maxConnections:1});
     try { const tenant=await t.createPostgresWorkflowRuntimeTenantResolver(database).resolve('workspace-primary');
-      const s=d.createPostgresExecutorStartStore({database,tenant,projectId:'project-a',configuration:f.executorConfiguration(1,'process-restart'),target:f.executorTarget(),financialPolicy:f.financialPolicy(),authorizeStart:()=>false});
+      const s=d.createPostgresExecutorStartStore({database,tenant,projectId:'project-a',configuration:f.executorConfiguration(1,'process-restart'),target:f.executorTarget(),requestPolicy:f.executorRequestPolicy(),financialPolicy:f.financialPolicy(),authorizeStart:()=>false});
       const result=await s.inspectOutcome(f.executorRequest(1,'process-restart'));
       process.stdout.write(JSON.stringify({pid:process.pid,result}));
     } catch { process.exitCode=1; } finally { await database.close(); }`;

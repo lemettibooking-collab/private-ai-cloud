@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { NormalizedExecutorResult } from "../contracts/executor-adapter";
 import type { NormalizedExecutorInvocation, ExecutorAttemptIdentity, ExecutorIdentity, ExecutorRepositoryRef } from "../contracts/executor-adapter";
 import type { ExecutorTarget } from "../executors/executor-start-boundary";
+import type { ExecutorProviderRequestPolicy } from "../executors/executor-provider-request";
 import type { WorkflowRuntimeDatabase, WorkflowRuntimeSqlClient } from "./workflow-runtime-store";
 import type { ResolvedWorkflowRuntimeTenant } from "./workflow-runtime-tenant";
 // @ts-expect-error Node direct TypeScript requires the runtime extension.
@@ -17,7 +18,7 @@ import { boundedData, exactRecord, ensureSafeEvidence, freezeDeep } from "../loc
 // @ts-expect-error Node direct TypeScript requires the runtime extension.
 import { normalizeExecutorTarget } from "../executors/executor-start-boundary.ts";
 // @ts-expect-error Node direct TypeScript requires the runtime extension.
-import { createOpenAIAgentsCanonicalRequest } from "../executors/openai-agents-executor.ts";
+import { executorRequestPolicyMatches, prepareExecutorProviderRequest } from "../executors/executor-provider-request.ts";
 // @ts-expect-error Node direct TypeScript requires the runtime extension.
 import { deriveExecutorAuthorityFacts } from "../executors/executor-current-authority.ts";
 // @ts-expect-error Node direct TypeScript requires the runtime extension.
@@ -32,6 +33,7 @@ export type DurableExecutorSnapshot = Readonly<{
   projectId: string; attempt: ExecutorAttemptIdentity; identity: ExecutorIdentity; invocationId: string;
   planId: string; taskId: string; repository: ExecutorRepositoryRef; capability: string; mode: string; target: ExecutorTarget;
   authorityGeneration: number | null; canonicalRunFingerprint: string | null; admissionFingerprint: string | null;
+  // Legacy schema/provider-defense evidence; not a universal hard provider cost bound.
   maximumExposureUsdMicros: number; heldExposureUsdMicros: number; providerSpendLimitCents: number;
   requestFingerprint: string | null; state: DurableExecutorState; reconciliation: string;
   observedUsage: Readonly<{ inputTokens: number; outputTokens: number; totalTokens: number }> | null;
@@ -49,7 +51,7 @@ export type DurableExecutorOutcomeDecision = DurableExecutorDecision & Readonly<
 export type ExecutorFinancialPolicy = Readonly<{ maximumExposureUsdMicros: number; totalExposureUsdMicros: number; reservationTtlMs: number }>;
 export type PostgresExecutorConfiguration = Readonly<{
   database: WorkflowRuntimeDatabase; tenant: ResolvedWorkflowRuntimeTenant; projectId: string;
-  configuration: unknown; target: ExecutorTarget; financialPolicy: ExecutorFinancialPolicy;
+  configuration: unknown; target: ExecutorTarget; requestPolicy: ExecutorProviderRequestPolicy; financialPolicy: ExecutorFinancialPolicy;
   // Trusted synchronous policy decision, not a caller flag. Never provider/slow work.
   authorizeStart(): boolean;
 }>;
@@ -87,7 +89,7 @@ const rowSelect = `project_key, development_run_id, attempt_number, attempt_kind
 
 /** Trusted server port ONLY. No route, network, credential read, retry or production dispatch. */
 export function createPostgresExecutorStartStore(input: unknown) {
-  const c = exactOwnData(input, ["database", "tenant", "projectId", "configuration", "target", "financialPolicy", "authorizeStart"]);
+  const c = exactOwnData(input, ["database", "tenant", "projectId", "configuration", "target", "requestPolicy", "financialPolicy", "authorizeStart"]);
   const connect = c && capturedMethod(c.database, "connect");
   if (!c || !connect || !isResolvedWorkflowRuntimeTenant(c.tenant) || !id(c.projectId) || typeof c.authorizeStart !== "function") throw Error("invalid_durable_executor_configuration");
   const tenant = c.tenant, workspace = tenant.workspaceDatabaseId, projectId = c.projectId, authorizeStart = c.authorizeStart as () => boolean;
@@ -97,7 +99,8 @@ export function createPostgresExecutorStartStore(input: unknown) {
   const contract = configured.adapter;
   const authorityFacts = deriveExecutorAuthorityFacts(c.configuration);
   const target = normalizeExecutorTarget(c.target);
-  if (target.providerId !== "openai") throw Error("invalid_durable_executor_configuration");
+  if (!executorRequestPolicyMatches(c.requestPolicy, target.providerId)) throw Error("invalid_durable_executor_configuration");
+  const requestPolicy = c.requestPolicy;
   const policy = exactRecord(boundedData(c.financialPolicy), ["maximumExposureUsdMicros", "totalExposureUsdMicros", "reservationTtlMs"]);
   if (!integer(policy.maximumExposureUsdMicros) || policy.maximumExposureUsdMicros < 10000
     || !integer(policy.totalExposureUsdMicros) || policy.totalExposureUsdMicros < policy.maximumExposureUsdMicros
@@ -256,9 +259,9 @@ export function createPostgresExecutorStartStore(input: unknown) {
     return run(raw, false, true, async (client, i, _held, row) => {
       if (!row || !["reserved", "prepared"].includes(row.state as string)) return denied("recovery_required");
       if (await clock(client) >= numeric(row.expires_ms)) return denied();
-      let request: ReturnType<typeof createOpenAIAgentsCanonicalRequest>;
-      try { request = createOpenAIAgentsCanonicalRequest(i, context, target, numeric(row.maximum_exposure_usd_micros), workspace); } catch { return denied(); }
-      requireFact(request.spendLimitCents === numeric(row.provider_spend_limit_cents));
+      const request = prepareExecutorProviderRequest(requestPolicy, i, context, target, numeric(row.maximum_exposure_usd_micros), workspace);
+      if (!request) return denied();
+      requireFact(request.providerBudgetDefenseEvidence.limitCents === numeric(row.provider_spend_limit_cents));
       if (row.request_fingerprint !== null) return row.request_fingerprint === request.requestFingerprint ? allowed("idempotent", snapshot(row, i)) : denied("conflict");
       // One statement timestamp for both columns: separate volatile clock_timestamp()
       // expressions may be evaluated in physical column order, not SET text order.
@@ -427,7 +430,7 @@ export function createPostgresExecutorStartStore(input: unknown) {
     });
     return freezeDeep({ ...d, normalizedResult: d.verdict === "allow" ? result : null, resultFingerprint: d.verdict === "allow" ? resultFingerprint : null });
   }
-  const providerIdentity = createExecutorProviderIdentityOperations({ workspace, target,
+  const providerIdentity = createExecutorProviderIdentityOperations({ workspace, target, requestPolicy,
     run: (raw, operation) => run(raw, false, false, (client, i, _held, row) => row ? operation(client, i, snapshot(row, i)) : Promise.resolve(denied())),
     takeStart(capability) {
       const c = capability && typeof capability === "object" ? capabilities.get(capability) : null;

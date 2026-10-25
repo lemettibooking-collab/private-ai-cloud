@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test, afterEach } from "node:test";
 import { spawnSync } from "node:child_process";
 // @ts-expect-error Node direct TypeScript requires the runtime extension.
-import { executorConfiguration, executorRequest, executorTarget, financialPolicy, context } from "../fixtures/durable-executor.mts";
+import { executorConfiguration, executorRequest, executorTarget, financialPolicy, context, executorRequestPolicy } from "../fixtures/durable-executor.mts";
 // @ts-expect-error Node direct TypeScript requires the runtime extension.
 import { fakeProvider, savedSession, savedTurn, savedAnswer, reasoningItem, savedPage, initialUserInput, assertHeld } from "../fixtures/executor-provider-reconciliation.mts";
 const live = await import(new URL("./helpers/live-pg.ts", import.meta.url).href) as typeof import("./helpers/live-pg");
@@ -21,7 +21,7 @@ const pools: ReturnType<typeof postgres.createWorkflowRuntimePostgresDatabase>[]
 async function setup(id: string, domain: string = live.primaryWorkspace.domain) {
   const database = postgres.createWorkflowRuntimePostgresDatabase({ connectionString: db.url, maxConnections: 1 }); pools.push(database);
   const tenant = await tenants.createPostgresWorkflowRuntimeTenantResolver(database).resolve(domain); assert.ok(tenant);
-  const config = { database, tenant, projectId: "project-a", configuration: executorConfiguration(1, id), target: executorTarget(), financialPolicy: financialPolicy(), authorizeStart: () => true };
+  const config = { database, tenant, projectId: "project-a", configuration: executorConfiguration(1, id), target: executorTarget(), requestPolicy: executorRequestPolicy(), financialPolicy: financialPolicy(), authorizeStart: () => true };
   return { config, store: durable.createPostgresExecutorStartStore(config), raw: executorRequest(1, id), authority: authority.createPostgresExecutorCurrentAuthorityStore({ database, tenant, projectId: "project-a", configuration: config.configuration }) };
 }
 afterEach(async () => { await Promise.all(pools.splice(0).map(p => p.close())); });
@@ -61,7 +61,7 @@ for (const known of ["none", "session", "turn"] as const) test(`PG OS-process re
     const [p,t,s,f,x,r]=await Promise.all(['lib/db/postgres.ts','lib/db/workflow-runtime-tenant.ts','lib/db/executor-start-store.ts','tests/fixtures/durable-executor.mts','tests/fixtures/executor-provider-reconciliation.mts','lib/executors/openai-agents-reconciliation.ts'].map(v=>import(new URL(v,root))));
     const database=p.createWorkflowRuntimePostgresDatabase({connectionString:process.env.RECOVERY_TEST_DB,maxConnections:1});
     try{const tenant=await t.createPostgresWorkflowRuntimeTenantResolver(database).resolve('workspace-primary'),id='restart-${known}',raw=f.executorRequest(1,id);
-    const store=s.createPostgresExecutorStartStore({database,tenant,projectId:'project-a',configuration:f.executorConfiguration(1,id),target:f.executorTarget(),financialPolicy:f.financialPolicy(),authorizeStart:()=>false});
+    const store=s.createPostgresExecutorStartStore({database,tenant,projectId:'project-a',configuration:f.executorConfiguration(1,id),target:f.executorTarget(),requestPolicy:f.executorRequestPolicy(),financialPolicy:f.financialPolicy(),authorizeStart:()=>false});
     const before=await store.inspectProviderIdentity(raw),provider=x.fakeProvider(before.providerIdentity.correlationFingerprint,'session_'+id);
     provider.state.items.unshift(x.initialUserInput(f.executorConfiguration(1,id),raw).item);
     const reconciler=r.createOpenAIAgentsRetrievalTestReconciler({configuration:f.executorConfiguration(1,id),target:f.executorTarget(),store,retrievalClient:provider.client()});

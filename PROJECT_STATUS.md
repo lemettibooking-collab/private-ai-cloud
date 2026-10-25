@@ -37,6 +37,11 @@ executor portability proof. Claude Code / Claude executor is the preferred
 candidate only if implementation-time capability/access research confirms a
 suitable supported interface; it is not an unconditional dependency.
 
+**AI-041.2a — IN REVIEW:** provider-neutral request/correlation seam and OpenAI
+compatibility extraction, after accepted research/design at `1acd52cf791d67e7dd63dbac0b9f75ed4608bfe3`.
+No Claude implementation/migration/live enablement. Separate predecessor-quiescence
+and provider-constraint prerequisites remain. [Seam contract](docs/architecture/executor-provider-request-v1.md).
+
 **Intended execution path before AI-052:** managed Codex/OpenAI and Claude,
 only through factually supported, policy-compliant provider-managed environments
 and their applicable approval/security/live gates. Do not substitute an unmanaged

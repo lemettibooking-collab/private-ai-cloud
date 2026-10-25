@@ -3,7 +3,7 @@ import { afterEach, test } from "node:test";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 // @ts-expect-error Node direct TypeScript requires the runtime extension.
-import { executorConfiguration, executorRequest, financialPolicy, executorTarget, context } from "../fixtures/durable-executor.mts";
+import { executorConfiguration, executorRequest, financialPolicy, executorTarget, context, executorRequestPolicy } from "../fixtures/durable-executor.mts";
 const live = await import(new URL("./helpers/live-pg.ts", import.meta.url).href) as typeof import("./helpers/live-pg");
 const postgres = await import(new URL("../../lib/db/postgres.ts", import.meta.url).href) as typeof import("../../lib/db/postgres");
 const tenants = await import(new URL("../../lib/db/workflow-runtime-tenant.ts", import.meta.url).href) as typeof import("../../lib/db/workflow-runtime-tenant");
@@ -19,7 +19,7 @@ async function setup(id: string, number = 1, configuration: unknown = executorCo
   const tenant = await tenants.createPostgresWorkflowRuntimeTenantResolver(database).resolve(live.primaryWorkspace.domain); assert.ok(tenant);
   const config = { database, tenant, projectId: "project-a", configuration };
   return { config, a: authority.createPostgresExecutorCurrentAuthorityStore(config), raw: executorRequest(number, id), s: durable.createPostgresExecutorStartStore({ ...config,
-    target: executorTarget(), financialPolicy: financialPolicy(), authorizeStart: () => true }) };
+    target: executorTarget(), requestPolicy: executorRequestPolicy(), financialPolicy: financialPolicy(), authorizeStart: () => true }) };
 }
 test("PG stale canonical snapshot alone cannot reserve or obtain start commitment", async () => {
   const { s, raw } = await setup("without-authority");

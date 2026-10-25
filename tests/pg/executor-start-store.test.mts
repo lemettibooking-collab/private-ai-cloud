@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 // @ts-expect-error Node direct TypeScript requires the runtime extension.
-import { executorConfiguration, executorRequest, financialPolicy, executorTarget, context } from "../fixtures/durable-executor.mts";
+import { executorConfiguration, executorRequest, financialPolicy, executorTarget, context, executorRequestPolicy } from "../fixtures/durable-executor.mts";
 const location = new URL("../../lib/db/executor-start-store.ts", import.meta.url);
 const durable = existsSync(location) ? await import(location.href) as typeof import("../../lib/db/executor-start-store") : null;
 const live = await import(new URL("./helpers/live-pg.ts", import.meta.url).href) as typeof import("./helpers/live-pg");
@@ -26,7 +26,7 @@ async function store(runId: string, number = 1, options: Record<string, unknown>
   const a = authority.createPostgresExecutorCurrentAuthorityStore({ database: c.database, tenant: c.tenant, projectId: c.projectId, configuration: c.configuration });
   await a.registerCurrentAuthority();
   return durable!.createPostgresExecutorStartStore({ database, tenant, projectId: "project-a", configuration: executorConfiguration(number, runId),
-    target: executorTarget(), financialPolicy: financialPolicy(), authorizeStart: () => true, ...options });
+    target: executorTarget(), requestPolicy: executorRequestPolicy(), financialPolicy: financialPolicy(), authorizeStart: () => true, ...options });
 }
 afterEach(async () => { await Promise.all(pools.splice(0).map(pool => pool.close())); });
 const exposure = { maximumExposureUsdMicros: 10000 };
@@ -43,7 +43,7 @@ test("PG OS process restart: reserve/prepare/start survive separate Node process
     try {
       const tenant = await createPostgresWorkflowRuntimeTenantResolver(database).resolve(process.env.EXECUTOR_TEST_DOMAIN);
       const s = createPostgresExecutorStartStore({ database, tenant, projectId: 'project-a', configuration: f.executorConfiguration(1, 'process-restart'),
-        target: f.executorTarget(), financialPolicy: f.financialPolicy(), authorizeStart: () => true });
+        target: f.executorTarget(), requestPolicy: f.executorRequestPolicy(), financialPolicy: f.financialPolicy(), authorizeStart: () => true });
       const raw = f.executorRequest(1, 'process-restart'), stage = process.env.EXECUTOR_TEST_STAGE;
       if (stage === 'reserve') await createPostgresExecutorCurrentAuthorityStore({ database, tenant, projectId: 'project-a', configuration: f.executorConfiguration(1, 'process-restart') }).registerCurrentAuthority();
       const read = stage === 'reserve' ? null : await s.inspect(raw);

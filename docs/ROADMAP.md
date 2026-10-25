@@ -903,6 +903,12 @@ semantics remain unchanged. This task closes implementation/review, not live acc
 
 ### AI-041.2 — Second Vendor / Portability Proof — NEXT
 
+**AI-041.2a — IN REVIEW:** narrow provider-neutral request/correlation extraction
+with unchanged OpenAI bytes, following accepted research/design at `1acd52cf791d67e7dd63dbac0b9f75ed4608bfe3`.
+No Claude implementation, migration or live grant. Predecessor-quiescence barrier
+and append-only provider constraint remain separate prerequisites; sequencing is
+unchanged. [Seam v1](architecture/executor-provider-request-v1.md).
+
 Next active development target after integrated AI-042.2. Connect a genuinely
 independent second executor and prove portability without redesigning the PAC
 engineering pipeline. Preferred candidate: **Claude Code / Claude executor**,

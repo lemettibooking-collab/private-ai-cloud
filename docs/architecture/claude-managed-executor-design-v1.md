@@ -724,3 +724,10 @@ OpenAI-nullable-finance clarification. No blocking findings. This verdict covers
 implementation task authoring only, not implementation or live authorization.
 
 READY FOR AI-041.2 IMPLEMENTATION TASK AUTHORING
+
+### AI-041.2a implementation checkpoint
+
+**IN REVIEW**: [request/correlation seam v1](executor-provider-request-v1.md).
+Pure OpenAI preparation is extracted behind the common trusted policy without
+changing historical bytes. No Claude/migration/live authorization; the separate
+durable prerequisites and this document's design decisions remain unchanged.

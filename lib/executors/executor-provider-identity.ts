@@ -2,6 +2,10 @@
 import { boundedData, exactRecord, ensureSafeEvidence, freezeDeep, sha256 } from "../local-handoff/local-handoff-policy.ts";
 
 export type ExecutorProviderObservation = Readonly<{ sessionId: string; turnId: string | null }>;
+export type ExecutorProviderId = "openai" | "anthropic";
+export function isExecutorProviderId(value: unknown): value is ExecutorProviderId {
+  return value === "openai" || value === "anthropic";
+}
 /** Internal trusted port, not a caller endpoint. A false/unavailable acknowledgement stops
  * parsing; raw events and provider output never enter this port. No DB dependency here. */
 export type ExecutorProviderIdentityObserver = Readonly<{
@@ -23,7 +27,7 @@ export function deriveExecutorProviderCorrelation(input: unknown): string | null
     if (!validExecutorProviderId(r.workspaceIdentity) || !validExecutorProviderId(r.developmentRunId)
       || !Number.isInteger(r.attemptNumber) || (r.attemptNumber as number) < 1 || (r.attemptNumber as number) > 3
       || typeof r.requestFingerprint !== "string" || !/^[a-f0-9]{64}$/u.test(r.requestFingerprint)
-      || r.providerId !== "openai" || !validExecutorProviderId(r.modelId) || !validExecutorProviderId(r.accountId)
+      || !isExecutorProviderId(r.providerId) || !validExecutorProviderId(r.modelId) || !validExecutorProviderId(r.accountId)
       || !validExecutorProviderId(e.id) || !validExecutorProviderId(e.version)) return null;
     // Every component is bounded ASCII without newlines; this domain-separated encoding
     // is unambiguous and independently checkable by PostgreSQL without JSON formatting.

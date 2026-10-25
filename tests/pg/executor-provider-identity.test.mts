@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 // @ts-expect-error Node direct TypeScript requires the runtime extension.
-import { executorConfiguration, executorRequest, financialPolicy, executorTarget, context } from "../fixtures/durable-executor.mts";
+import { executorConfiguration, executorRequest, financialPolicy, executorTarget, context, executorRequestPolicy } from "../fixtures/durable-executor.mts";
 // @ts-expect-error Node direct TypeScript requires the runtime extension.
 import { receipt } from "../fixtures/executor-outcome.mts";
 // @ts-expect-error Node direct TypeScript requires the runtime extension.
@@ -14,6 +14,7 @@ const postgres = await import(new URL("../../lib/db/postgres.ts", import.meta.ur
 const tenants = await import(new URL("../../lib/db/workflow-runtime-tenant.ts", import.meta.url).href) as typeof import("../../lib/db/workflow-runtime-tenant");
 const authority = await import(new URL("../../lib/db/executor-current-authority-store.ts", import.meta.url).href) as typeof import("../../lib/db/executor-current-authority-store");
 const durable = await import(new URL("../../lib/db/executor-start-store.ts", import.meta.url).href) as typeof import("../../lib/db/executor-start-store");
+const seam = await import(new URL("../../lib/executors/executor-provider-request.ts", import.meta.url).href) as typeof import("../../lib/executors/executor-provider-request");
 const db = await live.useLiveDatabase("provideridentity");
 for (const workspace of [live.primaryWorkspace, live.secondaryWorkspace]) {
   await live.insertWorkspace(db.admin, workspace);
@@ -23,7 +24,7 @@ const pools: ReturnType<typeof postgres.createWorkflowRuntimePostgresDatabase>[]
 async function setup(runId: string, domain: string = live.primaryWorkspace.domain, url = db.url) {
   const database = postgres.createWorkflowRuntimePostgresDatabase({ connectionString: url, maxConnections: 1 }); pools.push(database);
   const tenant = await tenants.createPostgresWorkflowRuntimeTenantResolver(database).resolve(domain); assert.ok(tenant);
-  const config = { database, tenant, projectId: "project-a", configuration: executorConfiguration(1, runId), target: executorTarget(), financialPolicy: financialPolicy(), authorizeStart: () => true };
+  const config = { database, tenant, projectId: "project-a", configuration: executorConfiguration(1, runId), target: executorTarget(), requestPolicy: executorRequestPolicy(), financialPolicy: financialPolicy(), authorizeStart: () => true };
   const a = authority.createPostgresExecutorCurrentAuthorityStore({ database, tenant, projectId: config.projectId, configuration: config.configuration }); await a.registerCurrentAuthority();
   return { config, authority: a, store: durable.createPostgresExecutorStartStore(config), raw: executorRequest(1, runId) };
 }
@@ -210,7 +211,7 @@ test("PG OS restart after correlation/session/turn: fresh child has identity but
       const p=await import(new URL('lib/db/postgres.ts',root)),t=await import(new URL('lib/db/workflow-runtime-tenant.ts',root)),s=await import(new URL('lib/db/executor-start-store.ts',root)),f=await import(new URL('tests/fixtures/durable-executor.mts',root));
       const database=p.createWorkflowRuntimePostgresDatabase({connectionString:process.env.IDENTITY_TEST_DB,maxConnections:1});
       try{const tenant=await t.createPostgresWorkflowRuntimeTenantResolver(database).resolve('workspace-primary');
-      const store=s.createPostgresExecutorStartStore({database,tenant,projectId:'project-a',configuration:f.executorConfiguration(1,'os-restart'),target:f.executorTarget(),financialPolicy:f.financialPolicy(),authorizeStart:()=>false});
+      const store=s.createPostgresExecutorStartStore({database,tenant,projectId:'project-a',configuration:f.executorConfiguration(1,'os-restart'),target:f.executorTarget(),requestPolicy:f.executorRequestPolicy(),financialPolicy:f.financialPolicy(),authorizeStart:()=>false});
       const raw=f.executorRequest(1,'os-restart'),d=await store.inspectProviderIdentity(raw); process.stdout.write(JSON.stringify({pid:process.pid,d}));}catch{process.exitCode=1;}finally{await database.close();}`;
     const child = spawnSync(process.execPath, ["--input-type=module", "-"], { input: script, encoding: "utf8", timeout: 15000, env: { ...process.env, IDENTITY_TEST_DB: db.url } });
     assert.equal(child.status, 0, "isolated restart read completes"); const parsed = JSON.parse(child.stdout); pids.add(parsed.pid);
@@ -306,4 +307,56 @@ test("PG no deadlocks and no duplicate identity/provider rights", async () => {
   await db.admin.query("select pg_stat_clear_snapshot()");
   assert.equal(Number((await db.admin.query("select deadlocks from pg_stat_database where datname=current_database()")).rows[0].deadlocks), 0);
   assert.equal((await db.admin.query("select count(*)::int as n from (select workspace_id,development_run_id,attempt_number from executor_provider_executions group by 1,2,3 having count(*)>1) duplicates")).rows[0].n, 0);
+});
+test("PG seam: malformed policy facts cannot prepare or change a reserved request", async () => {
+  const f = await setup("policy-malformed"), rawBefore = structuredClone(f.raw);
+  assert.equal((await f.store.reserve(f.raw, { maximumExposureUsdMicros: 10000 })).status, "reserved");
+  const originalPolicy = f.config.requestPolicy;
+  const mutations: Array<(r: import("../../lib/executors/executor-provider-request").PreparedExecutorProviderRequest) => unknown> = [
+    r => ({ ...r, requestFingerprint: "f".repeat(64) }), r => ({ ...r, correlationFingerprint: "f".repeat(64) }),
+    r => ({ ...r, target: { ...r.target, modelId: "other" } }), r => ({ ...r, target: { ...r.target, accountId: "other" } }),
+    r => ({ ...r, target: { ...r.target, providerId: "anthropic" } }), r => ({ ...r, startCapability: {} }),
+  ];
+  const before = await facts("policy-malformed");
+  for (const change of mutations) {
+    const requestPolicy = seam.defineTrustedExecutorProviderRequestPolicy("openai", (...args) => {
+      const r = seam.prepareExecutorProviderRequest(originalPolicy, ...args); assert.ok(r); return change(r);
+    });
+    const s = durable.createPostgresExecutorStartStore({ ...f.config, requestPolicy });
+    const result = await s.bindRequest(f.raw, context());
+    assert.equal(result.verdict, "deny"); assert.equal(result.snapshot, null); assert.equal(result.startCapability, null);
+    assert.deepEqual(await facts("policy-malformed"), before);
+  }
+  // Captured handle, not a mutable configuration receiver or an ambient default.
+  f.config.requestPolicy = seam.defineTrustedExecutorProviderRequestPolicy("openai", () => null);
+  const prepared = await f.store.bindRequest(f.raw, context()); assert.equal(prepared.status, "prepared");
+  const started = await f.store.commitProviderStart(f.raw, prepared.snapshot!.requestFingerprint);
+  const correlated = await f.store.prepareProviderCorrelation(f.raw, context(), started.startCapability);
+  assert.equal(correlated.status, "prepared"); assert.ok(correlated.providerIdentity); assert.ok(correlated.providerCapability);
+  assert.equal(correlated.providerIdentity.requestFingerprint, prepared.snapshot!.requestFingerprint);
+  assert.deepEqual(f.raw, rawBefore);
+});
+test("PG seam: bad correlation preparation retains full exposure with no identity or provider right", async () => {
+  const f = await started("policy-correlation-bad");
+  const requestPolicy = seam.defineTrustedExecutorProviderRequestPolicy("openai", () => ({ authority: true }));
+  const s = durable.createPostgresExecutorStartStore({ ...f.config, requestPolicy });
+  denied(await s.prepareProviderCorrelation(f.raw, context(), f.start));
+  const persisted = await facts("policy-correlation-bad");
+  assert.equal(persisted.identities.length, 0); assert.equal(persisted.results.length, 0);
+  const read = await f.store.inspect(f.raw); assert.equal(read.snapshot?.state, "start_committed");
+  assert.equal(read.snapshot?.heldExposureUsdMicros, 10000);
+  assert.equal(durable.consumeDurableExecutorStartCapability(f.start), null);
+});
+test("PG seam: future provider is representable but cannot reuse reserved OpenAI identity; schema stays unchanged", async () => {
+  const f = await setup("policy-provider-swap");
+  await f.store.reserve(f.raw, { maximumExposureUsdMicros: 10000 });
+  const target = { ...f.config.target, providerId: "anthropic" };
+  assert.throws(() => durable.createPostgresExecutorStartStore({ ...f.config, target }));
+  const requestPolicy = seam.defineTrustedExecutorProviderRequestPolicy("anthropic", () => null);
+  const s = durable.createPostgresExecutorStartStore({ ...f.config, target, requestPolicy });
+  const result = await s.bindRequest(f.raw, context()); assert.equal(result.status, "conflict");
+  assert.equal(result.snapshot, null); assert.equal(result.startCapability, null);
+  assert.equal((await f.store.inspect(f.raw)).snapshot?.state, "reserved");
+  const constraints = (await db.admin.query("select pg_get_constraintdef(oid) as definition from pg_constraint where conrelid='executor_attempt_exposures'::regclass and contype='c'")).rows;
+  assert.ok(constraints.some((r: { definition: string }) => r.definition.includes("provider_id = 'openai'")));
 });

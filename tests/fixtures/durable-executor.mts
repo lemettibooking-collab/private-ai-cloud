@@ -1,5 +1,7 @@
 // @ts-expect-error Node direct TypeScript requires the runtime extension.
 import { withDevelopmentRun } from "./executor-attempt.mts";
+// @ts-expect-error Node direct TypeScript requires the runtime extension.
+export { createOpenAIAgentsRequestPolicy as executorRequestPolicy } from "../../lib/executors/openai-agents-request.ts";
 export function executorConfiguration(number = 1, runId = "development-a") {
   const c = withDevelopmentRun({ identity: { id: "openai-agents", version: "v1" },
     capabilities: { tasks: ["coding", "repository_analysis"], modes: ["patch_proposal", "analysis_only"], artifacts: ["patch", "report"] },

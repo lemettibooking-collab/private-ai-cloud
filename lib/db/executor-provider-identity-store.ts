@@ -1,5 +1,6 @@
 import type { NormalizedExecutorInvocation } from "../contracts/executor-adapter";
 import type { ExecutorTarget } from "../executors/executor-start-boundary";
+import type { ExecutorProviderRequestPolicy } from "../executors/executor-provider-request";
 import type { ExecutorProviderIdentityObserver } from "../executors/executor-provider-identity";
 import type { DurableExecutorDecision, DurableExecutorSnapshot } from "./executor-start-store";
 import type { WorkflowRuntimeSqlClient } from "./workflow-runtime-store";
@@ -8,7 +9,7 @@ import { boundedData, exactRecord, freezeDeep } from "../local-handoff/local-han
 // @ts-expect-error Node direct TypeScript requires the runtime extension.
 import { deriveExecutorProviderCorrelation, validExecutorProviderId } from "../executors/executor-provider-identity.ts";
 // @ts-expect-error Node direct TypeScript requires the runtime extension.
-import { createOpenAIAgentsCanonicalRequest } from "../executors/openai-agents-executor.ts";
+import { executorRequestPolicyMatches, prepareExecutorProviderRequest } from "../executors/executor-provider-request.ts";
 
 export type ExecutorProviderIdentitySnapshot = Readonly<{
   attempt: NormalizedExecutorInvocation["attempt"]; target: ExecutorTarget; executorIdentity: NormalizedExecutorInvocation["identity"];
@@ -23,7 +24,7 @@ export type ExecutorProviderIdentityDecision = DurableExecutorDecision & Readonl
 }>;
 type Operation = (client: WorkflowRuntimeSqlClient, i: NormalizedExecutorInvocation, exposure: DurableExecutorSnapshot) => Promise<DurableExecutorDecision>;
 type Ports = Readonly<{
-  workspace: string; target: ExecutorTarget;
+  workspace: string; target: ExecutorTarget; requestPolicy: ExecutorProviderRequestPolicy;
   run(raw: unknown, operation: Operation): Promise<DurableExecutorDecision>;
   takeStart(capability: unknown): DurableExecutorSnapshot | null;
   markUnknown(client: WorkflowRuntimeSqlClient, i: NormalizedExecutorInvocation, exposure: DurableExecutorSnapshot): Promise<void>;
@@ -44,6 +45,8 @@ function timestamp(value: unknown): number {
  * workspace SHARE → Project SHARE → budget UPDATE → exposure UPDATE → identity UPDATE.
  * No second connection, current-authority requirement, credential, network or retry. */
 export function createExecutorProviderIdentityOperations(ports: Ports) {
+  if (!executorRequestPolicyMatches(ports.requestPolicy, ports.target.providerId)) throw Error("invalid_executor_request_policy");
+  const requestPolicy = ports.requestPolicy;
   const owner = Object.freeze({});
   const key = (i: NormalizedExecutorInvocation) => [ports.workspace, i.attempt.developmentRunId, i.attempt.number];
   async function read(client: WorkflowRuntimeSqlClient, i: NormalizedExecutorInvocation, exposure: DurableExecutorSnapshot) {
@@ -106,7 +109,8 @@ export function createExecutorProviderIdentityOperations(ports: Ports) {
     try { context = boundedData(contextInput); } catch { return freezeDeep({ ...deny(), providerIdentity: null, providerCapability: null }); }
     const start = ports.takeStart(startCapability);
     const d = await evaluate(raw, async (client, i, e, p) => {
-      const request = createOpenAIAgentsCanonicalRequest(i, context, ports.target, e.maximumExposureUsdMicros, ports.workspace);
+      const request = prepareExecutorProviderRequest(requestPolicy, i, context, ports.target, e.maximumExposureUsdMicros, ports.workspace);
+      requireFact(request);
       if (request.requestFingerprint !== e.requestFingerprint) return deny("conflict");
       if (p) return p.correlationFingerprint === request.correlationFingerprint ? allow("idempotent", e) : deny("conflict");
       if (!start || e.state !== "start_committed" || start.requestFingerprint !== e.requestFingerprint || start.projectId !== e.projectId

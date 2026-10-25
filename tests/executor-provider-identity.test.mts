@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 // @ts-expect-error Node direct TypeScript requires the runtime extension.
 import { identityTransport, fakeEvents, frozen } from "./fixtures/executor-provider-identity.mts";
 // @ts-expect-error Node direct TypeScript requires the runtime extension.
-import { executorConfiguration, executorRequest, executorTarget, context } from "./fixtures/durable-executor.mts";
+import { executorConfiguration, executorRequest, executorTarget, context, executorRequestPolicy } from "./fixtures/durable-executor.mts";
 const adapter = await import(new URL("../lib/contracts/executor-adapter.ts", import.meta.url).href) as typeof import("../lib/contracts/executor-adapter");
 const transport = await import(new URL("../lib/executors/openai-agents-executor.ts", import.meta.url).href) as typeof import("../lib/executors/openai-agents-executor");
 const location = new URL("../lib/executors/executor-provider-identity.ts", import.meta.url);
@@ -126,7 +126,7 @@ async function identityUnitStore() {
     if (!sql.includes("provider-identity-audit")) row.event_version = Number(row.event_version) + 1;
     return { rows: [], rowCount: 1 };
   }, release() {} } as import("../lib/db/workflow-runtime-store").WorkflowRuntimeSqlClient;
-  const s = identityStoreModule.createExecutorProviderIdentityOperations({ workspace, target,
+  const s = identityStoreModule.createExecutorProviderIdentityOperations({ workspace, target, requestPolicy: executorRequestPolicy(),
     async run(raw, operation) { const normalized = contract.validateInvocation(raw).normalizedInvocation;
       if (!normalized) return { verdict: "deny", status: "denied", snapshot: null, startCapability: null };
       return operation(client, normalized, exposure); }, takeStart: () => null, async markUnknown() {} });
