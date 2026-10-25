@@ -104,6 +104,12 @@ test("R migration 0018 populated legacy: no invented scope/backfill, same execut
     assert.deepEqual((await f.admin.query(`select to_jsonb(t)-'admission_scope_fingerprint' as value from ${table} t order by development_run_id,authority_generation`)).rows, before[index]);
     assert.equal((await f.admin.query(`select count(*)::int as n from ${table} where admission_scope_fingerprint is not null`)).rows[0].n, 0);
   }
+  // The CURRENT factories also require the B3 binding tables. Prove 0018's
+  // preservation above in isolation, then bring the test DB to the current schema
+  // before exercising today's factories. These append-only migrations add no
+  // executor authority or fabricated legacy controller enrollment.
+  for (const path of ["0019_roadmap_foundation.sql", "0020_development_controller.sql"]) await f.admin.query(readFileSync(new URL(path, new URL("../../db/migrations/", import.meta.url)), "utf8"));
+  assert.equal((await f.admin.query("select count(*)::int as n from controller_development_runs")).rows[0].n, 0);
   const same = await setup("legacy-same", "openai", 2, f.url); assert.equal((await same.a.advanceCurrentAuthority()).status, "advanced");
   assert.equal((await same.a.inspectCurrentAuthority()).snapshot?.admissionScopeFingerprint, null);
   const switched = await setup("legacy-switch", "anthropic", 2, f.url); assert.equal((await switched.a.advanceCurrentAuthority()).status, "conflict");

@@ -129,9 +129,11 @@ async function expectState(operation: () => Promise<unknown>, expected: string, 
   try { await operation(); } catch (e) { const value = e as { code?: string; constraint?: string }; actual = { code: value.code, constraint: value.constraint }; }
   assert.equal(actual?.code, expected, "expected structured PostgreSQL rejection"); if (constraint) assert.equal(actual?.constraint, constraint);
 }
-test("B2 fresh full chain ends at0017 with exact provider domain and unchanged NOT NULL", async () => {
+test("B2 provider constraint remains exact in the current full chain with unchanged NOT NULL", async () => {
   assert.equal(db.migrations[16], "0017_executor_provider_constraint.sql");
-  assert.equal(db.migrations.at(-1), "0018_executor_authority_rebinding.sql");
+  assert.equal(db.migrations[17], "0018_executor_authority_rebinding.sql");
+  assert.equal(db.migrations[18], "0019_roadmap_foundation.sql");
+  assert.equal(db.migrations.at(-1), "0020_development_controller.sql");
   assert.deepEqual(await providerChecks(db.admin), [{ name: "executor_exposure_provider_check", expression: "(provider_id = ANY (ARRAY['openai'::text, 'anthropic'::text]))", valid: true }]);
   const column = (await db.admin.query("select attnotnull from pg_attribute where attrelid='executor_attempt_exposures'::regclass and attname='provider_id'")).rows[0]; assert.equal(column.attnotnull, true);
   const version = (await db.admin.query("select current_setting('server_version_num')::int as version,current_setting('server_encoding') as encoding")).rows[0];

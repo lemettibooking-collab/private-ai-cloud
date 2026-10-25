@@ -18,7 +18,7 @@ import { boundedData, exactRecord, ensureSafeEvidence, freezeDeep } from "../loc
 // @ts-expect-error Node direct TypeScript requires the runtime extension.
 import { normalizeExecutorTarget } from "../executors/executor-start-boundary.ts";
 // @ts-expect-error Node direct TypeScript requires the runtime extension.
-import { executorRequestPolicyMatches, prepareExecutorProviderRequest } from "../executors/executor-provider-request.ts";
+import { executorRequestPolicyMatches, prepareExecutorProviderRequest, defineTrustedExecutorProviderRequestPolicy } from "../executors/executor-provider-request.ts";
 // @ts-expect-error Node direct TypeScript requires the runtime extension.
 import { deriveExecutorAuthorityFacts } from "../executors/executor-current-authority.ts";
 // @ts-expect-error Node direct TypeScript requires the runtime extension.
@@ -29,6 +29,9 @@ import { revalidateExecutorOutcome, readExecutorOutcomeEvidence, executorOutcome
 import { createExecutorProviderIdentityOperations } from "./executor-provider-identity-store.ts";
 // @ts-expect-error Node direct TypeScript requires the runtime extension.
 import { executorPredecessorsClear } from "./executor-predecessor-barrier.ts";
+import type { ExecutorControllerBinding } from "./executor-controller-binding";
+// @ts-expect-error Node direct TypeScript requires the runtime extension.
+import { normalizeExecutorControllerBinding, lockExecutorControllerBinding } from "./executor-controller-binding.ts";
 
 export type DurableExecutorState = "reserved" | "prepared" | "start_committed" | "cancelled" | "reconciliation_required" | "settled";
 export type DurableExecutorSnapshot = Readonly<{
@@ -56,6 +59,7 @@ export type PostgresExecutorConfiguration = Readonly<{
   configuration: unknown; target: ExecutorTarget; requestPolicy: ExecutorProviderRequestPolicy; financialPolicy: ExecutorFinancialPolicy;
   // Trusted synchronous policy decision, not a caller flag. Never provider/slow work.
   authorizeStart(): boolean;
+  controllerBinding?: ExecutorControllerBinding;
 }>;
 const capabilities = new WeakMap<object, { workspace: string; snapshot: DurableExecutorSnapshot; used: boolean }>();
 /** Only the acknowledged transaction winner owns this ephemeral reference; never reconstructed from a DB row. */
@@ -91,7 +95,23 @@ const rowSelect = `project_key, development_run_id, attempt_number, attempt_kind
 
 /** Trusted server port ONLY. No route, network, credential read, retry or production dispatch. */
 export function createPostgresExecutorStartStore(input: unknown) {
-  const c = exactOwnData(input, ["database", "tenant", "projectId", "configuration", "target", "requestPolicy", "financialPolicy", "authorizeStart"]);
+  return buildExecutorStore(input).store;
+}
+/** Internal borrowed-transaction read boundary. No connection/start issuer escapes.
+ * Reuses ALL accepted historical locks/validation, not a smaller controller SQL copy.
+ * The caller owns BEGIN/COMMIT/ROLLBACK and must roll back if this method throws. */
+export function createExecutorHistoricalOutcomeReader(input: unknown) {
+  const c = exactOwnData(input, ["tenant", "projectId", "configuration", "target", "financialPolicy"]);
+  if (!c) throw Error("invalid_executor_historical_configuration");
+  const target = normalizeExecutorTarget(c.target);
+  const database: WorkflowRuntimeDatabase = Object.freeze({ async connect(): Promise<never> { throw Error("executor_historical_connection_forbidden"); } });
+  // Only historical reads are exposed. Preparation is deliberately unavailable.
+  const requestPolicy = defineTrustedExecutorProviderRequestPolicy(target.providerId as "openai" | "anthropic", () => null);
+  return buildExecutorStore({ ...c, database, target, requestPolicy, authorizeStart: () => false }).historicalReader;
+}
+function buildExecutorStore(input: unknown) {
+  const fields = ["database", "tenant", "projectId", "configuration", "target", "requestPolicy", "financialPolicy", "authorizeStart"];
+  const c = exactOwnData(input, fields) ?? exactOwnData(input, [...fields, "controllerBinding"]);
   const connect = c && capturedMethod(c.database, "connect");
   if (!c || !connect || !isResolvedWorkflowRuntimeTenant(c.tenant) || !id(c.projectId) || typeof c.authorizeStart !== "function") throw Error("invalid_durable_executor_configuration");
   const tenant = c.tenant, workspace = tenant.workspaceDatabaseId, projectId = c.projectId, authorizeStart = c.authorizeStart as () => boolean;
@@ -100,6 +120,7 @@ export function createPostgresExecutorStartStore(input: unknown) {
   if (!configured.adapter) throw Error("invalid_durable_executor_configuration");
   const contract = configured.adapter;
   const authorityFacts = deriveExecutorAuthorityFacts(c.configuration);
+  const controllerBinding = Object.hasOwn(c, "controllerBinding") ? normalizeExecutorControllerBinding(c.controllerBinding) : null;
   const target = normalizeExecutorTarget(c.target);
   if (!executorRequestPolicyMatches(c.requestPolicy, target.providerId)) throw Error("invalid_durable_executor_configuration");
   const requestPolicy = c.requestPolicy;
@@ -191,12 +212,14 @@ export function createPostgresExecutorStartStore(input: unknown) {
   }
   async function run(raw: unknown, initialize: boolean, active: boolean,
     operation: (client: WorkflowRuntimeSqlClient, i: NormalizedExecutorInvocation, held: number, row: Record<string, unknown> | null,
-      authority: import("./executor-current-authority-store").ExecutorCurrentAuthoritySnapshot | null) => Promise<DurableExecutorDecision>) {
+      authority: import("./executor-current-authority-store").ExecutorCurrentAuthoritySnapshot | null) => Promise<DurableExecutorDecision>, borrowedClient?: WorkflowRuntimeSqlClient) {
     if (uncertain) return denied("recovery_required");
     const d = contract.validateInvocation(raw); if (!d.normalizedInvocation) return denied(); const i = d.normalizedInvocation;
     try {
-      return await inTransaction(database, async client => {
+      const work = async (client: WorkflowRuntimeSqlClient) => {
         if (!await lockExecutorWorkspaceProject(client, tenant, projectId, active)) return denied();
+        if (active && !await lockExecutorControllerBinding(client, tenant, projectId, authorityFacts, configuration, controllerBinding,
+          { target, financialPolicy: { maximumExposureUsdMicros: maximum, totalExposureUsdMicros: total, reservationTtlMs: ttl }, requestPolicy, invocation: i })) return denied("conflict");
         // Historical operations use the compatible subsequence workspace → Project → budget → exposure.
         // Current authority controls START, never receipt of historical output after revocation/advance.
         const authority = active ? await lockExecutorAuthority(client, workspace, authorityFacts.developmentRunId) : null;
@@ -224,8 +247,14 @@ export function createPostgresExecutorStartStore(input: unknown) {
           if (row.state === "settled") await readOutcome(client, i, row);
         }
         return operation(client, i, held, row, authority);
-      });
-    } catch { uncertain = true; return denied("recovery_required"); }
+      };
+      return borrowedClient ? await work(borrowedClient) : await inTransaction(database, work);
+    } catch (error) {
+      // Do not swallow a failed statement on a caller-owned transaction: its owner
+      // must ROLLBACK/destroy before releasing the same pooled session.
+      if (borrowedClient) throw error;
+      uncertain = true; return denied("recovery_required");
+    }
   }
   async function reserve(raw: unknown, exposureInput: unknown): Promise<DurableExecutorDecision> {
     let amount: number;
@@ -426,15 +455,16 @@ export function createPostgresExecutorStartStore(input: unknown) {
     });
     return freezeDeep({ ...d, normalizedResult: d.verdict === "allow" ? result : null, resultFingerprint: d.verdict === "allow" ? resultFingerprint : null });
   }
-  async function inspectOutcome(raw: unknown): Promise<DurableExecutorOutcomeDecision> {
+  async function inspectOutcomeUsing(raw: unknown, borrowedClient?: WorkflowRuntimeSqlClient): Promise<DurableExecutorOutcomeDecision> {
     let result: NormalizedExecutorResult | null = null, resultFingerprint: string | null = null;
     const d = await run(raw, false, false, async (client, i, _held, row) => {
       if (!row || row.state !== "settled") return denied("recovery_required");
       const saved = await readOutcome(client, i, row); result = saved.normalizedResult; resultFingerprint = saved.resultFingerprint;
       return allowed("observed", snapshot(row, i));
-    });
+    }, borrowedClient);
     return freezeDeep({ ...d, normalizedResult: d.verdict === "allow" ? result : null, resultFingerprint: d.verdict === "allow" ? resultFingerprint : null });
   }
+  const inspectOutcome = (raw: unknown) => inspectOutcomeUsing(raw);
   const providerIdentity = createExecutorProviderIdentityOperations({ workspace, target, requestPolicy,
     run: (raw, operation) => run(raw, false, false, (client, i, _held, row) => row ? operation(client, i, snapshot(row, i)) : Promise.resolve(denied())),
     takeStart(capability) {
@@ -443,6 +473,8 @@ export function createPostgresExecutorStartStore(input: unknown) {
     },
     async markUnknown(client, i, exposure) { if (exposure.state === "start_committed") await reconcile(client, i); },
   });
-  return Object.freeze({ reserve, bindRequest, commitProviderStart, cancel, markReconciliationRequired, recordEvidence, inspect, ...providerIdentity,
+  const store = Object.freeze({ reserve, bindRequest, commitProviderStart, cancel, markReconciliationRequired, recordEvidence, inspect, ...providerIdentity,
     recordDefinitiveOutcomeAndSettle, inspectOutcome, realDispatch: "blocked" as const });
+  const historicalReader = Object.freeze({ inspectOutcomeInTransaction: (client: WorkflowRuntimeSqlClient, raw: unknown) => inspectOutcomeUsing(raw, client) });
+  return Object.freeze({ store, historicalReader });
 }

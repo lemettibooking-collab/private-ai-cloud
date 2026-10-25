@@ -30,7 +30,7 @@ export async function settleCandidate(f: Workload, store: SharedStore, result: i
   return store.recordDefinitiveOutcomeAndSettle(f.raw, f.prepared.requestFingerprint, receipt);
 }
 /** Explicit fixture selection, not a Router. All OpenAI HTTP is injected in-process fake. */
-export async function transmit(f: Workload, store: SharedStore, start: unknown, mode: Mode = "success") {
+export async function transmit(f: Workload, store: SharedStore, start: unknown, mode: Mode = "success", simulation: { identitySuffix?: string; proposal?: unknown } = {}) {
   if (f.target.providerId === "anthropic") {
     const script = structuredClone(f.script);
     if (mode === "timeout") script.createOutcome = "timeout";
@@ -50,7 +50,8 @@ export async function transmit(f: Workload, store: SharedStore, start: unknown, 
     credential: () => "synthetic-test-placeholder-not-live" }, async (_url, init) => {
     calls++; assert.equal(init.method, "POST"); assert.equal(init.body, f.prepared.body);
     if (mode === "timeout") throw Error("simulated-timeout");
-    const events = fakeEvents(f.raw.attempt.developmentRunId) as Array<Record<string, unknown>>;
+    const events = fakeEvents(`${f.raw.attempt.developmentRunId}${simulation.identitySuffix ?? ""}`) as Array<Record<string, unknown>>;
+    if (simulation.proposal) ((events[1].item as { content: Array<{ text: string }> }).content[0]).text = JSON.stringify(simulation.proposal);
     (events[0].session as Record<string, unknown>).metadata = JSON.parse(init.body).metadata;
     if (mode === "missing") (events[0].session as Record<string, unknown>).id = "";
     if (mode === "malformed") events[1] = { type: "unrecognized" };

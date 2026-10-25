@@ -41,7 +41,7 @@ function cannedRow(state = "prepared") {
     observed_input_tokens: null, observed_output_tokens: null, observed_total_tokens: null, provider_consumed_cents: null,
     created_ms: "1000", updated_ms: "2000", expires_ms: "61000", prepared_ms: "1500", started_ms: state === "prepared" ? null : "2000" };
 }
-async function mock(options: { failure?: string; error?: unknown; rollbackFails?: boolean; row?: Record<string, unknown>; approval?: unknown; authority?: Record<string, unknown> | null } = {}) {
+async function mock(options: { failure?: string; error?: unknown; rollbackFails?: boolean; row?: Record<string, unknown>; approval?: unknown; authority?: Record<string, unknown> | null; controllerMapped?: boolean } = {}) {
   let row = options.row ?? cannedRow(); const queries: string[] = [], released: boolean[] = [];
   const client = { async query(text: string) {
     queries.push(text);
@@ -50,6 +50,9 @@ async function mock(options: { failure?: string; error?: unknown; rollbackFails?
     const one = (value: Record<string, unknown>) => ({ rows: [value], rowCount: 1 });
     if (text.includes("executor:workspace")) return one({ domain_workspace_id: "workspace-primary", status: "active" });
     if (text.includes("executor:project")) return one({ status: "active" });
+    if (text.includes("executor:controller-guard-init")) return { rows: [], rowCount: 0 };
+    if (text.includes("executor:controller-guard")) return one({ project_key: "project-a" });
+    if (text.includes("executor:controller-mapping")) return options.controllerMapped ? one({ project_key: "project-a", project_task_key: "owner-task-a" }) : { rows: [], rowCount: 0 };
     if (text.includes("executor:authority-lock")) { const f = authority.deriveExecutorAuthorityFacts(executorConfiguration());
       if (options.authority === null) return { rows: [], rowCount: 0 };
       return one({ project_key: "project-a", development_run_id: f.developmentRunId, plan_id: f.planId, task_id: f.taskId,
@@ -75,6 +78,20 @@ test("trusted factory rejects forged/cloned tenant, hostile configuration and un
   const proxy = new Proxy({}, { ownKeys() { touched++; throw Error("private"); } });
   for (const c of [{ ...config, tenant: { ...config.tenant } }, { ...config, tenant: { workspaceDatabaseId: workspace, workspaceId: "workspace-primary" } }, hostile, proxy, { ...config, extra: true }])
     assert.throws(() => durable!.createPostgresExecutorStartStore(c));
+  assert.equal(touched, 0); assert.equal(queries.length, 0);
+});
+test("B3 mapped Run cannot bypass controller binding through an old unbound factory", async () => {
+  const { store, queries } = await mock({ controllerMapped: true });
+  failClosed(await store.commitProviderStart(executorRequest(), fp));
+  assert.ok(queries.some(q => q.includes("executor:controller-guard")));
+  assert.ok(!queries.some(q => q.includes("executor:authority-lock") || q.includes("executor:start */")));
+});
+test("B3 optional binding rejects malformed/proxy/getter inputs without executing hostile accessors", async () => {
+  const { config, queries } = await mock(); let touched = 0;
+  const getter = Object.defineProperty({}, "projectTaskId", { enumerable: true, get() { touched++; throw Error("private"); } });
+  for (const controllerBinding of [undefined, null, {}, new Proxy({}, {}), getter,
+    { projectTaskId: "owner-task-a", intentFingerprint: fp, authorizeStart: true }, { projectTaskId: "owner-task-a", intentFingerprint: "bad" }])
+    assert.throws(() => durable!.createPostgresExecutorStartStore({ ...config, controllerBinding }));
   assert.equal(touched, 0); assert.equal(queries.length, 0);
 });
 test("different provider cannot reuse the OpenAI account/exposure route", async () => {

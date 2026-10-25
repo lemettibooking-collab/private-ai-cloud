@@ -135,6 +135,8 @@ export type DevelopmentExecutionAttempt = Readonly<{
   verificationChecks: readonly DevelopmentExecutionVerificationCheck[];
   reviewStatus: DevelopmentExecutionReviewStatus;
   closureKind: DevelopmentExecutionAttemptClosureKind;
+  /** Explicit report-only output. Absent from every legacy patch-only snapshot. */
+  analysisReportFingerprint?: string;
 }>;
 
 export type DevelopmentExecutionBlockingReason = Readonly<{
@@ -174,6 +176,7 @@ export type DevelopmentExecutionFailureReport = Omit<
 export type DevelopmentExecutionEvent =
   | Readonly<{ type: "start_attempt" }>
   | Readonly<{ type: "submit_patch"; changedPaths: readonly string[] }>
+  | Readonly<{ type: "submit_analysis"; reportFingerprint: string }>
   | Readonly<{
       type: "implementation_failed";
       failure: DevelopmentExecutionFailureReport;
@@ -833,6 +836,19 @@ function normalizeAttempt(
     errors,
   );
 
+  const analysisDescriptor = Object.getOwnPropertyDescriptor(input, "analysisReportFingerprint");
+  let analysisReportFingerprint: string | undefined;
+  if (analysisDescriptor !== undefined) {
+    if (!("value" in analysisDescriptor) || typeof analysisDescriptor.value !== "string" || !/^[a-f0-9]{64}$/u.test(analysisDescriptor.value)) {
+      addReason(errors, "invalid_transition", `${path}.analysisReportFingerprint`, "Analysis output requires an explicit lowercase SHA-256 report fingerprint.");
+    } else {
+      analysisReportFingerprint = analysisDescriptor.value;
+      if (changedPaths !== null && changedPaths.length > 0) {
+        addReason(errors, "invalid_transition", `${path}.analysisReportFingerprint`, "An attempt cannot mix report-only analysis evidence and patch paths.");
+      }
+    }
+  }
+
   let failureFingerprints: readonly string[] | null = null;
   if (!Array.isArray(input.failureFingerprints)) {
     addReason(
@@ -922,6 +938,7 @@ function normalizeAttempt(
     verificationChecks,
     reviewStatus,
     closureKind,
+    ...(analysisReportFingerprint === undefined ? {} : { analysisReportFingerprint }),
   };
 }
 
@@ -1019,6 +1036,10 @@ function hasCompleteVerificationEvidence(
         check.command === requiredCommands[index] && check.exitCode === 0,
     )
   );
+}
+
+function hasSubmittedOutput(attempt: DevelopmentExecutionAttempt): boolean {
+  return attempt.changedPaths.length > 0 || attempt.analysisReportFingerprint !== undefined;
 }
 
 function requireVerificationEvidence(
@@ -1355,6 +1376,7 @@ function validateAndNormalizeDevelopmentExecutionRunInternal(
       requireNoVerificationEvidence(attempt, index, errors);
       if (
         attempt.changedPaths.length === 0 ||
+        attempt.analysisReportFingerprint !== undefined ||
         attempt.reviewStatus !== "not_started"
       ) {
         addReason(
@@ -1373,12 +1395,12 @@ function validateAndNormalizeDevelopmentExecutionRunInternal(
         requiredVerificationCommands,
         errors,
       );
-      if (attempt.reviewStatus !== "passed") {
+      if (!hasSubmittedOutput(attempt) || attempt.reviewStatus !== "passed") {
         addReason(
           errors,
           "invalid_transition",
           `attempts[${index}].reviewStatus`,
-          "A successfully completed attempt requires explicit passed review evidence.",
+          "A successfully completed attempt requires submitted output and explicit passed review evidence.",
         );
       }
     }
@@ -1391,6 +1413,7 @@ function validateAndNormalizeDevelopmentExecutionRunInternal(
           requiredVerificationCommands,
           errors,
         );
+        if (!hasSubmittedOutput(attempt)) addReason(errors, "invalid_transition", `attempts[${index}]`, "Cancellation during review requires submitted output.");
       } else if (attempt.reviewStatus === "not_started") {
         requireNoVerificationEvidence(attempt, index, errors);
       } else {
@@ -1447,6 +1470,7 @@ function validateAndNormalizeDevelopmentExecutionRunInternal(
     requireNoVerificationEvidence(lastAttempt, attempts.length - 1, errors);
     if (
       lastAttempt.changedPaths.length > 0 ||
+      lastAttempt.analysisReportFingerprint !== undefined ||
       lastAttempt.reviewStatus !== "not_started" ||
       lastAttempt.closureKind !== "none"
     ) {
@@ -1493,13 +1517,13 @@ function validateAndNormalizeDevelopmentExecutionRunInternal(
   }
   if (
     (status === "verifying" || status === "reviewing") &&
-    lastAttempt?.changedPaths.length === 0
+    lastAttempt !== undefined && !hasSubmittedOutput(lastAttempt)
   ) {
     addReason(
       errors,
       "invalid_transition",
       "attempts",
-      `Status ${status} requires submitted changed paths.`,
+      `Status ${status} requires submitted changed paths or explicit analysis report evidence.`,
     );
   }
   if (
@@ -1694,6 +1718,7 @@ function validateAndNormalizeDevelopmentExecutionRunInternal(
       requireNoVerificationEvidence(attempt, attemptIndex, errors);
       if (
         attempt.changedPaths.length > 0 ||
+        attempt.analysisReportFingerprint !== undefined ||
         attempt.reviewStatus !== "not_started"
       ) {
         addReason(
@@ -1706,14 +1731,14 @@ function validateAndNormalizeDevelopmentExecutionRunInternal(
     } else if (failure.phase === "verification") {
       requireNoVerificationEvidence(attempt, attemptIndex, errors);
       if (
-        attempt.changedPaths.length === 0 ||
+        !hasSubmittedOutput(attempt) ||
         attempt.reviewStatus !== "not_started"
       ) {
         addReason(
           errors,
           "invalid_transition",
           `attempts[${attemptIndex}]`,
-          "A verification failure requires submitted paths and no review evidence.",
+          "A verification failure requires submitted output and no review evidence.",
         );
       }
     } else {
@@ -1724,7 +1749,7 @@ function validateAndNormalizeDevelopmentExecutionRunInternal(
         errors,
       );
       if (
-        attempt.changedPaths.length === 0 ||
+        !hasSubmittedOutput(attempt) ||
         attempt.reviewStatus !== "failed"
       ) {
         addReason(
@@ -2572,6 +2597,19 @@ function transitionDevelopmentExecutionRunInternal(
           })),
         }),
       };
+    }
+
+    case "submit_analysis": {
+      if (run.status !== "implementing") return transitionError("event.type", `submit_analysis is not allowed from status ${run.status}.`);
+      const keys = Reflect.ownKeys(eventInput);
+      const descriptor = Object.getOwnPropertyDescriptor(eventInput, "reportFingerprint");
+      if (keys.length !== 2 || !keys.includes("type") || !keys.includes("reportFingerprint") || !descriptor || !("value" in descriptor)
+        || typeof descriptor.value !== "string" || !/^[a-f0-9]{64}$/u.test(descriptor.value)) {
+        return transitionError("event.reportFingerprint", "Analysis submission requires only a bounded lowercase SHA-256 report fingerprint.");
+      }
+      return { ok: true, value: withStatus(run, "verifying", {
+        attempts: replaceLastAttempt(run.attempts, attempt => ({ ...attempt, analysisReportFingerprint: descriptor.value as string })),
+      }) };
     }
 
     case "implementation_failed":

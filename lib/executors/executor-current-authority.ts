@@ -46,8 +46,15 @@ export function deriveExecutorAuthorityFacts(input: unknown): ExecutorAuthorityF
       const predecessor: DevelopmentExecutionRun = { ...run, currentAttemptNumber: number,
         status: "implementing", nextAction: "submit_patch_or_failure", blockingReasons: [],
         failures: run.failures.filter(f => f.attemptNumber < number),
-        attempts: run.attempts.slice(0, number).map(a => a.number !== number ? a : { ...a, status: "in_progress",
-          changedPaths: [], failureFingerprints: [], verificationChecks: [], reviewStatus: "not_started", closureKind: "none" }) };
+        attempts: run.attempts.slice(0, number).map(a => {
+          if (a.number !== number) return a;
+          const rewound = { ...a, status: "in_progress" as const, changedPaths: [], failureFingerprints: [], verificationChecks: [],
+            reviewStatus: "not_started" as const, closureKind: "none" as const };
+          // Analysis output is no more initial implementing evidence than patch paths.
+          // Remove ONLY the adjacent attempt's optional field; older history stays factual.
+          delete rewound.analysisReportFingerprint;
+          return rewound;
+        }) };
       const p = validateAndNormalizeDevelopmentExecutionRun(predecessor);
       if (!p.ok) throw Error();
       predecessorRunFingerprint = digest(p.value);

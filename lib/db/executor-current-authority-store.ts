@@ -9,6 +9,8 @@ import { isResolvedWorkflowRuntimeTenant } from "./workflow-runtime-tenant.ts";
 import { exactOwnData, capturedMethod, inTransaction } from "./executor-start-transaction.ts";
 // @ts-expect-error Node direct TypeScript requires the runtime extension.
 import { boundedData, freezeDeep } from "../local-handoff/local-handoff-policy.ts";
+// @ts-expect-error Node direct TypeScript requires the runtime extension.
+import { normalizeExecutorControllerBinding, lockExecutorControllerBinding } from "./executor-controller-binding.ts";
 
 export type ExecutorCurrentAuthoritySnapshot = Readonly<{
   projectId: string; developmentRunId: string; planId: string; taskId: string;
@@ -70,10 +72,12 @@ export function executorAuthorityMatches(a: ExecutorCurrentAuthoritySnapshot, pr
 }
 /** Internal trusted control-plane port. No invocation, generation, status or approval parameters. */
 export function createPostgresExecutorCurrentAuthorityStore(input: unknown) {
-  const c = exactOwnData(input, ["database", "tenant", "projectId", "configuration"]);
+  const fields = ["database", "tenant", "projectId", "configuration"];
+  const c = exactOwnData(input, fields) ?? exactOwnData(input, [...fields, "controllerBinding"]);
   const connect = c && capturedMethod(c.database, "connect");
   if (!c || !connect || !isResolvedWorkflowRuntimeTenant(c.tenant) || !validId(c.projectId)) throw Error("invalid_executor_authority_configuration");
-  const tenant = c.tenant, projectId = c.projectId, f = deriveExecutorAuthorityFacts(c.configuration);
+  const tenant = c.tenant, projectId = c.projectId, configuration = freezeDeep(boundedData(c.configuration)), f = deriveExecutorAuthorityFacts(configuration);
+  const controllerBinding = Object.hasOwn(c, "controllerBinding") ? normalizeExecutorControllerBinding(c.controllerBinding) : null;
   const database: WorkflowRuntimeDatabase = Object.freeze({ connect: () => Reflect.apply(connect, undefined, []) as ReturnType<WorkflowRuntimeDatabase["connect"]> });
   const key = [tenant.workspaceDatabaseId, f.developmentRunId];
   let uncertain = false;
@@ -89,6 +93,8 @@ export function createPostgresExecutorCurrentAuthorityStore(input: unknown) {
     if (uncertain) return deny("recovery_required");
     try { return await inTransaction(database, async client => {
       if (!await lockExecutorWorkspaceProject(client, tenant, projectId, operation === "register" || operation === "advance")) return deny();
+      if ((operation === "register" || operation === "advance")
+        && !await lockExecutorControllerBinding(client, tenant, projectId, f, configuration, controllerBinding)) return deny("conflict");
       if (uncertain) return deny("recovery_required");
       if (operation === "register") {
         const inserted = await client.query(`/* executor:authority-register */ insert into executor_run_authorities

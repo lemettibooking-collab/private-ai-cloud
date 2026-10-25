@@ -164,9 +164,11 @@ test("O. dependency direction: UI → Server Action → server composition → o
   // the binding module. AI-039: the FeaturePlan revision contract imports ONLY the shared write-boundary
   // primitives (Owner lock, transaction, strict input reading) — never createTask / attachRun.
   assert.deepEqual(importers(/\bcreateOwnerTaskMutations\b/u).filter((path) => path !== "lib/tasks/owner-task-mutations.ts"), ["lib/composition/owner-task-create.ts"]);
-  // AI-039.1: the planning request boundary is the only other importer, of the same primitives.
+  // B3 adds explicit server-internal roadmap/controller Owner boundaries. They reuse
+  // only strict input/Owner-lock/error primitives, never createTask or attachRun.
   assert.deepEqual(importers(/from\s+["'][^"']*\/tasks\/owner-task-mutations(\.ts)?["']/u),
-    ["lib/composition/owner-task-create.ts", "lib/development/feature-plan-mutations.ts", "lib/development/feature-plan-planning-requests.ts", "lib/integrations/chatgpt/chatgpt-owner-authority.ts"]);
+    ["lib/composition/owner-task-create.ts", "lib/db/development-controller-approvals.ts", "lib/db/development-controller-store.ts", "lib/db/roadmap-approvals.ts", "lib/db/roadmap-owner-read.ts", "lib/db/roadmap-store.ts",
+      "lib/development/feature-plan-mutations.ts", "lib/development/feature-plan-planning-requests.ts", "lib/integrations/chatgpt/chatgpt-owner-authority.ts", "lib/roadmap/roadmap-owner-commands.ts"]);
   for (const path of ["lib/development/feature-plan-mutations.ts", "lib/development/feature-plan-planning-requests.ts"]) {
     assert.match(code(path),
       /import \{ Conflict, Unavailable, capturedMethod, exactOwnData, inTransaction, lockOwnerAuthority, resolveUserId \} from "\.\.\/tasks\/owner-task-mutations\.ts";/u, path);

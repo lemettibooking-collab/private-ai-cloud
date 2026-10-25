@@ -29,6 +29,27 @@ for (const n of [1, 2, 3]) test(`factual attempt ${n} and adjacent predecessor f
   assert.equal(f.attemptNumber, n); assert.equal(f.attemptKind, n === 1 ? "initial" : "corrective");
   assert.equal(f.predecessorRunFingerprint, n === 1 ? null : facts.deriveExecutorAuthorityFacts(executorConfiguration(n - 1)).canonicalRunFingerprint);
 });
+for (const phase of ["verification", "review"] as const) test(`analysis ${phase} failure: corrective authority rewinds report evidence only for the adjacent predecessor`, () => {
+  const c = executorConfiguration(), before = structuredClone(c), initial = facts.deriveExecutorAuthorityFacts(c);
+  let run = transition(c.developmentRun, { type: "submit_analysis", reportFingerprint: "a".repeat(64) });
+  if (phase === "review") run = transition(run, { type: "verification_passed", checks: [{ command: "npm test", exitCode: 0 }] });
+  run = transition(run, { type: `${phase}_failed`, failure: { phase, code: "analysis_needs_correction", fingerprint: `analysis-${phase}-1`,
+    summary: "Analysis needs bounded correction", retryable: true, scopeExpansionRequired: false, protectedPathViolation: false, systemForbiddenPathViolation: false } });
+  run = transition(run, { type: "start_attempt" });
+  const second = facts.deriveExecutorAuthorityFacts({ ...c, developmentRun: run });
+  assert.equal(second.predecessorRunFingerprint, initial.canonicalRunFingerprint);
+  assert.equal(second.admissionScopeFingerprint, initial.admissionScopeFingerprint);
+  assert.equal(run.attempts[0].analysisReportFingerprint, "a".repeat(64)); assert.deepEqual(c, before);
+  const secondInitial = structuredClone(run);
+  run = transition(run, { type: "submit_analysis", reportFingerprint: "b".repeat(64) });
+  run = transition(run, { type: "verification_failed", failure: { phase: "verification", code: "analysis_needs_correction", fingerprint: "analysis-verification-2",
+    summary: "Analysis needs another bounded correction", retryable: true, scopeExpansionRequired: false, protectedPathViolation: false, systemForbiddenPathViolation: false } });
+  run = transition(run, { type: "start_attempt" });
+  const third = facts.deriveExecutorAuthorityFacts({ ...c, developmentRun: run });
+  assert.equal(third.predecessorRunFingerprint, second.canonicalRunFingerprint);
+  assert.equal(run.attempts[0].analysisReportFingerprint, "a".repeat(64)); assert.equal(run.attempts[1].analysisReportFingerprint, "b".repeat(64));
+  assert.equal(secondInitial.attempts[1].analysisReportFingerprint, undefined); assert.deepEqual(c, before);
+});
 test("run and grant fingerprints bind independently to real verification/admission facts", () => {
   const c = executorConfiguration(), original = facts.deriveExecutorAuthorityFacts(c);
   const changed = structuredClone(c); changed.developmentRun = { ...changed.developmentRun, requiredVerificationCommands: ["npm run lint"] };
