@@ -6,6 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+// @ts-expect-error Node direct TypeScript requires the runtime extension.
+import { relocateLegacyExecutor } from "../fixtures/legacy-executor-authority.mts";
 const exec = promisify(execFile);
 const root = new URL("../../", import.meta.url);
 const migration = await readFile(new URL("db/migrations/0017_executor_provider_constraint.sql", root), "utf8");
@@ -41,7 +43,7 @@ for (const [name, search, replacement, suffix, pattern] of cases) test(`${name}:
   if (name.startsWith("M6")) {
     const location = new URL("lib/db/executor-start-store.ts", root), source = await readFile(location, "utf8");
     const changed = source.replace("active && !await executorPredecessorsClear", "false && !await executorPredecessorsClear"); assert.notEqual(changed, source);
-    const relocated = changed.replace(/(from\s+)["'](\.[^"']+\.ts)["']/gu, (_m, from, relative) => `${from}${JSON.stringify(new URL(relative, location).href)}`);
+    const relocated = relocateLegacyExecutor(changed, location);
     environment.EXECUTOR_PROVIDER_MIGRATION_STORE = join(temp, "store.mts"); await writeFile(environment.EXECUTOR_PROVIDER_MIGRATION_STORE, relocated);
   } else {
     if (search) assert.equal(migration.split(search).length, 2, "mutation anchor must match once");

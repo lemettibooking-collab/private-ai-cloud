@@ -908,10 +908,17 @@ semantics remain unchanged. This task closes implementation/review, not live acc
 **AI-041.2b1 — DONE**, integrated at `fca80a5a272ef734295cd250432f42ea2333db3b` after independent PASS:
 [predecessor quiescence barrier](architecture/executor-predecessor-quiescence-v1.md)
 over shared durable start/settlement facts.
-**AI-041.2b2 — IN REVIEW:** append-only [provider CHECK migration](architecture/executor-provider-constraint-migration-v1.md)
+**AI-041.2b2 — DONE**, integrated at `45c55e56ed98df2e40822cee1e3c89ca90a54d1a` after independent PASS:
+append-only [provider CHECK migration](architecture/executor-provider-constraint-migration-v1.md)
 `0017`, exact `openai, anthropic` domain; identity/finance/runtime unchanged.
-AI-041.2b and AI-041.2 remain NOT DONE. AI-041.2c Claude Managed Agents Fake
-Adapter is next only after an independent migration gate; it has not started.
+AI-041.2b is DONE; AI-041.2 remains NOT DONE. The AI-041.2 Completion Delivery
+Block combines c fake adapter and d portability/adversarial proof: both READY FOR
+CONSOLIDATED RE-GATE, not DONE. The amended [authority rebind](architecture/executor-authority-rebinding-v1.md)
+prerequisite adds only `0018`; internal R checkpoint and full C revalidation passed.
+[Portability proof](architecture/executor-portability-proof-v1.md) keeps one shared
+authority/exposure/identity/settlement core. One consolidated handoff, review patch,
+independent re-gate and controlled integration; no separate R/C commit. AI-041.3
+Executor Router remains next only after AI-041.2 consolidated PASS/integration.
 Overall v1.5 ordering, `runtimeDispatchAllowed=false` and production/live BLOCKED
 status are unchanged. Schema eligibility is not a provider execution grant.
 

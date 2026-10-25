@@ -7,15 +7,15 @@ import { pathToFileURL } from "node:url";
 import { executorConfiguration, executorRequest, executorTarget, executorRequestPolicy, financialPolicy, context } from "../fixtures/durable-executor.mts";
 // @ts-expect-error Node direct TypeScript requires the runtime extension.
 import { receipt } from "../fixtures/executor-outcome.mts";
+// @ts-expect-error Node direct TypeScript requires the runtime extension.
+import { legacyAuthority as authority, legacyCore } from "../fixtures/legacy-executor-authority.mts";
 const live = await import(new URL("./helpers/live-pg.ts", import.meta.url).href) as typeof import("./helpers/live-pg");
 const postgres = await import(new URL("../../lib/db/postgres.ts", import.meta.url).href) as typeof import("../../lib/db/postgres");
 const tenants = await import(new URL("../../lib/db/workflow-runtime-tenant.ts", import.meta.url).href) as typeof import("../../lib/db/workflow-runtime-tenant");
-const authority = await import(new URL("../../lib/db/executor-current-authority-store.ts", import.meta.url).href) as typeof import("../../lib/db/executor-current-authority-store");
 const seam = await import(new URL("../../lib/executors/executor-provider-request.ts", import.meta.url).href) as typeof import("../../lib/executors/executor-provider-request");
 const identity = await import(new URL("../../lib/executors/executor-provider-identity.ts", import.meta.url).href) as typeof import("../../lib/executors/executor-provider-identity");
 const adapter = await import(new URL("../../lib/contracts/executor-adapter.ts", import.meta.url).href) as typeof import("../../lib/contracts/executor-adapter");
-const moduleUrl = process.env.EXECUTOR_PROVIDER_MIGRATION_STORE ? pathToFileURL(process.env.EXECUTOR_PROVIDER_MIGRATION_STORE).href : new URL("../../lib/db/executor-start-store.ts", import.meta.url).href;
-const durable = await import(moduleUrl) as typeof import("../../lib/db/executor-start-store");
+const durable = process.env.EXECUTOR_PROVIDER_MIGRATION_STORE ? await import(pathToFileURL(process.env.EXECUTOR_PROVIDER_MIGRATION_STORE).href) as typeof import("../../lib/db/executor-start-store") : legacyCore;
 const migration = new URL("../../db/migrations/0017_executor_provider_constraint.sql", import.meta.url);
 const sql = () => process.env.EXECUTOR_PROVIDER_MIGRATION_SQL ? readFileSync(process.env.EXECUTOR_PROVIDER_MIGRATION_SQL, "utf8") : readFileSync(migration, "utf8");
 const db = await live.useLiveDatabase("providerconstraint");
@@ -130,7 +130,8 @@ async function expectState(operation: () => Promise<unknown>, expected: string, 
   assert.equal(actual?.code, expected, "expected structured PostgreSQL rejection"); if (constraint) assert.equal(actual?.constraint, constraint);
 }
 test("B2 fresh full chain ends at0017 with exact provider domain and unchanged NOT NULL", async () => {
-  assert.equal(db.migrations.at(-1), "0017_executor_provider_constraint.sql");
+  assert.equal(db.migrations[16], "0017_executor_provider_constraint.sql");
+  assert.equal(db.migrations.at(-1), "0018_executor_authority_rebinding.sql");
   assert.deepEqual(await providerChecks(db.admin), [{ name: "executor_exposure_provider_check", expression: "(provider_id = ANY (ARRAY['openai'::text, 'anthropic'::text]))", valid: true }]);
   const column = (await db.admin.query("select attnotnull from pg_attribute where attrelid='executor_attempt_exposures'::regclass and attname='provider_id'")).rows[0]; assert.equal(column.attnotnull, true);
   const version = (await db.admin.query("select current_setting('server_version_num')::int as version,current_setting('server_encoding') as encoding")).rows[0];

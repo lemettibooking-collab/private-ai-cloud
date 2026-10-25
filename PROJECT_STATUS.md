@@ -42,11 +42,19 @@ OpenAI extraction integrated at `f782e1e438b4030efeba1bd70b90485ab71a52e3` after
 **AI-041.2b1 — DONE**, integrated at `fca80a5a272ef734295cd250432f42ea2333db3b` after independent PASS:
 [predecessor barrier](docs/architecture/executor-predecessor-quiescence-v1.md)
 for reserve/prepare/start; factual authority advance and historical settlement remain allowed.
-**AI-041.2b2 — IN REVIEW:** append-only [provider CHECK migration](docs/architecture/executor-provider-constraint-migration-v1.md)
+**AI-041.2b2 — DONE**, integrated at `45c55e56ed98df2e40822cee1e3c89ca90a54d1a` after independent PASS:
+append-only [provider CHECK migration](docs/architecture/executor-provider-constraint-migration-v1.md)
 `0017` permits exactly `openai, anthropic` in the shared parent row; no identity,
-financial or production TypeScript changes. AI-041.2b and AI-041.2 remain NOT DONE.
-No Claude implementation or live enablement. AI-041.2c Claude Managed Agents Fake
-Adapter may start only after the independent migration gate passes.
+financial or production TypeScript changes in that prerequisite. AI-041.2b is DONE.
+**AI-041.2 Completion Delivery Block — READY FOR CONSOLIDATED RE-GATE:**
+c Claude fake adapter and d portability proof share one candidate. The amended
+[authority rebind prerequisite](docs/architecture/executor-authority-rebinding-v1.md)
+(`0018`) passed its internal R checkpoint; complete C revalidation passed afterwards.
+[Portability evidence and limits](docs/architecture/executor-portability-proof-v1.md)
+cover both executor directions without a second durable lifecycle. c/d are READY
+FOR CONSOLIDATED RE-GATE, not independently DONE. AI-041.2 remains NOT DONE until
+independent acceptance. No separate R/C integration; no real provider access,
+Router or live enablement. After consolidated PASS/integration: AI-041.3 Executor Router.
 
 **Intended execution path before AI-052:** managed Codex/OpenAI and Claude,
 only through factually supported, policy-compliant provider-managed environments

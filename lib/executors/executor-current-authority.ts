@@ -13,7 +13,7 @@ import { boundedData, freezeDeep, compare } from "../local-handoff/local-handoff
 
 export type ExecutorAuthorityFacts = Readonly<{
   developmentRunId: string; planId: string; taskId: string; attemptNumber: number; attemptKind: "initial" | "corrective";
-  canonicalRunFingerprint: string; admissionFingerprint: string; predecessorRunFingerprint: string | null;
+  canonicalRunFingerprint: string; admissionFingerprint: string; admissionScopeFingerprint: string; predecessorRunFingerprint: string | null;
 }>;
 // ONLY bounded, validated data reaches this serializer; no arbitrary unknown traversal.
 function digest(value: unknown): string {
@@ -61,6 +61,14 @@ export function deriveExecutorAuthorityFacts(input: unknown): ExecutorAuthorityF
         completedTaskIds: [...c.admission.completedTaskIds as string[]].sort(compare),
         activeTaskIds: [...c.admission.activeTaskIds as string[]].sort(compare),
         repositoryAllowlist: [...c.admission.repositoryAllowlist as string[]].sort(compare),
-        identity: contract.adapter.identity, capabilities: contract.adapter.capabilities, repository: c.repository }) });
+        identity: contract.adapter.identity, capabilities: contract.adapter.capabilities, repository: c.repository }),
+      // Separate domain: preserve the historical FULL digest above byte-for-byte.
+      // Stable admission excludes only the intentionally replaceable executor declaration.
+      admissionScopeFingerprint: digest({ policy: "development_task_admission_scope_v1", plan: plan.value,
+        taskId: admission.taskId, admittedPaths: paths, ownerApprovalRequired: admission.ownerApprovalRequired,
+        ownerApprovalSatisfied: admission.ownerApprovalSatisfied, taskOwnerApprovalGranted: c.admission.taskOwnerApprovalGranted,
+        completedTaskIds: [...c.admission.completedTaskIds as string[]].sort(compare),
+        activeTaskIds: [...c.admission.activeTaskIds as string[]].sort(compare),
+        repositoryAllowlist: [...c.admission.repositoryAllowlist as string[]].sort(compare), repository: c.repository }) });
   } catch { throw Error("invalid_executor_authority_configuration"); }
 }

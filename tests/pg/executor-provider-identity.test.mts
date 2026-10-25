@@ -9,6 +9,8 @@ import { executorConfiguration, executorRequest, financialPolicy, executorTarget
 import { receipt } from "../fixtures/executor-outcome.mts";
 // @ts-expect-error Node direct TypeScript requires the runtime extension.
 import { identityTransport, frozen } from "../fixtures/executor-provider-identity.mts";
+// @ts-expect-error Node direct TypeScript requires the runtime extension.
+import { legacyAuthority, legacyCore } from "../fixtures/legacy-executor-authority.mts";
 const live = await import(new URL("./helpers/live-pg.ts", import.meta.url).href) as typeof import("./helpers/live-pg");
 const postgres = await import(new URL("../../lib/db/postgres.ts", import.meta.url).href) as typeof import("../../lib/db/postgres");
 const tenants = await import(new URL("../../lib/db/workflow-runtime-tenant.ts", import.meta.url).href) as typeof import("../../lib/db/workflow-runtime-tenant");
@@ -21,12 +23,12 @@ for (const workspace of [live.primaryWorkspace, live.secondaryWorkspace]) {
   await db.admin.query("insert into projects(workspace_id,project_key,display_name) values($1,'project-a','Identity test project')", [workspace.id]);
 }
 const pools: ReturnType<typeof postgres.createWorkflowRuntimePostgresDatabase>[] = [];
-async function setup(runId: string, domain: string = live.primaryWorkspace.domain, url = db.url) {
+async function setup(runId: string, domain: string = live.primaryWorkspace.domain, url = db.url, historical = false) {
   const database = postgres.createWorkflowRuntimePostgresDatabase({ connectionString: url, maxConnections: 1 }); pools.push(database);
   const tenant = await tenants.createPostgresWorkflowRuntimeTenantResolver(database).resolve(domain); assert.ok(tenant);
   const config = { database, tenant, projectId: "project-a", configuration: executorConfiguration(1, runId), target: executorTarget(), requestPolicy: executorRequestPolicy(), financialPolicy: financialPolicy(), authorizeStart: () => true };
-  const a = authority.createPostgresExecutorCurrentAuthorityStore({ database, tenant, projectId: config.projectId, configuration: config.configuration }); await a.registerCurrentAuthority();
-  return { config, authority: a, store: durable.createPostgresExecutorStartStore(config), raw: executorRequest(1, runId) };
+  const a = (historical ? legacyAuthority : authority).createPostgresExecutorCurrentAuthorityStore({ database, tenant, projectId: config.projectId, configuration: config.configuration }); await a.registerCurrentAuthority();
+  return { config, authority: a, store: (historical ? legacyCore : durable).createPostgresExecutorStartStore(config), raw: executorRequest(1, runId) };
 }
 afterEach(async () => { await Promise.all(pools.splice(0).map(pool => pool.close())); });
 test("PG identity: durable correlation/session/turn restart and conflict primitives exist (baseline RED)", async () => {
@@ -284,11 +286,12 @@ test("PG populated 0015 → 0016 preserves terminal results, journals, exposures
   try {
     const migrations = readdirSync(new URL("../../db/migrations/", import.meta.url)).filter(p => /^\d{4}_.*\.sql$/u.test(p)).sort();
     assert.equal(migrations[15], "0016_executor_provider_execution_identity.sql");
-    assert.equal(migrations.at(-1), "0017_executor_provider_constraint.sql");
+    assert.equal(migrations[16], "0017_executor_provider_constraint.sql");
+    assert.equal(migrations.at(-1), "0018_executor_authority_rebinding.sql");
     for (const path of migrations.slice(0, 15)) await admin.query(readFileSync(new URL(`../../db/migrations/${path}`, import.meta.url), "utf8"));
     await live.insertWorkspace(admin, live.primaryWorkspace);
     await admin.query("insert into projects(workspace_id,project_key,display_name) values($1,'project-a','Legacy terminal')", [live.primaryWorkspace.id]);
-    const id = "legacy-terminal", f = await setup(id, live.primaryWorkspace.domain, live.databaseUrl(name));
+    const id = "legacy-terminal", f = await setup(id, live.primaryWorkspace.domain, live.databaseUrl(name), true);
     await f.store.reserve(f.raw, { maximumExposureUsdMicros: 10000 });
     const prepared = await f.store.bindRequest(f.raw, context()); assert.ok(prepared.snapshot?.requestFingerprint);
     await f.store.commitProviderStart(f.raw, prepared.snapshot.requestFingerprint);

@@ -54,7 +54,7 @@ async function mock(options: { failure?: string; error?: unknown; rollbackFails?
       if (options.authority === null) return { rows: [], rowCount: 0 };
       return one({ project_key: "project-a", development_run_id: f.developmentRunId, plan_id: f.planId, task_id: f.taskId,
         authority_generation: 1, authority_status: "active", current_attempt_number: f.attemptNumber, current_attempt_kind: f.attemptKind,
-        canonical_run_fingerprint: f.canonicalRunFingerprint, admission_fingerprint: f.admissionFingerprint, created_ms: "1000", updated_ms: "1000", revoked_ms: null, ...options.authority }); }
+        canonical_run_fingerprint: f.canonicalRunFingerprint, admission_fingerprint: f.admissionFingerprint, admission_scope_fingerprint: null, created_ms: "1000", updated_ms: "1000", revoked_ms: null, ...options.authority }); }
     if (text.includes("executor:authority-journal-integrity")) return one({ count: 1 });
     if (text.includes("executor:budget-lock")) return one({ maximum_exposure_usd_micros: "20000", total_exposure_usd_micros: "1000000000", reservation_ttl_ms: 60000, held_exposure_usd_micros: "10000" });
     if (text.includes("executor:held-integrity")) return one({ held: "10000" });

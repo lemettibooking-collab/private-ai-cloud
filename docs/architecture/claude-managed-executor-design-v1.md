@@ -744,11 +744,38 @@ required before Claude fake adapter and cross-provider proof.
 
 ### AI-041.2b2 implementation checkpoint
 
-**IN REVIEW**: [append-only provider constraint migration](executor-provider-constraint-migration-v1.md).
+**DONE**, integrated at `45c55e56ed98df2e40822cee1e3c89ca90a54d1a` after independent PASS:
+[append-only provider constraint migration](executor-provider-constraint-migration-v1.md).
 `0017` changes only the parent provider CHECK from OpenAI-only to exactly
 `openai, anthropic`. Identity schema, financial semantics, correlation bytes and
 production TypeScript remain unchanged. Disposable PostgreSQL proofs use a
 test-only synthetic Anthropic policy, not a Claude protocol or transport.
-AI-041.2b and AI-041.2 remain NOT DONE. AI-041.2c fake adapter has not started
-and requires an independent migration gate first. `runtimeDispatchAllowed=false`;
+AI-041.2b is DONE; AI-041.2 remains NOT DONE. `runtimeDispatchAllowed=false`;
 production/live dispatch remains BLOCKED.
+
+### AI-041.2 Completion Delivery Block — amended implementation checkpoint
+
+c and d are **READY FOR CONSOLIDATED RE-GATE**, not author-declared DONE.
+The initial C internal checkpoint passed before starting d. The factual executor
+switch then exposed full-admission identity pinning; work stopped rather than
+inventing a shared executor identity or weakening current-attempt authority.
+Owner's amended scope authorized [Phase R](executor-authority-rebinding-v1.md)
+and exactly migration `0018`. Full admission hash semantics remain unchanged;
+only adjacent v2 authorities with identical new stable scope can rebind. Legacy
+NULL scope cannot switch. R checkpoint passed, then full C revalidation passed,
+then d resumed. There is one candidate/integration, never separate R/C commits.
+
+The implemented source is a **fake-profile simulation**, not an Anthropic HTTP
+transport or a copied live SDK schema. Canonical request, branded fake start/read
+handles, bounded session/history parser and known-ID inspector are provider-local.
+One Create with one initial user message, tools/skills/MCP off, exact immutable
+config/context binding, session-only identity and generic proposal validation
+implement the accepted first profile. No provider JSON enters the shared DB core.
+Only test-owned synthetic exact finance can exercise Claude settlement; source
+modules issue no cost receipt. [Portability proof](executor-portability-proof-v1.md)
+records the common real-PG pipeline, adversarial/mutation evidence and limitations.
+
+No live access, actual Agent/Environment/Session creation, remote repository work,
+Router, billing guarantee, live config pinning, network-contract proof or smoke.
+Production facades remain unchanged/blocked. Final independent acceptance is still
+required before AI-041.2 can be called DONE. `runtimeDispatchAllowed=false`.
