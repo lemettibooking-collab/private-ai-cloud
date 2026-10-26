@@ -1,11 +1,11 @@
 # Private AI Cloud — Development Roadmap
 
 **Version:** v1.5\
-**Date:** 2026-10-25\
+**Date:** 2026-10-26\
 **Status:** AUTHORITATIVE / CURRENT\
 **Revision:** Owner-approved private execution sequencing (not an architecture rebase)\
-**Execution status aligned:** 2026-10-25 (B2 integrated; B3 ready for re-gate)\
-**Integrated checkpoint:** `f36d4ac923f12c5b61602c4cb0a950ad1602edcc`\
+**Execution status aligned:** 2026-10-26 (B3 integrated; AI-044 Phase L primitives, financial gate blocked)\
+**Integrated checkpoint:** `4f64f5b5b519da855498d5d56131b94ee8601a26`\
 **Canonical source:** `docs/ROADMAP.md`
 
 > This Markdown file is the source of truth for the Private AI Cloud development roadmap. PDF versions are generated snapshots for reading, sharing, and review. If a PDF or an older roadmap conflicts with `docs/ROADMAP.md`, this file takes precedence until the Owner approves a newer roadmap version.
@@ -215,7 +215,8 @@ The census recorded the current hardening debt and moved development to mileston
 - **AI-041.2 Second Vendor / Portability Proof — DONE** (`46456844aac0251763d41277decfa066cdfc65cf`; consolidated independent PASS/integration; fake execution, not live enablement)
 - **AI-041.3 Executor Router — DONE** (`f36d4ac923f12c5b61602c4cb0a950ad1602edcc`; consolidated independent PASS/integration; deterministic policy only, no dispatch authority)
 - **AI-042 minimal managed ExecutionEnvironment closure — DONE** (same B2 integration; AI-042 overall remains PARTIAL / IN PROGRESS)
-- **B3 / AI-043.0–AI-043.5 — IMPLEMENTED / READY FOR RE-GATE, NOT DONE** (one durable roadmap/controller/gates/corrective/Owner-read candidate; internal A/B/C implementation checkpoints passed, consolidated independent re-gate/integration still required)
+- **B3 / AI-043.0–AI-043.5 and AI-043 — DONE** (`4f64f5b5b519da855498d5d56131b94ee8601a26`; consolidated independent PASS + exact integration, deterministic/fake-live-blocked scope including within-wave progress; not live provider readiness)
+- **AI-044 — LIVE READINESS IN PROGRESS / NOT DONE** (amended Phase L preparation primitives implemented, awaiting re-gate; live issuer DENY-ONLY until sufficient factual total exposure bound is established; no provider call)
 - **AI-052 Private Execution Environment — PLANNED after AI-051** (first production-capable PAC-owned private/self-hosted coding environment; no implementation/dispatch authorization now)
 - **Roadmap v1.5 — Owner-approved private execution sequencing** (current; managed paths first, AI-052 after VPS + Telegram, local/VPS/private coding blocked until its gates)
 - **Roadmap Rebase v1.4 — preserved vendor-neutral architecture baseline** (`docs/ROADMAP_REBASE_V1.4.md`; historical rebase, not repeated by v1.5)
@@ -232,8 +233,8 @@ M1 Real Money Safety is DONE. The M1 Roadmap Review Gate first found one blocker
 | M2. Direct Model Provider Capability | IN REVIEW (M2.2 deferred by Owner) | Connect a real model through the `ModelProvider` abstraction | Real usage/cost/latency recorded; persistence failures do not silently create a second provider call |
 | M3. Owner Product | ACTIVE | Useful Projects-first Owner experience | Owner can understand projects, runs, approvals, blockers, cost and roadmap without tenant bypass |
 | M4. Vendor-Neutral Executor Platform | IN PROGRESS (AI-041.2/041.3 + minimal managed closure DONE; live dispatch BLOCKED; AI-042 overall PARTIAL) | Replaceable managed executors behind `ExecutorAdapter`, routed by `ExecutorRouter`, over an `ExecutionEnvironment` abstraction | First executor works in the production path; a second, different managed executor proves portability without pipeline change |
-| M5. Roadmap-Driven Autonomy | B3 IMPLEMENTED / READY FOR RE-GATE / NOT DONE (architecture rebased in v1.4) | Deterministic control-plane controller advances an executable roadmap through executors (no PAC-owned generic agent loop) | No manual “go next” between ordinary technical steps; Owner appears only at gates |
-| M6. Automated Engineering Proof | PLANNED | Real Smart Algorithms feature → verified PR | Full pipeline passes; switching executor needs no pipeline change |
+| M5. Roadmap-Driven Autonomy | B3 DONE in accepted deterministic/fake-live-blocked scope (architecture rebased in v1.4) | Deterministic control-plane controller advances an executable roadmap through executors (no PAC-owned generic agent loop) | No manual “go next” between ordinary technical steps; Owner appears only at gates |
+| M6. Automated Engineering Proof | AI-044 LIVE READINESS IN PROGRESS; primitives await re-gate, financial gate BLOCKED | Real Smart Algorithms feature → verified PR | Full pipeline passes; switching executor needs no pipeline change |
 | M7. Staging / Hardening | PLANNED (REBASED) | Production-like control-plane infrastructure | CI/CD, observability, TLS, backups, security and deployment gates |
 | M8. Remote Owner Control | PLANNED | Secure remote control (Telegram first) | Roadmap/runs/approvals/commit/push controlled through the same Owner Control API |
 | Post-M8. Private Execution Environment (AI-052) | PLANNED after AI-051 | Production-capable PAC-owned private/self-hosted engineering environment | Independently gated durable resource, containment, limits, network/secrets, evidence and recovery; no automatic deployment |
@@ -1154,32 +1155,33 @@ part of this documentation/status alignment.
 
 | Package | Purpose | Required by |
 |---|---|---|
-| AI-037.2 | Durable Step result; recovery without provider redispatch | Executor-only terminal capture, identity and retrieval foundation integrated. B3 implements controller-required canonical DevelopmentExecutionRun snapshot/revision recovery, pending independent acceptance; general Step recovery/tooling remains deferred. Full package NOT DONE. |
-| AI-037.3 | Ambiguous COMMIT reconciliation + general recovery tooling | B3 implements controller command/revision/fingerprint reconciliation only, pending independent acceptance; broader runtime/tooling remains PARTIAL/deferred, not DONE. |
+| AI-037.2 | Durable Step result; recovery without provider redispatch | Executor-only terminal capture, identity and retrieval foundation integrated. B3 controller-required canonical DevelopmentExecutionRun snapshot/revision recovery is accepted/integrated; general Step recovery/tooling remains deferred. Full package NOT DONE. |
+| AI-037.3 | Ambiguous COMMIT reconciliation + general recovery tooling | B3 controller command/revision/fingerprint reconciliation slice is accepted/integrated; broader runtime/tooling remains PARTIAL/deferred, not DONE. |
 | AI-037.5 | TLS/config allowlist + startup validation | Before staging (earlier if M2 PostgreSQL is non-loopback) |
 | AI-037.6b | Lease heartbeat / DB clock if needed | DEFERRED/not pulled forward while B3 uses short transaction/CAS steps without a long-lived controller lease; slow executor work retains its existing fences. Any new long-lived lease makes this a hard prerequisite. |
-| AI-037.8 | Durable admission control | B3 implements controller-required atomic roadmap ProjectTask claim/admission, pending independent acceptance; broader historical admission package remains PARTIAL/deferred. |
+| AI-037.8 | Durable admission control | B3 controller-required atomic roadmap ProjectTask claim/admission slice is accepted/integrated; broader historical admission package remains PARTIAL/deferred. |
 
 v1.4 does not change these packages' scope; "autonomous worker" in v1.3 meant the control-plane controller, not a PAC-owned coding worker.
 
-## 13. M5 — Roadmap-Driven Autonomy — B3 READY FOR RE-GATE (architecture v1.4)
+## 13. M5 — Roadmap-Driven Autonomy — B3 DONE (architecture v1.4)
 
 v1.4: autonomy is orchestration of executors by a deterministic, durable control-plane controller. It is not a PAC-owned generic LLM think/tool loop.
 
 After executor portability (AI-041.2), routing (AI-041.3) and minimal managed AI-042
-environment closure, **AI-043 is the primary product priority**. Its distinctive
+environment closure, **AI-043 is accepted in deterministic/fake-live-blocked scope**. Its distinctive
 PAC capability is `ready work → plan → executor selection → execution →
 verification → bounded corrective loop → Owner gate → roadmap update → next ready work`.
 This remains deterministic/durable control-plane logic, not a proprietary generic
 LLM agent loop.
 
-**Current block:** AI-043.0–AI-043.5 plus only controller-required AI-037 slices,
-one unstaged candidate against `f36d4ac923f12c5b61602c4cb0a950ad1602edcc`.
-Internal checkpoints A (durable foundation), B (controller/recovery) and C
-(gates/corrections) passed implementation verification in order. Consolidated
-independent re-gate and controlled integration remain pending; AI-043 is NOT DONE.
-Internal checkpoints are not independent acceptance. Production/live
-dispatch remains BLOCKED and `runtimeDispatchAllowed=false`. Architecture records:
+**Integrated B3:** AI-043.0–AI-043.5 plus only controller-required AI-037 slices,
+accepted by consolidated independent re-gate and controlled integration at
+`4f64f5b5b519da855498d5d56131b94ee8601a26`. AI-043 is DONE only in the proven
+deterministic/fake-live-blocked scope. Cooperative wave-frontier tests prove
+disjoint committed starts before outcome consumption and overlap serialization,
+not just active snapshot coexistence. Broader AI-037 packages remain PARTIAL;
+AI-037.6b remains deferred (no long-lived controller lease). Production/live
+dispatch remains BLOCKED and `runtimeDispatchAllowed=false`. Historical implementation records:
 [roadmap](architecture/roadmap-autonomy-v1.md),
 [controller](architecture/development-controller-v1.md),
 [approval gates](architecture/development-approval-gates-v1.md).
@@ -1208,7 +1210,7 @@ Rules:
 - `FeaturePlan` remains an internal execution-planning entity and does not have to be shown as a permanent Owner navigation level.
 - The system must not require empty placeholder Release/Epic objects just to satisfy a theoretical hierarchy.
 
-### AI-043.0 — Executable Product Roadmap Contract — B3 IMPLEMENTED / READY FOR RE-GATE
+### AI-043.0 — Executable Product Roadmap Contract — DONE (B3 scope)
 
 Roadmap item metadata includes as needed:
 
@@ -1227,14 +1229,14 @@ Statuses include:
 
 `blocked, ready, planning, approved, running, verifying, waiting_owner, completed, failed, recovery_required`
 
-### AI-043.1 — Roadmap Planner — B3 IMPLEMENTED / READY FOR RE-GATE
+### AI-043.1 — Roadmap Planner — DONE (B3 scope)
 
 - finds ready work from dependencies
 - forms execution waves
 - allows independent tasks to run in parallel
 - never starts blocked items
 
-### AI-043.2 — Continuous Development Controller — B3 IMPLEMENTED / READY FOR RE-GATE (architecture v1.4)
+### AI-043.2 — Continuous Development Controller — DONE (B3 scope; architecture v1.4)
 
 Deterministic, durable control-plane controller (PostgreSQL state):
 
@@ -1249,7 +1251,7 @@ new financial lifecycle or automatic Git action. A proven report-only analysis
 gap required one narrow AI-011 `submit_analysis` event/optional report digest;
 patch-only canonical snapshots retain their old shape and all QA/review gates.
 
-### AI-043.3 — Approval Gate Engine — B3 IMPLEMENTED / READY FOR RE-GATE
+### AI-043.3 — Approval Gate Engine — DONE (B3 scope)
 
 **AUTO** examples:
 - lint/typecheck/tests
@@ -1274,7 +1276,7 @@ patch-only canonical snapshots retain their old shape and all QA/review gates.
 - unknown state without safe recovery
 - inconsistent repository/runtime state
 
-### AI-043.4 — Autonomous Corrective Loop — B3 IMPLEMENTED / READY FOR RE-GATE (architecture v1.4)
+### AI-043.4 — Autonomous Corrective Loop — DONE (B3 scope; architecture v1.4)
 
 PAC owns the corrective orchestration; the selected executor performs the corrective coding/reasoning.
 
@@ -1290,7 +1292,7 @@ Bounded by:
 - max changed files
 - risk ceiling
 
-### AI-043.5 — Roadmap Owner UX — B3 IMPLEMENTED / READY FOR RE-GATE
+### AI-043.5 — Roadmap Owner UX — DONE (B3 scope)
 
 - milestone progress
 - Current / Next / Blocked
@@ -1307,7 +1309,27 @@ call during rendering. Production/live dispatch remains BLOCKED.
 
 ## 14. M6 — Automated Engineering Proof
 
-### AI-044 — Task → Verified PR — PLANNED
+### AI-044 — Task → Verified PR — LIVE READINESS IN PROGRESS / NOT DONE
+
+Phase L freezes **Portfolio Analytics v1 — Demo Trading Terminal** on
+`lemettibooking-collab/Smart-Algorithms`, `main` at
+`ff8c035f8032417888a71c6a81aa9b9c26c816e8`. No Scanner, live trading or target
+repository code change is authorized by this PAC preparation task.
+
+Owner-approved amended Phase L implements **LIVE READINESS PRIMITIVES / LIVE
+PERMIT IMPOSSIBLE**: pure hosted profile/archive/network, artifact/recovery,
+approval/QA binding and explicit financial categories. Awaiting independent
+re-gate; not live-ready. Current official evidence does not establish a finite
+total exposure bound covering active hosted compute and every charge category.
+Container maximum remains UNKNOWN; issuer DENY-ONLY; composition has no usable
+credential/provider port. No timeout, price rate, account hard limit, shaped
+numeric claim or Owner approval substitutes for proof. [Evidence and freeze](architecture/ai-044-live-engineering-proof-v1.md).
+Future analytics GET must use genuinely read-only facts or prove initialization
+outside GET and zero request writes; direct snapshot reuse is not proven safe.
+Only after independent PASS may the remaining financial-bound problem be resolved
+without weakening policy. Any later live execution still needs trusted source
+integration, exact independent gate/integration and one-shot numeric Owner approval.
+No real provider call; no Smart Algorithms changes.
 
 Primary production proof — a REAL Smart Algorithms feature moves through:
 
@@ -1525,14 +1547,14 @@ now DONE, with production/live dispatch still BLOCKED.
 
 AI-038.2, AI-038.3, AI-038.3.1 and AI-038.3.2 are DONE: the Owner Console reads real runtime data with All Projects and real project switching, read-only. AI-038.4a (DONE) adds persistent Owner Tasks as read surfaces; AI-038.4b (DONE) adds Quick Create, the only UI write (draft task intent through the audited `createTask`). AI-039 (DONE) adds the second UI write: saving immutable draft FeaturePlan revisions of a ProjectTask, with no execution. AI-039.1 (DONE; direct API-key live smoke deferred by Owner) adds the Owner-approved planning request, which runs one budget-bounded planning Run and never saves a plan or changes the task. Other UI write actions need separate tasks.
 
-### Current development critical path — v1.5, B2 integrated / B3 current
+### Current development critical path — v1.5, B3 integrated / AI-044 current
 
 ```text
 AI-041.2 Second Vendor / Portability Proof (DONE)
   → B2: AI-041.3 Executor Router (DONE)
   → B2: AI-042 minimal managed ExecutionEnvironment closure (DONE)
-  → B3: AI-043.* Roadmap-Driven Autonomy (IMPLEMENTED / READY FOR RE-GATE / NOT DONE)
-  → AI-044 Real Smart Algorithms feature → Verified PR
+  → B3: AI-043.* Roadmap-Driven Autonomy (DONE in deterministic/fake-live-blocked scope)
+  → AI-044 LIVE READINESS IN PROGRESS (primitives; financial gate BLOCKED) → real feature → Verified PR
   → AI-045 Production-like VPS Infrastructure
   → AI-046 Owner Control Contract
   → AI-047 Secure Telegram Bot
@@ -1641,7 +1663,8 @@ still belongs to the separate `ModelProvider` abstraction.
   and ExecutorAdapter, provider-owned agent internals and conditional self-hosted capability.
 - Preserve AI-041.1, AI-042.1/042.1a and AI-042.2 DONE; AI-042 overall PARTIAL /
   IN PROGRESS; AI-041.2/041.3 and minimal managed closure are now integrated DONE;
-  B3 / AI-043 is current, IMPLEMENTED / READY FOR RE-GATE / NOT DONE;
+  B3 / AI-043 is integrated DONE in deterministic/fake-live-blocked scope;
+  AI-044 live readiness is current, preparation primitives await re-gate; financial gate BLOCKED / NOT DONE;
   M9/M10a/M10b NON-BLOCKING DEBT; production/live
   dispatch BLOCKED and runtimeDispatchAllowed=false.
 - Managed Codex/OpenAI and conditional Claude execution precede private runtime
