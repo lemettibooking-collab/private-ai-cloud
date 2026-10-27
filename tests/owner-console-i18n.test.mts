@@ -228,6 +228,7 @@ const coverage: Readonly<Record<string, "owner" | "prototype">> = {
   "/workflows/qa-review/run": "prototype", "/workflows/telegram-content/run": "prototype",
   "/operations": "prototype", "/workflows/codex-task/run": "prototype", "/workflows/development-plan/run": "prototype",
   "/workflows/development-execution/run": "prototype",
+  "/workflows/development-execution/proof": "owner",
 };
 
 const pageRoutes = () => walk("app").filter((path) => path.endsWith("/page.tsx") || path === "app/page.tsx")

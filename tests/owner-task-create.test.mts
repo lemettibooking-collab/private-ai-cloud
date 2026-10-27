@@ -167,7 +167,7 @@ test("O. dependency direction: UI → Server Action → server composition → o
   // B3 adds explicit server-internal roadmap/controller Owner boundaries. They reuse
   // only strict input/Owner-lock/error primitives, never createTask or attachRun.
   assert.deepEqual(importers(/from\s+["'][^"']*\/tasks\/owner-task-mutations(\.ts)?["']/u),
-    ["lib/composition/owner-task-create.ts", "lib/db/ai044-subscription-approvals.ts", "lib/db/development-controller-approvals.ts", "lib/db/development-controller-store.ts", "lib/db/roadmap-approvals.ts", "lib/db/roadmap-owner-read.ts", "lib/db/roadmap-store.ts",
+    ["lib/composition/owner-ai044-proof.ts", "lib/composition/owner-task-create.ts", "lib/db/ai044-subscription-approvals.ts", "lib/db/development-controller-approvals.ts", "lib/db/development-controller-store.ts", "lib/db/roadmap-approvals.ts", "lib/db/roadmap-owner-read.ts", "lib/db/roadmap-store.ts",
       "lib/development/feature-plan-mutations.ts", "lib/development/feature-plan-planning-requests.ts", "lib/integrations/chatgpt/chatgpt-owner-authority.ts", "lib/roadmap/roadmap-owner-commands.ts"]);
   for (const path of ["lib/development/feature-plan-mutations.ts", "lib/development/feature-plan-planning-requests.ts"]) {
     assert.match(code(path),
@@ -192,7 +192,10 @@ test("O. dependency direction: UI → Server Action → server composition → o
   // AI-039.2 ChatGPT plan integration module (its four actions are pinned below).
   const serverActionFiles = applicationFiles().filter((path) => /^\s*["']use server["'];/u.test(source(path)));
   // AI-039.2 adds a fourth module: the ChatGPT plan integration actions (pinned below).
-  assert.deepEqual(serverActionFiles, ["app/settings/integrations/actions.ts", "app/tasks/[taskId]/development/actions.ts", "app/tasks/[taskId]/development/draft-actions.ts", "app/tasks/new/actions.ts"]);
+  // AI-044.2 adds exactly ONE explicit Owner proof action, not a generic executor endpoint.
+  assert.deepEqual(serverActionFiles, ["app/settings/integrations/actions.ts", "app/tasks/[taskId]/development/actions.ts", "app/tasks/[taskId]/development/draft-actions.ts", "app/tasks/new/actions.ts", "app/workflows/development-execution/proof/actions.ts"]);
+  assert.match(code("lib/composition/owner-ai044-proof.ts"), /import \{ lockOwnerAuthority \} from "\.\.\/tasks\/owner-task-mutations\.ts"/u);
+  assert.deepEqual([...code("app/workflows/development-execution/proof/actions.ts").matchAll(/^export\s+async\s+function\s+(\w+)/gmu)].map(m => m[1]), ["ownerAI044ProofAction"]);
   const integrationActions = code("app/settings/integrations/actions.ts");
   assert.deepEqual([...integrationActions.matchAll(/^export\s+(?:async\s+)?(?:function|const|let|class)\s+(\w+)/gmu)].map((match) => match[1]),
     ["connectChatGPTAction", "disconnectChatGPTAction", "refreshChatGPTModelsAction", "selectChatGPTModelAction"]);

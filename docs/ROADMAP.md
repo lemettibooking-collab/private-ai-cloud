@@ -8,6 +8,14 @@
 **Integrated checkpoint:** `4f64f5b5b519da855498d5d56131b94ee8601a26`\
 **Canonical source:** `docs/ROADMAP.md`
 
+**AI-044 operational update:** AI-044.1 subscription foundation is integrated at
+`c5658002aaf67a835e480e42f4ca0d1003b76af7`. AI-044.2 [local Owner production-proof
+runner](operations/ai-044-owner-production-proof.md) is an IN REVIEW candidate only:
+explicit separate prepare/approval/invoke actions, existing durable attempt/queue/fence,
+no generic dispatch enablement. AI-044 remains IN PROGRESS; real production proof NOT
+YET EXECUTED. `runtimeDispatchAllowed=false`; generic production/live dispatch BLOCKED;
+paid/hosted Phase L remains DENY-ONLY. No Liquidity Intelligence implementation in this task.
+
 > This Markdown file is the source of truth for the Private AI Cloud development roadmap. PDF versions are generated snapshots for reading, sharing, and review. If a PDF or an older roadmap conflicts with `docs/ROADMAP.md`, this file takes precedence until the Owner approves a newer roadmap version.
 
 ## 1. Purpose and roadmap governance

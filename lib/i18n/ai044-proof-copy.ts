@@ -1,0 +1,41 @@
+/** Presentation only: never imported by approval, auth, context or dispatch code. */
+const en = {
+  title: "AI-044 Production Proof", eyebrow: "Owner only · subscription_session",
+  description: "One exact FeaturePlan attempt. Prepare, approval and invocation are separate Owner actions. Generic production dispatch remains blocked.",
+  unavailable: "Unavailable", unavailableDetail: "Owner authorization, exact factual attempt or local proof configuration is unavailable. No invocation was authorized. Reload to read durable status.",
+  reload: "Reload durable status (no invocation)", statusDetail: "Canonical durable attempt/approval status; never an optimistic client state.",
+  pending: "Owner action in progress. Do not repeat an invocation.", selection: "Project / ProjectTask / DevelopmentTask / attempt",
+  baseline: "Plan revision / exact baseline", model: "Selected model / account-registration fingerprint", reads: "Read context (NOT write authority)", writes: "Admitted write scope",
+  approval: "Approval request / intent", expiry: "Receipt expiry", notRequested: "not requested", notPrepared: "not prepared",
+  appLimit: "Current external app usage limit (1–99%)", confirmation: "I just checked the exact account/registration and model shown above, direct plan scope chatgpt.tokens.use.direct, credits disabled, no reliance on automatic credit purchases.",
+  attestation: "Manual operational attestation, not provider proof; valid for at most 15 minutes. No provider-side output-token cap is claimed. Local byte/time/patch bounds remain enforced.",
+  prepare: "PREPARE — no provider call", request: "Request Owner approval — no provider call", approve: "APPROVE — no provider call", reject: "REJECT",
+  invokeDetail: "Explicit INVOKE may send the exact approved context to the selected ChatGPT plan. Approval alone never invokes. No API-key or credit fallback.",
+  invoke: "INVOKE exact approved attempt — one provider request", recovery: "Do not retry. Consumed, started or ambiguous attempts cannot be dispatched again. A new attempt requires a new receipt and approval.",
+  result: "Canonical unverified result", noChanges: "no changes", fingerprint: "Result fingerprint",
+  verification: "Owner decision required · verification not run · automatic retry forbidden. No patch is applied to a working checkout. Isolated QA/Security is a separate downstream step.",
+  footer: "runtimeDispatchAllowed=false · Generic production/live dispatch=BLOCKED · Phase L paid/hosted route=DENY-ONLY.",
+  phases: { NOT_PREPARED: "Not prepared", PREPARED: "Prepared", AWAITING_OWNER_APPROVAL: "Awaiting Owner approval", APPROVED: "Approved", REJECTED: "Rejected",
+    INVOCATION_STARTED: "Invocation started", COMPLETED: "Completed", FAILED: "Failed", RECOVERY_REQUIRED: "Recovery required" },
+};
+export type AI044ProofCopy = typeof en;
+const ru: AI044ProofCopy = {
+  title: "AI-044 — проверочный запуск", eyebrow: "Только владелец · subscription_session",
+  description: "Одна точная попытка плана разработки. Подготовка, одобрение и вызов — отдельные действия владельца. Общий запуск в рабочей среде заблокирован.",
+  unavailable: "Недоступно", unavailableDetail: "Не подтверждены полномочия владельца, фактическая попытка или локальная конфигурация. Вызов не разрешён. Обновите сохранённый статус.",
+  reload: "Обновить сохранённый статус (без вызова)", statusDetail: "Фактический сохранённый статус попытки и одобрения, без оптимистичного состояния браузера.",
+  pending: "Действие владельца выполняется. Не повторяйте вызов.", selection: "Проект / задача проекта / задача разработки / попытка",
+  baseline: "Ревизия плана / точная базовая версия", model: "Выбранная модель / отпечаток регистрации аккаунта", reads: "Контекст чтения (НЕ разрешение записи)", writes: "Допущенная область записи",
+  approval: "Запрос одобрения / намерение", expiry: "Срок действия подтверждения", notRequested: "не запрошено", notPrepared: "не подготовлено",
+  appLimit: "Текущий внешний лимит приложения (1–99%)", confirmation: "Я только что проверил указанные аккаунт, регистрацию и модель, прямое разрешение использования плана, отключённые кредиты и отсутствие зависимости от автоматической покупки кредитов.",
+  attestation: "Ручное подтверждение условий, не доказательство провайдера; действует не более 15 минут. Верхний предел выходных токенов на стороне провайдера не заявляется. Локальные ограничения размера, времени и изменений сохраняются.",
+  prepare: "ПОДГОТОВИТЬ — без вызова провайдера", request: "Запросить одобрение владельца — без вызова", approve: "ОДОБРИТЬ — без вызова провайдера", reject: "ОТКЛОНИТЬ",
+  invokeDetail: "Явный вызов может отправить точный одобренный контекст в выбранный план ChatGPT. Само одобрение ничего не запускает. Нет перехода на ключ API или кредиты.",
+  invoke: "ВЫЗВАТЬ точную одобренную попытку — один запрос", recovery: "Не повторяйте вызов. Использованные, начатые и неоднозначные попытки не запускаются повторно. Новая попытка требует нового подтверждения и одобрения.",
+  result: "Сохранённый непроверенный результат", noChanges: "без изменений", fingerprint: "Отпечаток результата",
+  verification: "Нужно решение владельца · проверка не выполнена · автоматический повтор запрещён. Изменения не применяются к рабочей копии. Изолированная проверка качества и безопасности — отдельный следующий этап.",
+  footer: "Общее разрешение запуска: нет · общие внешние запуски заблокированы · платный размещённый маршрут по-прежнему запрещён.",
+  phases: { NOT_PREPARED: "Не подготовлено", PREPARED: "Подготовлено", AWAITING_OWNER_APPROVAL: "Ожидает одобрения владельца", APPROVED: "Одобрено", REJECTED: "Отклонено",
+    INVOCATION_STARTED: "Вызов начат", COMPLETED: "Завершено", FAILED: "Ошибка", RECOVERY_REQUIRED: "Требуется восстановление" },
+};
+export const ai044ProofCopy = { ru, en };

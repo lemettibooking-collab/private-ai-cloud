@@ -4,6 +4,14 @@
 
 Private AI Cloud is a **vendor-neutral AI Engineering Control Plane**. The canonical status lives in [`docs/ROADMAP.md`](docs/ROADMAP.md). This file is a short summary and does not override the roadmap.
 
+**AI-044.1 — DONE:** subscription executor foundation integrated at
+`c5658002aaf67a835e480e42f4ca0d1003b76af7`. **AI-044.2 — IN REVIEW:** narrow
+[local Owner proof runner](docs/operations/ai-044-owner-production-proof.md), separate
+PREPARE / queue request / APPROVE or REJECT / INVOKE actions, exact durable attempt,
+manual preflight and existing one-shot fence. No real provider call or production
+proof has been executed. AI-044 remains IN PROGRESS; generic dispatch remains BLOCKED,
+`runtimeDispatchAllowed=false`; paid/hosted Phase L remains DENY-ONLY.
+
 **Current integrated checkpoint:** `41c0a166180e610c5454ffd2456bee4edb051d55`
 (AI-044 Phase L fail-closed readiness primitives, independently accepted and integrated;
 B3 remains accepted within deterministic/fake-live-blocked scope). Documentation records

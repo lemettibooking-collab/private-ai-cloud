@@ -4,6 +4,7 @@ import { ActionButton } from "@/components/ui/action-button";
 import { PageHeader } from "@/components/ui/page-header";
 import { getI18n } from "@/lib/i18n/locale.server";
 import { prototypePages } from "@/lib/i18n/prototype-pages";
+import { ai044ProofCopy } from "@/lib/i18n/ai044-proof-copy";
 
 export default async function DevelopmentExecutionRunPage() {
   const { locale } = await getI18n();
@@ -24,6 +25,9 @@ export default async function DevelopmentExecutionRunPage() {
         eyebrow={c.eyebrow}
         title={c.title}
       />
+      <div className="mb-4">
+        <ActionButton href="/workflows/development-execution/proof" variant="secondary">{ai044ProofCopy[locale].title}</ActionButton>
+      </div>
       <DevelopmentExecutionSimulator copy={c} />
     </AppShell>
   );

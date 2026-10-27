@@ -47,11 +47,12 @@ test("no new client components or write paths in the Owner Console", () => {
   // plain TypeScript, not a client entry).
   // AI-039 adds the Plan Builder form (draft FeaturePlan revisions only) and, in P-1, the planning
   // flow around it (interview → unsaved AI candidate → review; it saves only through the builder).
-  assert.deepEqual(clientFiles, ["components/domain/owner-console/feature-plan-builder.tsx", "components/domain/owner-console/feature-plan-planning.tsx", "components/domain/owner-console/quick-create-form.tsx", ambientComponent, "components/shell/locale-switcher.tsx", "components/shell/project-switcher.tsx", "components/shell/sidebar.tsx"]);
+  // AI-044.2: one scoped Owner form; no browser transport, raw reads or auto-invoke.
+  assert.deepEqual(clientFiles, ["components/domain/owner-console/ai044-production-proof.tsx", "components/domain/owner-console/feature-plan-builder.tsx", "components/domain/owner-console/feature-plan-planning.tsx", "components/domain/owner-console/quick-create-form.tsx", ambientComponent, "components/shell/locale-switcher.tsx", "components/shell/project-switcher.tsx", "components/shell/sidebar.tsx"]);
   assert.ok(!/^\s*["']use client["']/mu.test(source(ambientRenderer)), "the renderer is a plain module");
   const serverActions = [...walk("app"), ...walk("components"), ...walk("lib")].filter((path) => /\.(tsx?|mts)$/u.test(path) && /["']use server["']/u.test(code(path)));
   // AI-039.2 adds the ChatGPT plan integration actions (local integration credential store only).
-  assert.deepEqual(serverActions, ["app/settings/integrations/actions.ts", "app/tasks/[taskId]/development/actions.ts", "app/tasks/[taskId]/development/draft-actions.ts", "app/tasks/new/actions.ts"]);
+  assert.deepEqual(serverActions, ["app/settings/integrations/actions.ts", "app/tasks/[taskId]/development/actions.ts", "app/tasks/[taskId]/development/draft-actions.ts", "app/tasks/new/actions.ts", "app/workflows/development-execution/proof/actions.ts"]);
   for (const path of consoleUi) {
     assert.ok(!/\bfetch\(|lib\/db\/|lib\/tasks\/owner-task-mutations|lib\/providers|lib\/workflows/u.test(code(path)), `${path} reaches data or write layers`);
   }

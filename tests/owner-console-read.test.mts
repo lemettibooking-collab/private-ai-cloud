@@ -609,7 +609,10 @@ test("4a/4b. navigation preserves Task / Attention scope; + New Task opens Quick
   for (const path of [...walk("lib/tasks").filter((file) => file !== mutationModule), "lib/composition/owner-console-read.ts", "lib/composition/owner-read-runtime.ts", ...ownerPages]) {
     assert.ok(!writes.test(code(path)), `${path} contains a task write`);
   }
-  for (const path of [...walk("app"), ...walk("components"), ...walk("lib/composition").filter((file) => file !== bindingModule), ...walk("lib/tasks").filter((file) => file !== mutationModule)]) {
+  // AI-044.2 reuses ONLY the existing Owner SHARE-lock primitive in its explicit
+  // scoped bridge, not createTask/attachRun or a new generic write surface.
+  assert.match(source("lib/composition/owner-ai044-proof.ts"), /import \{ lockOwnerAuthority \} from "\.\.\/tasks\/owner-task-mutations\.ts"/u);
+  for (const path of [...walk("app"), ...walk("components"), ...walk("lib/composition").filter((file) => file !== bindingModule && file !== "lib/composition/owner-ai044-proof.ts"), ...walk("lib/tasks").filter((file) => file !== mutationModule)]) {
     assert.ok(!source(path).includes("owner-task-mutations"), `${path} binds the task mutation contract`);
   }
 });
