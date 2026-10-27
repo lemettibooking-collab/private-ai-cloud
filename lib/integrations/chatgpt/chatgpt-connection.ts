@@ -16,7 +16,11 @@
 //
 // Nothing here performs inference.
 import { createHash } from "node:crypto";
-import type { ChatGPTCredentialStore, PendingAttempt, StoredRegistration, StoredRegistrations } from "./chatgpt-credential-store";
+import { types } from "node:util";
+import type { ChatGPTCredentialStore, ChatGPTSubscriptionFacts, ChatGPTSubscriptionOwnerBinding, PendingAttempt, StoredRegistration, StoredRegistrations } from "./chatgpt-credential-store";
+// @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
+export { isChatGPTSubscriptionFacts } from "./chatgpt-credential-store.ts";
+export type { ChatGPTSubscriptionFacts } from "./chatgpt-credential-store";
 import type { ChatGPTModel, FetchLike, IdTokenFailure, TokenExchangeDiagnostic, TokenSet } from "./chatgpt-oauth";
 // @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
 import { chatgptOAuth, authorizationUrl, exchangeAuthorizationCode, fetchJwks, listChatGPTModels, newOAuthAttemptSecrets, parseCallback, redirectUriFor, refreshAccessToken, revokeRefreshToken, stateKey, validateIdToken } from "./chatgpt-oauth.ts";
@@ -52,6 +56,52 @@ export type CallbackOutcome =
   | "temporarily_unavailable";
 
 export type OwnerAuthority = Readonly<{ verify(input: Readonly<{ ownerUserId: string; domainWorkspaceId: string }>): Promise<boolean> }>;
+export type ChatGPTSubscriptionAccessBinding = ChatGPTSubscriptionOwnerBinding & Readonly<{ modelId: string }>;
+export type ChatGPTSubscriptionAccess = Readonly<{ ok: true; kind: "chatgpt_subscription_access" }>;
+type SubscriptionLease = Readonly<{ binding: ChatGPTSubscriptionAccessBinding; token: string; expiresAt: number; now(): Date; dispatchScope?: { active: boolean } }>;
+const subscriptionAccess = new WeakMap<object, SubscriptionLease>();
+
+function sameSubscriptionBinding(left: ChatGPTSubscriptionAccessBinding, right: ChatGPTSubscriptionAccessBinding): boolean {
+  return left.registration.label === right.registration.label && left.registration.clientId === right.registration.clientId
+    && left.registration.subjectHash === right.registration.subjectHash && left.ownerUserId === right.ownerUserId
+    && left.domainWorkspaceId === right.domainWorkspaceId && left.modelId === right.modelId;
+}
+function snapshotSubscriptionBinding(input: ChatGPTSubscriptionAccessBinding): ChatGPTSubscriptionAccessBinding | null {
+  try {
+    const registration = input.registration;
+    const label = registration.label, clientId = registration.clientId, subjectHash = registration.subjectHash;
+    const ownerUserId = input.ownerUserId, domainWorkspaceId = input.domainWorkspaceId, modelId = input.modelId;
+    if (![label, clientId, subjectHash, ownerUserId, domainWorkspaceId, modelId].every((value) => typeof value === "string" && value.length > 0 && value.length <= 256)) return null;
+    return Object.freeze({ registration: Object.freeze({ label, clientId, subjectHash }), ownerUserId, domainWorkspaceId, modelId });
+  } catch { return null; }
+}
+export function isChatGPTSubscriptionAccess(value: unknown, expected: ChatGPTSubscriptionAccessBinding): value is ChatGPTSubscriptionAccess {
+  try {
+    const lease = typeof value === "object" && value !== null ? subscriptionAccess.get(value) : undefined;
+    return !!lease && lease.expiresAt > lease.now().getTime() && sameSubscriptionBinding(lease.binding, expected);
+  } catch { return false; }
+}
+// Single-use: a copied/forged result or an API-key-shaped token can never become a subscription lease.
+// The scoped executor consumes this only AFTER consuming its independently issued start capability.
+function consumeSubscriptionAccess(value: unknown, expected: ChatGPTSubscriptionAccessBinding): string | null {
+  const valid = isChatGPTSubscriptionAccess(value, expected);
+  if (typeof value !== "object" || value === null) return null;
+  const lease = subscriptionAccess.get(value);
+  subscriptionAccess.delete(value);
+  return valid && lease ? lease.token : null;
+}
+export function useChatGPTSubscriptionAccess(value: unknown, expected: ChatGPTSubscriptionAccessBinding): string | null {
+  return consumeSubscriptionAccess(value, expected);
+}
+/** A real credential receipt alone is not dispatch authority. Only the existing credential lock's
+ * callback scope can hold this lease; copied, unlocked and escaped receipts all fail closed. */
+export function isChatGPTSubscriptionDispatchAccess(value: unknown, expected: ChatGPTSubscriptionAccessBinding): value is ChatGPTSubscriptionAccess {
+  return isChatGPTSubscriptionAccess(value, expected) && subscriptionAccess.get(value as object)?.dispatchScope?.active === true;
+}
+export function consumeChatGPTSubscriptionDispatchAccess(value: unknown, expected: ChatGPTSubscriptionAccessBinding): string | null {
+  if (!isChatGPTSubscriptionDispatchAccess(value, expected)) return null;
+  return consumeSubscriptionAccess(value, expected);
+}
 
 // Server-only fixed enums + an explicit bounded schema projection; NEVER a callback / token / claim
 // object. Each complete() owns its own context, so simultaneous callbacks cannot mix diagnostics.
@@ -105,6 +155,12 @@ export function createChatGPTConnection(dependencies: ChatGPTConnectionDependenc
   const { store, fetch, ownerAuthority, callbackPort, now } = dependencies;
   const redirectUri = redirectUriFor(callbackPort);
   const allowedReturnOrigins = new Set([`http://localhost:${callbackPort}`, `http://127.0.0.1:${callbackPort}`]);
+  const accessExpiries = new WeakMap<object, number>();
+  const acceptedAccess = (token: string, label: string, expiration: string) => {
+    const value = { ok: true as const, token, label };
+    accessExpiries.set(value, Date.parse(expiration));
+    return value;
+  };
 
   async function verifyOwner(ownerUserId: string, domainWorkspaceId: string): Promise<boolean> {
     try {
@@ -275,7 +331,10 @@ export function createChatGPTConnection(dependencies: ChatGPTConnectionDependenc
     });
     trace.stage = "credential_store_write";
     trace.failure = "store_unavailable";
-    await store.writeRegistrations(replace(registrations, next));
+    await store.writeRegistrations(replace(registrations, next), {
+      registration: { label, clientId, subjectHash: createHash("sha256").update(token.subject, "utf8").digest("hex") },
+      ownerUserId: attempt.ownerUserId, domainWorkspaceId: attempt.domainWorkspaceId,
+    });
     if (!planUsageGranted && tokens.refreshToken !== null) {
       // The renewable session is not kept, so it is revoked (best effort; never blocks the outcome).
       await revokeRefreshToken(fetch, { clientId, refreshToken: tokens.refreshToken }).catch(() => "unconfirmed");
@@ -321,23 +380,36 @@ export function createChatGPTConnection(dependencies: ChatGPTConnectionDependenc
 
   // A usable access token for the active registration, refreshed (serialized, rotating) when needed.
   // Internal to server-side composition; never returned to presentation code.
-  async function accessToken(): Promise<Readonly<{ ok: true; token: string; label: string }> | Readonly<{ ok: false; reason: "not_connected" | "plan_usage_missing" | "reauthorization_required" | "temporarily_unavailable" }>> {
-    try {
-      return await store.withRefreshLock(async () => {
+  // Both compatibility access and scoped dispatch use this ONE refresh implementation, under the
+  // existing refresh.lock. Never acquire it recursively or add a second OAuth/credential subsystem.
+  async function resolveAccessTokenLocked(expected?: ChatGPTSubscriptionAccessBinding): Promise<Readonly<{ ok: true; token: string; label: string }> | Readonly<{ ok: false; reason: "not_connected" | "plan_usage_missing" | "reauthorization_required" | "temporarily_unavailable" }>> {
+        if (expected) {
+          const facts = await store.readSubscriptionFacts();
+          if (!facts || facts.status !== "active" || !facts.planUsageGranted
+            || facts.registration.label !== expected.registration.label || facts.registration.clientId !== expected.registration.clientId
+            || facts.registration.subjectHash !== expected.registration.subjectHash || facts.ownerUserId !== expected.ownerUserId
+            || facts.domainWorkspaceId !== expected.domainWorkspaceId || facts.selectedModel !== expected.modelId
+            || !(await verifyOwner(expected.ownerUserId, expected.domainWorkspaceId))) return { ok: false as const, reason: "not_connected" as const };
+        }
         // Re-read under the lock: another request may have refreshed already.
         const registrations = await store.readRegistrations();
         const active = activeRegistration(registrations);
         if (!active || active.status === "signed_out") return { ok: false as const, reason: "not_connected" as const };
-        if (active.status === "plan_usage_missing") return { ok: false as const, reason: "plan_usage_missing" as const };
+        if (expected && (active.label !== expected.registration.label || active.clientId !== expected.registration.clientId
+          || createHash("sha256").update(active.subject, "utf8").digest("hex") !== expected.registration.subjectHash
+          || active.selectedModel !== expected.modelId || !active.availableModels.some((model) => model.slug === expected.modelId))) {
+          return { ok: false as const, reason: "not_connected" as const };
+        }
+        if (active.status === "plan_usage_missing" || !active.grantedScopes.includes(chatgptOAuth.planScope)) return { ok: false as const, reason: "plan_usage_missing" as const };
         if (active.status !== "active" || !active.accessToken || !active.accessTokenExpiresAt) return { ok: false as const, reason: "reauthorization_required" as const };
         const remaining = Date.parse(active.accessTokenExpiresAt) - now().getTime();
-        if (remaining > 60_000) return { ok: true as const, token: active.accessToken, label: active.label };
+        if (remaining > 60_000) return acceptedAccess(active.accessToken, active.label, active.accessTokenExpiresAt);
         if (!active.refreshToken) {
           await markReauthorization(active.label);
           return { ok: false as const, reason: "reauthorization_required" as const };
         }
         if (active.earliestRefreshAt && Date.parse(active.earliestRefreshAt) > now().getTime()) {
-          return remaining > 0 ? { ok: true as const, token: active.accessToken, label: active.label } : { ok: false as const, reason: "temporarily_unavailable" as const };
+          return remaining > 0 ? acceptedAccess(active.accessToken, active.label, active.accessTokenExpiresAt) : { ok: false as const, reason: "temporarily_unavailable" as const };
         }
         const refreshed = await refreshAccessToken(fetch, { clientId: active.clientId, refreshToken: active.refreshToken });
         if (!refreshed.ok) {
@@ -358,22 +430,80 @@ export function createChatGPTConnection(dependencies: ChatGPTConnectionDependenc
         }
         // Access token AND rotating refresh token replaced in ONE atomic write; the old refresh token is
         // never used again.
+        const refreshedExpiresAt = expiresAt(now(), tokens.expiresInSeconds);
         await store.writeRegistrations(replace(registrations, freeze({
           ...active,
           accessToken: tokens.accessToken,
           // Guaranteed non-null and new by refreshAccessToken: the rotated token replaces the old one.
           refreshToken: tokens.refreshToken,
           idToken: tokens.idToken ?? active.idToken,
-          accessTokenExpiresAt: expiresAt(now(), tokens.expiresInSeconds),
+          accessTokenExpiresAt: refreshedExpiresAt,
           earliestRefreshAt: tokens.earliestRefreshAt,
           grantedScopes: tokens.grantedScopes,
           savedAt: now().toISOString(),
         })));
-        return { ok: true as const, token: tokens.accessToken, label: active.label };
-      });
+        return acceptedAccess(tokens.accessToken, active.label, refreshedExpiresAt);
+  }
+  async function resolveAccessToken(expected?: ChatGPTSubscriptionAccessBinding) {
+    try {
+      return await store.withRefreshLock(() => resolveAccessTokenLocked(expected));
     } catch {
-      return { ok: false, reason: "temporarily_unavailable" };
+      return { ok: false as const, reason: "temporarily_unavailable" as const };
     }
+  }
+
+  async function accessToken() { return resolveAccessToken(); }
+
+  // No token-file access: safe for planning/routing only. Its facts are configuration, not admission,
+  // preflight, approval or start authority. The mandatory late exact check is above, under the lock.
+  async function readSubscriptionFacts(): Promise<ChatGPTSubscriptionFacts | null> {
+    try { return await store.readSubscriptionFacts(); } catch { return null; }
+  }
+
+  async function subscriptionAccessToken(expected: ChatGPTSubscriptionAccessBinding) {
+    // A missing binding must not accidentally select accessToken's legacy unscoped compatibility path.
+    const binding = snapshotSubscriptionBinding(expected);
+    if (!binding) return { ok: false as const, reason: "not_connected" as const };
+    const result = await resolveAccessToken(binding);
+    if (!result.ok) return result;
+    return subscriptionReceipt(result, binding);
+  }
+
+  function subscriptionReceipt(result: Readonly<{ token: string }>, binding: ChatGPTSubscriptionAccessBinding, dispatchScope?: { active: boolean }) {
+    const expiration = accessExpiries.get(result);
+    if (expiration === undefined || !Number.isFinite(expiration) || expiration <= now().getTime()) return { ok: false as const, reason: "temporarily_unavailable" as const };
+    const receipt: ChatGPTSubscriptionAccess = Object.freeze({ ok: true, kind: "chatgpt_subscription_access" });
+    subscriptionAccess.set(receipt, {
+      binding,
+      token: result.token, expiresAt: Math.min(expiration, now().getTime() + 60_000), now, dispatchScope,
+    });
+    return receipt;
+  }
+
+  async function withSubscriptionAccess<T>(expected: ChatGPTSubscriptionAccessBinding,
+    start: (access: ChatGPTSubscriptionAccess) => Promise<Readonly<{ pending: Promise<T> }>>) {
+    const binding = snapshotSubscriptionBinding(expected);
+    if (!binding || typeof start !== "function" || types.isProxy(start)) return { ok: false as const, reason: "not_connected" as const };
+    try {
+      return await store.withRefreshLock(async () => {
+        const result = await resolveAccessTokenLocked(binding);
+        if (!result.ok) return result;
+        const dispatchScope = { active: true };
+        const access = subscriptionReceipt(result, binding, dispatchScope);
+        if (!access.ok) return access;
+        try {
+          // Await ONLY the trusted callback's local/DB fence. It must synchronously initiate execute()
+          // and return its pending Promise as DATA, not await the provider stream under this lock.
+          const wrapped = await start(access);
+          const descriptor = wrapped && typeof wrapped === "object" && !types.isProxy(wrapped) ? Object.getOwnPropertyDescriptor(wrapped, "pending") : undefined;
+          if (!descriptor || !("value" in descriptor) || !types.isPromise(descriptor.value)) return { ok: false as const, reason: "temporarily_unavailable" as const };
+          return Object.freeze({ ok: true as const, pending: descriptor.value as Promise<T> });
+        } finally {
+          dispatchScope.active = false;
+          subscriptionAccess.delete(access);
+        }
+      });
+    } catch { return { ok: false as const, reason: "temporarily_unavailable" as const }; }
   }
 
   async function refreshModels(): Promise<"updated" | "not_connected" | "plan_usage_missing" | "reauthorization_required" | "temporarily_unavailable"> {
@@ -434,7 +564,7 @@ export function createChatGPTConnection(dependencies: ChatGPTConnectionDependenc
     }
   }
 
-  return Object.freeze({ redirectUri, start, complete, status, accessToken, refreshModels, selectModel, disconnect });
+  return Object.freeze({ redirectUri, start, complete, status, accessToken, readSubscriptionFacts, subscriptionAccessToken, withSubscriptionAccess, refreshModels, selectModel, disconnect });
 }
 
 export type ChatGPTConnection = ReturnType<typeof createChatGPTConnection>;

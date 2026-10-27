@@ -16,6 +16,13 @@ export const executorAccessModes = Object.freeze(["subscription_session", "api_k
 export type ExecutorAccessMode = typeof executorAccessModes[number];
 export const executorTaskClasses = Object.freeze(["implementation", "analysis", "repair", "refactor", "verification"] as const);
 export type ExecutorTaskClass = typeof executorTaskClasses[number];
+/** A no-tools patch proposal is not a managed coding environment. Never assert
+ * filesystem/network/QA enforcement that this profile does not provide. */
+export type PatchProposalEnvironment = Readonly<{ id: string; kind: "patch_proposal_only" }>;
+type RouteEnvironment = ExecutionEnvironment | PatchProposalEnvironment;
+type RouteEnvironmentRequirements = ManagedEnvironmentRequirements | Readonly<{
+  kinds: readonly ["patch_proposal_only"]; capabilities: readonly []; residency: null; privacy: readonly [];
+}>;
 const risks = ["low", "medium", "high", "critical"] as const;
 const repositoryFeatures = ["exact_baseline", "bounded_context", "allowed_paths", "patch_artifacts", "repository_analysis"] as const;
 type Estimate = Readonly<{ value: number; fingerprint: string }>;
@@ -24,7 +31,7 @@ export type ExecutorRouteCandidate = Readonly<{
   capabilities: readonly ExecutorCapability[]; modes: readonly ExecutorExecutionMode[]; artifacts: readonly ("patch" | "report")[];
   taskClasses: readonly ExecutorTaskClass[];
   maxRisk: typeof risks[number]; repositoryFeatures: readonly typeof repositoryFeatures[number][];
-  environment: ExecutionEnvironment; accessModes: readonly ExecutorAccessMode[];
+  environment: RouteEnvironment; accessModes: readonly ExecutorAccessMode[];
   availability: Readonly<{ state: "available" | "unavailable" | "unknown"; fingerprint: string | null }>;
   quota: Readonly<{ state: "available" | "exhausted" | "unknown"; fingerprint: string | null }>;
   estimatedCostUsdMicros: Estimate | null; estimatedLatencyMs: Estimate | null;
@@ -33,7 +40,7 @@ export type ExecutorRouteCandidate = Readonly<{
 export type NormalizedRoutingRequirements = Readonly<{
   planId: string; taskId: string; attempt: ExecutorAttemptIdentity; repository: ExecutorRepositoryRef; admittedPaths: readonly string[];
   capability: ExecutorCapability; mode: ExecutorExecutionMode; taskClass: ExecutorTaskClass;
-  risk: typeof risks[number]; environment: ManagedEnvironmentRequirements; accessModes: readonly ExecutorAccessMode[];
+  risk: typeof risks[number]; environment: RouteEnvironmentRequirements; accessModes: readonly ExecutorAccessMode[];
   requireQuota: boolean; maxCostUsdMicros: number | null; maxLatencyMs: number | null; minQualityBasisPoints: number | null;
   requiredExecutorId: string | null; preferredExecutorIds: readonly string[];
 }>;
@@ -45,7 +52,7 @@ export type RouteReason = "invalid_registry" | "invalid_requirements" | "task_ad
 export type ExecutorRouteDecision = Readonly<{
   verdict: "allow" | "deny"; reasons: readonly RouteReason[];
   selectedRoute: Readonly<{ routeId: string; executor: ExecutorIdentity; providerId: "openai" | "anthropic";
-    environment: Readonly<{ id: string; kind: ExecutionEnvironment["kind"] }>; accessMode: ExecutorAccessMode }> | null;
+    environment: Readonly<{ id: string; kind: RouteEnvironment["kind"] }>; accessMode: ExecutorAccessMode }> | null;
   ranking: readonly Readonly<{ routeId: string; preference: number | null; quality: ExecutorRouteCandidate["quality"];
     estimatedCostUsdMicros: Estimate | null; estimatedLatencyMs: Estimate | null }>[];
   rejected: readonly Readonly<{ routeId: string; reasons: readonly RouteReason[] }>[];
@@ -68,8 +75,11 @@ function candidate(v: unknown): ExecutorRouteCandidate {
   const r = record(v, ["routeId", "executor", "providerId", "capabilities", "modes", "artifacts", "taskClasses", "maxRisk", "repositoryFeatures", "environment", "accessModes", "availability", "quota", "estimatedCostUsdMicros", "estimatedLatencyMs", "quality"]);
   const e = record(r.executor, ["id", "version"]), providerId = enumeration(r.providerId, ["openai", "anthropic"]);
   const executor = { id: safeAtom(e.id), version: safeAtom(e.version, 32) };
-  if (executor.version !== "v1" || executor.id !== (providerId === "openai" ? "openai-agents" : "claude-managed-agents")) invalid();
-  const environment = normalizeEnvironment(r.environment);
+  const subscription = providerId === "openai" && executor.id === "chatgpt-plan-patch" && executor.version === "v1";
+  if (executor.version !== "v1" || (!subscription && executor.id !== (providerId === "openai" ? "openai-agents" : "claude-managed-agents"))) invalid();
+  const environment: RouteEnvironment = subscription
+    ? (() => { const e = record(r.environment, ["id", "kind"]); if (e.kind !== "patch_proposal_only") invalid(); return { id: safeAtom(e.id), kind: "patch_proposal_only" as const }; })()
+    : normalizeEnvironment(r.environment);
   if (providerId !== "openai" && ["openai_hosted", "codex_cloud_if_supported"].includes(environment.kind)) invalid();
   let quality: ExecutorRouteCandidate["quality"] = null;
   if (r.quality !== null) { const q = record(r.quality, ["scoreBasisPoints", "sampleCount", "fingerprint"]);
@@ -81,7 +91,12 @@ function candidate(v: unknown): ExecutorRouteCandidate {
     accessModes: stringSet(r.accessModes, executorAccessModes), availability: factualState(r.availability, ["available", "unavailable", "unknown"]),
     quota: factualState(r.quota, ["available", "exhausted", "unknown"]), estimatedCostUsdMicros: estimate(r.estimatedCostUsdMicros, routingDataLimits.maxCostUsdMicros),
     estimatedLatencyMs: estimate(r.estimatedLatencyMs, routingDataLimits.maxLatencyMs), quality };
-  if (!result.capabilities.length || !result.taskClasses.length || !result.modes.length || !result.artifacts.length || !result.accessModes.length) invalid(); return result;
+  if (!result.capabilities.length || !result.taskClasses.length || !result.modes.length || !result.artifacts.length || !result.accessModes.length) invalid();
+  if (subscription && (result.accessModes.length !== 1 || result.accessModes[0] !== "subscription_session"
+    || result.capabilities.length !== 1 || result.capabilities[0] !== "coding" || result.modes.length !== 1 || result.modes[0] !== "patch_proposal"
+    || result.artifacts.length !== 2 || !result.artifacts.includes("patch") || !result.artifacts.includes("report")
+    || result.estimatedCostUsdMicros !== null)) invalid();
+  return result;
 }
 function requirements(v: unknown): NormalizedRoutingRequirements | RouteReason {
   const r = record(v, ["admission", "developmentRun", "repository", "capability", "mode", "taskClass", "policy"]);
@@ -98,11 +113,21 @@ function requirements(v: unknown): NormalizedRoutingRequirements | RouteReason {
   const capability = enumeration(r.capability, ["coding", "repository_analysis"]), mode = enumeration(r.mode, ["patch_proposal", "analysis_only"]);
   if ((capability === "coding") !== (mode === "patch_proposal")) invalid();
   const p = record(r.policy, ["environment", "accessModes", "requireQuota", "maxCostUsdMicros", "maxLatencyMs", "minQualityBasisPoints", "requiredExecutorId", "preferredExecutorIds"]);
-  const environment = normalizeEnvironmentRequirements(p.environment);
+  const rawEnvironment = record(p.environment, ["kinds", "capabilities", "residency", "privacy"]);
+  const proposalOnly = Array.isArray(rawEnvironment.kinds) && rawEnvironment.kinds.length === 1 && rawEnvironment.kinds[0] === "patch_proposal_only";
+  let environment: RouteEnvironmentRequirements;
+  if (proposalOnly) {
+    if (!Array.isArray(rawEnvironment.capabilities) || rawEnvironment.capabilities.length || !Array.isArray(rawEnvironment.privacy)
+      || rawEnvironment.privacy.length || rawEnvironment.residency !== null || p.requiredExecutorId !== "chatgpt-plan-patch"
+      || !Array.isArray(p.accessModes) || p.accessModes.length !== 1 || p.accessModes[0] !== "subscription_session"
+      || capability !== "coding" || mode !== "patch_proposal") invalid();
+    environment = { kinds: ["patch_proposal_only"], capabilities: [], residency: null, privacy: [] };
+  } else environment = normalizeEnvironmentRequirements(p.environment);
   // Core managed safety requirements cannot be removed by caller policy. Additional
   // privacy/residency requirements are additive, never inferred from provider branding.
   const core = ["filesystem_isolation", "path_scope_enforcement", "network_policy", "secrets_isolation", "timeout", "resource_bound", "changed_file_limit", "artifact_collection", "verification_collection"] as const;
-  const effectiveEnvironment = { ...environment, capabilities: [...new Set([...environment.capabilities, ...core])].sort(compare) };
+  const effectiveEnvironment: RouteEnvironmentRequirements = proposalOnly ? environment
+    : { ...environment, capabilities: [...new Set([...environment.capabilities, ...core])].sort(compare) } as ManagedEnvironmentRequirements;
   const preferences = list(p.preferredExecutorIds, x => safeAtom(x)); if (new Set(preferences).size !== preferences.length || typeof p.requireQuota !== "boolean") invalid();
   const accessModes = stringSet(p.accessModes, executorAccessModes); if (!accessModes.length) invalid();
   return { planId: safeAtom(plan.value.id), taskId: safeAtom(task.id), attempt: current.attempt, repository: { id: safeAtom(repo.id), baseline: repo.baseline },
@@ -122,7 +147,9 @@ function rejection(c: ExecutorRouteCandidate, r: NormalizedRoutingRequirements):
   if (!c.taskClasses.includes(r.taskClass)) reasons.push("task_class_mismatch");
   if (!c.modes.includes(r.mode) || !c.artifacts.includes("report") || (r.mode === "patch_proposal" && !c.artifacts.includes("patch"))) reasons.push("mode_mismatch");
   if (risks.indexOf(c.maxRisk) < risks.indexOf(r.risk)) reasons.push("risk_unsupported");
-  const env = evaluateManagedExecutionEnvironment({ environment: c.environment, requirements: r.environment });
+  const env: Readonly<{ verdict: string; reasons: readonly string[] }> = c.environment.kind === "patch_proposal_only"
+    ? { verdict: r.environment.kinds.length === 1 && r.environment.kinds[0] === "patch_proposal_only" ? "allow" : "deny", reasons: [] }
+    : evaluateManagedExecutionEnvironment({ environment: c.environment, requirements: r.environment });
   if (env.verdict !== "allow") reasons.push("environment_ineligible");
   if (env.reasons.includes("residency_mismatch")) reasons.push("residency_mismatch");
   if (env.reasons.includes("privacy_requirement_unmet")) reasons.push("privacy_requirement_unmet");

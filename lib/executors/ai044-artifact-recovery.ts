@@ -1,6 +1,6 @@
 import type { AI044ProofBinding } from "./ai044-proof-binding";
 // @ts-expect-error Node direct TypeScript requires the runtime extension.
-import { normalizeAI044ProofBinding, captureAI044Data, exactAI044Record, freezeAI044, ai044Fingerprint, ai044Sha256, ai044Hash, ai044Id, ai044SafeText, ai044FeaturePath, ai044OutputLimits, ai044ProfileVersion } from "./ai044-proof-binding.ts";
+import { normalizeAI044ProofBinding, captureAI044Data, exactAI044Record, freezeAI044, ai044Fingerprint, ai044Sha256, ai044Hash, ai044Id, ai044SafeText, ai044FeaturePath, ai044Path, ai044OutputLimits, ai044ProfileVersion } from "./ai044-proof-binding.ts";
 // @ts-expect-error Node direct TypeScript requires the runtime extension.
 import { repositoryPathContains } from "../contracts/development-task-policy.ts";
 // @ts-expect-error Node direct TypeScript requires the runtime extension.
@@ -18,8 +18,9 @@ function identity(raw: unknown, binding: AI044ProofBinding): Identity {
   if (safeHash(i.bindingFingerprint) !== ai044Fingerprint(binding)) invalid();
   return freezeAI044({ bindingFingerprint: i.bindingFingerprint as string, profileFingerprint: safeHash(i.profileFingerprint), sessionId: safeId(i.sessionId), turnId: safeId(i.turnId) });
 }
-function permittedPath(path: unknown, binding: AI044ProofBinding): string {
-  const p = ai044FeaturePath(path);
+type PatchPaths = Pick<AI044ProofBinding, "allowedPaths"> & { pathPolicy?: (path: unknown) => string | null };
+function permittedPath(path: unknown, binding: PatchPaths): string {
+  const p = (binding.pathPolicy ?? ai044FeaturePath)(path);
   if (!p || !binding.allowedPaths.some(parent => p === parent || (!parent.includes(".") && repositoryPathContains(parent, p)))
     || /(?:^|\/)(?:scanner|alerts|hot|events|market-?pulse)(?:\/|\.|$)/iu.test(p)
     || /(?:^|\/)(?:package(?:-lock)?\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|\.npmrc|\.yarnrc(?:\.yml)?)$/iu.test(p)) invalid();
@@ -32,11 +33,12 @@ function utf8Patch(raw: unknown): string {
   return raw as string;
 }
 /** Strict bounded git unified-text subset. Application against the exact baseline is a later trusted QA gate. */
-function parsePatch(patch: string, binding: AI044ProofBinding) {
+export type AI044UnifiedPatchFile = Readonly<{ path: string; operation: "add" | "modify" | "delete"; hunks: readonly Readonly<{ oldStart: number; oldCount: number; newStart: number; newCount: number; lines: readonly string[] }>[] }>;
+function parsePatch(patch: string, binding: PatchPaths) {
   const lines = patch.slice(0, -1).split("\n");
   if (lines.length > 12000 || lines.some(line => line.length > 16384)) invalid();
   let cursor = 0, addedLines = 0, removedLines = 0;
-  const changedPaths: string[] = [];
+  const changedPaths: string[] = [], files: AI044UnifiedPatchFile[] = [];
   while (cursor < lines.length) {
     const diff = /^diff --git a\/([A-Za-z0-9._/-]+) b\/([A-Za-z0-9._/-]+)$/u.exec(lines[cursor++]);
     if (!diff || diff[1] !== diff[2]) invalid();
@@ -55,6 +57,7 @@ function parsePatch(patch: string, binding: AI044ProofBinding) {
     if (lines[cursor++] !== (mode === "new" ? "--- /dev/null" : `--- a/${path}`)
       || lines[cursor++] !== (mode === "delete" ? "+++ /dev/null" : `+++ b/${path}`)) invalid();
     let hunks = 0, oldEnd = -1, newEnd = -1, fileChanges = 0;
+    const fileHunks: AI044UnifiedPatchFile["hunks"][number][] = [];
     while (cursor < lines.length && !lines[cursor].startsWith("diff --git ")) {
       const hunk = /^@@ -(\d{1,7})(?:,(\d{1,7}))? \+(\d{1,7})(?:,(\d{1,7}))? @@(?: .*)?$/u.exec(lines[cursor++]);
       if (!hunk || ++hunks > 256) invalid();
@@ -63,8 +66,9 @@ function parsePatch(patch: string, binding: AI044ProofBinding) {
         || (mode === "new" && (oldStart !== 0 || oldCount !== 0)) || (mode === "delete" && (newStart !== 0 || newCount !== 0))) invalid();
       oldEnd = oldStart + oldCount; newEnd = newStart + newCount;
       let oldSeen = 0, newSeen = 0, previousBody = false;
+      const body: string[] = [];
       while (cursor < lines.length && !lines[cursor].startsWith("@@ ") && !lines[cursor].startsWith("diff --git ")) {
-        const line = lines[cursor++];
+        const line = lines[cursor++]; body.push(line);
         if (line === "\\ No newline at end of file") { if (!previousBody) invalid(); previousBody = false; continue; }
         previousBody = true;
         if (line.startsWith(" ")) { oldSeen++; newSeen++; }
@@ -74,11 +78,29 @@ function parsePatch(patch: string, binding: AI044ProofBinding) {
         if (oldSeen > oldCount || newSeen > newCount || addedLines + removedLines > ai044OutputLimits.changedLines) invalid();
       }
       if (oldSeen !== oldCount || newSeen !== newCount) invalid();
+      fileHunks.push({ oldStart, oldCount, newStart, newCount, lines: body });
     }
     if (!hunks || !fileChanges) invalid();
+    files.push({ path, operation: mode === "new" ? "add" : mode === "delete" ? "delete" : "modify", hunks: fileHunks });
   }
   if (!changedPaths.length) invalid();
-  return { changedPaths: changedPaths.sort(), addedLines, removedLines, fileCount: changedPaths.length };
+  return { changedPaths: changedPaths.sort(), addedLines, removedLines, fileCount: changedPaths.length, files };
+}
+/** Shared syntax/path/secret/bounds policy. Proposal parsing grants no apply, QA or dispatch authority. */
+export function validateAI044UnifiedPatch(patchInput: unknown, allowedPathsInput: unknown) {
+  return validateUnifiedPatch(patchInput, allowedPathsInput, ai044FeaturePath);
+}
+/** FeaturePlan-admitted scope, independent of the cancelled hosted feature envelope. */
+export function validateAI044AdmittedUnifiedPatch(patchInput: unknown, allowedPathsInput: unknown) {
+  return validateUnifiedPatch(patchInput, allowedPathsInput, ai044Path);
+}
+function validateUnifiedPatch(patchInput: unknown, allowedPathsInput: unknown, pathPolicy: (path: unknown) => string | null) {
+  try {
+    const allowedPaths = captureAI044Data(allowedPathsInput);
+    if (!Array.isArray(allowedPaths) || !allowedPaths.length || allowedPaths.length > 12 || allowedPaths.some(path => !pathPolicy(path))) invalid();
+    const patch = utf8Patch(patchInput);
+    return freezeAI044({ patch, ...parsePatch(patch, { allowedPaths: allowedPaths as string[], pathPolicy }) });
+  } catch { return null; }
 }
 export type AI044Artifact = Readonly<Identity & { patch: string; patchSha256: string; changedPaths: readonly string[]; addedLines: number; removedLines: number; fileCount: number; manifestFingerprint: string }>;
 export type AI044ArtifactDecision = Readonly<{ verdict: "allow" | "deny"; reason: "validated_artifact" | "artifact_unavailable"; artifact: AI044Artifact | null }>;
@@ -86,7 +108,8 @@ export type AI044ArtifactDecision = Readonly<{ verdict: "allow" | "deny"; reason
 export function ingestAI044Artifacts(bindingInput: unknown, manifestInput: unknown, patchInput: unknown, identityInput: unknown): AI044ArtifactDecision {
   try {
     const binding = normalizeAI044ProofBinding(bindingInput); if (!binding) invalid();
-    const link = identity(identityInput, binding!), patch = utf8Patch(patchInput), facts = parsePatch(patch, binding!);
+    const link = identity(identityInput, binding!), patch = utf8Patch(patchInput);
+    const parsed = parsePatch(patch, binding!), facts = { changedPaths: parsed.changedPaths, addedLines: parsed.addedLines, removedLines: parsed.removedLines, fileCount: parsed.fileCount };
     const m = record(manifestInput, ["schemaVersion", "featureId", "repositoryId", "baseline", "archiveSha256", "bindingFingerprint", "profileFingerprint", "sessionId", "turnId", "patchSha256", "changedPaths", "addedLines", "removedLines", "verificationCommandsAttempted"]);
     if (Buffer.byteLength(JSON.stringify(m)) > ai044OutputLimits.manifestBytes || m.schemaVersion !== 1 || m.featureId !== "portfolio-analytics-v1"
       || m.repositoryId !== binding!.repository.id || m.baseline !== binding!.repository.baseline || m.archiveSha256 !== binding!.archiveSha256

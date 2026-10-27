@@ -5,6 +5,7 @@
 // (default ~/.config/private-ai-cloud/chatgpt, override PAC_CHATGPT_CREDENTIAL_DIR):
 //   host-id.json          stable ext_agent_host_id (urn:uuid; not a secret)
 //   registrations.json    issued client ids, validated account metadata, token sets, selected model
+//   subscription-facts.json  protected NON-SECRET Owner/registration projection for routing; no tokens
 //   pending/<hash>.json   one pending OAuth attempt per state hash (PKCE verifier, nonce, Owner binding)
 //   refresh.lock          cross-process refresh serialization
 //
@@ -14,7 +15,7 @@
 // closed. Writes are atomic: O_EXCL temp file (0600) → fsync → rename over the target → fsync dir.
 // A pending attempt is consumed exactly once by an atomic rename (a replay finds nothing).
 import { constants, promises as fs } from "node:fs";
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ChatGPTModel } from "./chatgpt-oauth";
@@ -62,6 +63,25 @@ export type StoredRegistration = Readonly<{
 
 export type StoredRegistrations = Readonly<{ version: 1; active: string | null; registrations: readonly StoredRegistration[] }>;
 
+// Internal server/control-plane facts, NOT an Owner-facing projection or an execution capability.
+// The Owner mapping is established only after the existing validated OAuth callback. Reading this
+// separate file never opens/decrypts registrations.json, refreshes a token, or calls a provider.
+export type ChatGPTSubscriptionOwnerBinding = Readonly<{
+  registration: Readonly<{ label: string; clientId: string; subjectHash: string }>;
+  ownerUserId: string;
+  domainWorkspaceId: string;
+}>;
+export type ChatGPTSubscriptionFacts = ChatGPTSubscriptionOwnerBinding & Readonly<{
+  status: RegistrationStatus;
+  planUsageGranted: boolean;
+  selectedModel: string | null;
+}>;
+type SubscriptionMetadata = Readonly<{ version: 1; active: string | null; registrations: readonly ChatGPTSubscriptionFacts[] }>;
+const subscriptionFacts = new WeakSet<object>();
+export function isChatGPTSubscriptionFacts(value: unknown): value is ChatGPTSubscriptionFacts {
+  return typeof value === "object" && value !== null && subscriptionFacts.has(value);
+}
+
 export type PendingAttempt = Readonly<{
   version: 1;
   stateKey: string;
@@ -89,6 +109,7 @@ const stableIdPattern = /^[a-z0-9][a-z0-9._-]{0,63}$/u;
 const tokenPattern = /^[\x21-\x7e]{1,16384}$/u;
 const scopePattern = /^[\x21\x23-\x5b\x5d-\x7e]{1,128}$/u;
 const slugPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
+const subjectHash = (subject: string) => createHash("sha256").update(subject, "utf8").digest("hex");
 
 const plain = (input: unknown): input is Record<string, unknown> => typeof input === "object" && input !== null && !Array.isArray(input) && Object.getPrototypeOf(input) === Object.prototype;
 const exact = (input: Record<string, unknown>, fields: readonly string[]) => {
@@ -98,6 +119,31 @@ const exact = (input: Record<string, unknown>, fields: readonly string[]) => {
 const iso = (input: unknown): input is string => typeof input === "string" && isoPattern.test(input) && Number.isFinite(Date.parse(input));
 const isoOrNull = (input: unknown) => input === null || iso(input);
 const tokenOrNull = (input: unknown) => input === null || (typeof input === "string" && tokenPattern.test(input));
+
+function validSubscriptionOwner(input: unknown): input is ChatGPTSubscriptionOwnerBinding {
+  if (!plain(input) || !exact(input, ["registration", "ownerUserId", "domainWorkspaceId"]) || !plain(input.registration)
+    || !exact(input.registration, ["label", "clientId", "subjectHash"])) return false;
+  const registration = input.registration;
+  return typeof registration.label === "string" && labelPattern.test(registration.label)
+    && typeof registration.clientId === "string" && issuedClientIdPattern.test(registration.clientId) && registration.clientId !== "dynamic_agent_client"
+    && typeof registration.subjectHash === "string" && /^[0-9a-f]{64}$/u.test(registration.subjectHash)
+    && typeof input.ownerUserId === "string" && uuidPattern.test(input.ownerUserId)
+    && typeof input.domainWorkspaceId === "string" && stableIdPattern.test(input.domainWorkspaceId);
+}
+
+function validSubscriptionMetadata(input: unknown): input is SubscriptionMetadata {
+  if (!plain(input) || !exact(input, ["version", "active", "registrations"]) || input.version !== 1
+    || !Array.isArray(input.registrations) || input.registrations.length > credentialStoreLimits.maxRegistrations) return false;
+  for (const item of input.registrations) {
+    if (!plain(item) || !exact(item, ["registration", "ownerUserId", "domainWorkspaceId", "status", "planUsageGranted", "selectedModel"])
+      || !validSubscriptionOwner({ registration: item.registration, ownerUserId: item.ownerUserId, domainWorkspaceId: item.domainWorkspaceId })
+      || !["active", "plan_usage_missing", "reauthorization_required", "signed_out"].includes(item.status as string)
+      || typeof item.planUsageGranted !== "boolean" || (item.status !== "active" && item.planUsageGranted)
+      || !(item.selectedModel === null || (typeof item.selectedModel === "string" && slugPattern.test(item.selectedModel)))) return false;
+  }
+  const labels = input.registrations.map((item: ChatGPTSubscriptionFacts) => item.registration.label);
+  return new Set(labels).size === labels.length && (input.active === null || (typeof input.active === "string" && labels.includes(input.active)));
+}
 
 const registrationFields = ["label", "clientId", "subject", "email", "hostId", "idToken", "accessToken", "refreshToken", "accessTokenExpiresAt",
   "earliestRefreshAt", "grantedScopes", "status", "savedAt", "selectedModel", "availableModels", "modelsCheckedAt"] as const;
@@ -170,7 +216,8 @@ export type ChatGPTCredentialStore = Readonly<{
   directory: string;
   hostId(): Promise<string>;
   readRegistrations(): Promise<StoredRegistrations>;
-  writeRegistrations(next: StoredRegistrations): Promise<void>;
+  writeRegistrations(next: StoredRegistrations, validatedOwner?: ChatGPTSubscriptionOwnerBinding): Promise<void>;
+  readSubscriptionFacts(): Promise<ChatGPTSubscriptionFacts | null>;
   putAttempt(attempt: PendingAttempt): Promise<void>;
   consumeAttempt(stateKey: string): Promise<PendingAttempt | null>;
   hasLiveAttempt(now: Date): Promise<boolean>;
@@ -285,10 +332,51 @@ export function createChatGPTCredentialStore(input: Readonly<{ directory: string
     return value;
   }
 
-  async function writeRegistrations(next: StoredRegistrations): Promise<void> {
+  async function readSubscriptionMetadata(): Promise<SubscriptionMetadata> {
+    const value = await readJson(join(directory, "subscription-facts.json"));
+    if (value === undefined) return { version: 1, active: null, registrations: [] };
+    if (!validSubscriptionMetadata(value)) throw new CredentialStoreError("Subscription metadata is malformed.");
+    return value;
+  }
+
+  async function readSubscriptionFacts(): Promise<ChatGPTSubscriptionFacts | null> {
+    try {
+      await secureDirectory(directory);
+      const metadata = await readSubscriptionMetadata();
+      const active = metadata.registrations.find((item) => item.registration.label === metadata.active);
+      if (!active) return null;
+      const detached = Object.freeze({ ...active, registration: Object.freeze({ ...active.registration }) });
+      subscriptionFacts.add(detached);
+      return detached;
+    } catch {
+      return null;
+    }
+  }
+
+  async function writeRegistrations(next: StoredRegistrations, validatedOwner?: ChatGPTSubscriptionOwnerBinding): Promise<void> {
     if (!validRegistrations(next)) throw new CredentialStoreError("Registrations are invalid.");
+    if (validatedOwner !== undefined && (!validSubscriptionOwner(validatedOwner) || !next.registrations.some((item) =>
+      item.label === validatedOwner.registration.label && item.clientId === validatedOwner.registration.clientId
+      && subjectHash(item.subject) === validatedOwner.registration.subjectHash))) throw new CredentialStoreError("Subscription binding is invalid.");
     await secureDirectory(directory);
+    // Corrupt/unreadable metadata cannot supply an Owner mapping, but it must not prevent the existing
+    // disconnect/terminal-refresh flow from clearing credentials. Reset it to unavailable first below.
+    const previous = await readSubscriptionMetadata().catch((): SubscriptionMetadata => ({ version: 1, active: null, registrations: [] }));
+    const mapped: ChatGPTSubscriptionFacts[] = [];
+    for (const item of next.registrations) {
+      const identity = { label: item.label, clientId: item.clientId, subjectHash: subjectHash(item.subject) };
+      const owner = validatedOwner?.registration.label === item.label ? validatedOwner : previous.registrations.find((entry) =>
+        entry.registration.label === identity.label && entry.registration.clientId === identity.clientId && entry.registration.subjectHash === identity.subjectHash);
+      if (!owner) continue; // No legacy inference/backfill from account labels, subjects or token claims.
+      mapped.push({ registration: identity, ownerUserId: owner.ownerUserId, domainWorkspaceId: owner.domainWorkspaceId,
+        status: item.status, planUsageGranted: item.status === "active" && item.grantedScopes.includes("chatgpt.tokens.use.direct"), selectedModel: item.selectedModel });
+    }
+    // Invalidate before touching tokens: a crash between these atomic writes leaves unavailable facts,
+    // never a previous Owner mapping paired with newly written credentials. Concurrent routing may see
+    // unavailable; it cannot gain authority. Late exact credential validation remains mandatory.
+    await writeJson(directory, "subscription-facts.json", { version: 1, active: null, registrations: [] });
     await writeJson(directory, "registrations.json", next);
+    await writeJson(directory, "subscription-facts.json", { version: 1, active: mapped.some((item) => item.registration.label === next.active) ? next.active : null, registrations: mapped });
   }
 
   async function putAttempt(attempt: PendingAttempt): Promise<void> {
@@ -373,5 +461,5 @@ export function createChatGPTCredentialStore(input: Readonly<{ directory: string
     return next;
   }
 
-  return Object.freeze({ directory, hostId, readRegistrations, writeRegistrations, putAttempt, consumeAttempt, hasLiveAttempt, withRefreshLock });
+  return Object.freeze({ directory, hostId, readRegistrations, writeRegistrations, readSubscriptionFacts, putAttempt, consumeAttempt, hasLiveAttempt, withRefreshLock });
 }

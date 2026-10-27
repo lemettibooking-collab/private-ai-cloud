@@ -16,7 +16,7 @@ export function environment(id = "environment-a"): Mutable<ExecutionEnvironment>
     residency: { regions: ["eu-test"], evidence: evidence() },
     privacy: Object.fromEntries(data.privacyRequirements.map(k => [k, evidence()])) as Mutable<ExecutionEnvironment["privacy"]> };
 }
-export function candidate(provider: "openai" | "anthropic" = "openai", routeId = provider === "openai" ? "route-a" : "route-b"): Mutable<ExecutorRouteCandidate> {
+export function candidate(provider: "openai" | "anthropic" = "openai", routeId = provider === "openai" ? "route-a" : "route-b"): Mutable<ExecutorRouteCandidate> & { environment: Mutable<ExecutionEnvironment> } {
   return { routeId, providerId: provider, executor: { id: provider === "openai" ? "openai-agents" : "claude-managed-agents", version: "v1" },
     taskClasses: ["implementation", "analysis", "repair", "refactor", "verification"],
     capabilities: ["coding", "repository_analysis"], modes: ["patch_proposal", "analysis_only"], artifacts: ["patch", "report"], maxRisk: "high",

@@ -289,7 +289,8 @@ test("PG populated 0015 → 0016 preserves terminal results, journals, exposures
     assert.equal(migrations[16], "0017_executor_provider_constraint.sql");
     assert.equal(migrations[17], "0018_executor_authority_rebinding.sql");
     assert.equal(migrations[18], "0019_roadmap_foundation.sql");
-    assert.equal(migrations.at(-1), "0020_development_controller.sql");
+    assert.equal(migrations[19], "0020_development_controller.sql");
+    assert.equal(migrations.at(-1), "0021_ai044_subscription_approval.sql");
     for (const path of migrations.slice(0, 15)) await admin.query(readFileSync(new URL(`../../db/migrations/${path}`, import.meta.url), "utf8"));
     await live.insertWorkspace(admin, live.primaryWorkspace);
     await admin.query("insert into projects(workspace_id,project_key,display_name) values($1,'project-a','Legacy terminal')", [live.primaryWorkspace.id]);

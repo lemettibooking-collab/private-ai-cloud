@@ -12,7 +12,10 @@ const baseline = "45c55e56ed98df2e40822cee1e3c89ca90a54d1a";
 const root = new URL("../../", import.meta.url);
 const temp = await mkdtemp(join(tmpdir(), "pac-legacy-authority-"));
 after(async () => { await rm(temp, { recursive: true, force: true }); });
-const files = ["lib/executors/executor-current-authority.ts", "lib/db/executor-current-authority-store.ts", "lib/db/executor-start-store.ts"];
+const files = ["lib/executors/executor-current-authority.ts", "lib/db/executor-current-authority-store.ts", "lib/db/executor-start-store.ts",
+  // Historical0016/0017 databases must use the historical predicate too: the current
+  // predicate also checks0021 subscription evidence, a table absent before that migration.
+  "lib/db/executor-predecessor-barrier.ts"];
 const mapped = new Map(files.map((p, i) => [new URL(p, root).href, pathToFileURL(join(temp, `${i}.mts`)).href]));
 export function relocateLegacyExecutor(source: string, original: URL) {
   return source.replace(/(from\s+)["'](\.[^"']+\.ts)["']/gu, (_m, from, relative) => {

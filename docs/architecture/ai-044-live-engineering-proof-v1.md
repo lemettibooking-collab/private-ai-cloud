@@ -1,8 +1,26 @@
 # AI-044 Phase L — fail-closed readiness primitives and feature freeze
 
+> **Owner target supersession — AI-044.1:** Portfolio Analytics and the frozen
+> target/source/smoke/zero-write contract below are historical, not current
+> requirements. The new product target is Smart Algorithms — Liquidity
+> Intelligence Drawer v0.1, not implemented here. Its future Owner-approved
+> FeaturePlan defines its own baseline, read context, admitted writes and
+> acceptance. See the [AI-044.1 contract](ai-044-subscription-patch-executor-v1.md).
+> Phase-L safety primitives and paid/hosted DENY-ONLY financial status remain
+> unchanged. This notice grants no target fetch, write or inference.
+
 Status: **LIVE READINESS PRIMITIVES: IMPLEMENTED / FINANCIAL GATE BLOCKED**.
 Research checked 2026-10-26. No independent gate PASS is asserted.
 Owner-amended mode: **LIVE READINESS PRIMITIVES / LIVE PERMIT IMPOSSIBLE**.
+
+Phase L was independently accepted and integrated at
+`41c0a166180e610c5454ffd2456bee4edb051d55`. The remaining sections preserve
+that paid/hosted profile's evidence and blockers. The Owner's separate
+[Phase S subscription patch executor](ai-044-subscription-patch-executor-v1.md)
+reuses SIWC direct plan access without a hosted environment or API-key fallback;
+it does not unlock or reinterpret this DENY-ONLY financial issuer.
+Phase S is an unintegrated implementation candidate, not real inference or an
+independent gate PASS. Generic production/live dispatch remains BLOCKED.
 
 ## Baseline and scope
 

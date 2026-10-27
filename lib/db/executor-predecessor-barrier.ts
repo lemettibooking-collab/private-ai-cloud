@@ -18,7 +18,17 @@ export async function executorPredecessorsClear(client: WorkflowRuntimeSqlClient
     exists(select 1 from executor_attempt_events j where j.workspace_id=e.workspace_id and j.development_run_id=e.development_run_id
       and j.attempt_number=e.attempt_number and j.event_version=e.event_version and j.state=e.state) as audit_matches
     from executor_attempt_exposures e where e.workspace_id=$1 and e.development_run_id=$2 and e.attempt_number < $3
-    order by e.attempt_number limit 3`, [workspace, runId, number]);
+    union all
+    select s.attempt_number,
+      case when s.state in ('completed','failed') then 'settled' else 'reconciliation_required' end as state,
+      true as started,(s.state in ('completed','failed')) as settled,s.result_fingerprint as terminal_result_fingerprint,
+      (s.state in ('completed','failed') and exists(select 1 from audit_events a where a.workspace_id=s.workspace_id
+        and a.entity_id=s.approval_request_id and a.event_type='ai044.subscription_'||s.state
+        and a.metadata->>'intentFingerprint'=s.intent_fingerprint and a.metadata->>'resultFingerprint'=s.result_fingerprint)) as terminal_matches,
+      exists(select 1 from audit_events a where a.workspace_id=s.workspace_id and a.entity_id=s.approval_request_id
+        and a.event_type='ai044.subscription_approval_consumed' and a.metadata->>'intentFingerprint'=s.intent_fingerprint) as audit_matches
+    from ai044_subscription_approval_bindings s where s.workspace_id=$1 and s.development_run_id=$2 and s.attempt_number < $3 and s.consumed_at is not null
+    order by attempt_number limit 3`, [workspace, runId, number]);
   requireFact(Number.isInteger(r.rowCount) && r.rowCount! >= 0 && r.rowCount! < number && Array.isArray(r.rows) && r.rows.length === r.rowCount);
   const rows = boundedData(r.rows) as unknown[];
   let previous = 0, blocked = false;

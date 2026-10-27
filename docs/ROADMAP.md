@@ -4,7 +4,7 @@
 **Date:** 2026-10-26\
 **Status:** AUTHORITATIVE / CURRENT\
 **Revision:** Owner-approved private execution sequencing (not an architecture rebase)\
-**Execution status aligned:** 2026-10-26 (B3 integrated; AI-044 Phase L primitives, financial gate blocked)\
+**Execution status aligned:** 2026-10-27 (B3/Phase L integrated; Phase S candidate; paid financial gate blocked)\
 **Integrated checkpoint:** `4f64f5b5b519da855498d5d56131b94ee8601a26`\
 **Canonical source:** `docs/ROADMAP.md`
 
@@ -216,7 +216,7 @@ The census recorded the current hardening debt and moved development to mileston
 - **AI-041.3 Executor Router — DONE** (`f36d4ac923f12c5b61602c4cb0a950ad1602edcc`; consolidated independent PASS/integration; deterministic policy only, no dispatch authority)
 - **AI-042 minimal managed ExecutionEnvironment closure — DONE** (same B2 integration; AI-042 overall remains PARTIAL / IN PROGRESS)
 - **B3 / AI-043.0–AI-043.5 and AI-043 — DONE** (`4f64f5b5b519da855498d5d56131b94ee8601a26`; consolidated independent PASS + exact integration, deterministic/fake-live-blocked scope including within-wave progress; not live provider readiness)
-- **AI-044 — LIVE READINESS IN PROGRESS / NOT DONE** (amended Phase L preparation primitives implemented, awaiting re-gate; live issuer DENY-ONLY until sufficient factual total exposure bound is established; no provider call)
+- **AI-044 — LIVE READINESS IN PROGRESS / NOT DONE** (Phase L preparation integrated; Phase S subscription candidate awaits independent re-gate; paid issuer DENY-ONLY; no provider call)
 - **AI-052 Private Execution Environment — PLANNED after AI-051** (first production-capable PAC-owned private/self-hosted coding environment; no implementation/dispatch authorization now)
 - **Roadmap v1.5 — Owner-approved private execution sequencing** (current; managed paths first, AI-052 after VPS + Telegram, local/VPS/private coding blocked until its gates)
 - **Roadmap Rebase v1.4 — preserved vendor-neutral architecture baseline** (`docs/ROADMAP_REBASE_V1.4.md`; historical rebase, not repeated by v1.5)
@@ -234,7 +234,7 @@ M1 Real Money Safety is DONE. The M1 Roadmap Review Gate first found one blocker
 | M3. Owner Product | ACTIVE | Useful Projects-first Owner experience | Owner can understand projects, runs, approvals, blockers, cost and roadmap without tenant bypass |
 | M4. Vendor-Neutral Executor Platform | IN PROGRESS (AI-041.2/041.3 + minimal managed closure DONE; live dispatch BLOCKED; AI-042 overall PARTIAL) | Replaceable managed executors behind `ExecutorAdapter`, routed by `ExecutorRouter`, over an `ExecutionEnvironment` abstraction | First executor works in the production path; a second, different managed executor proves portability without pipeline change |
 | M5. Roadmap-Driven Autonomy | B3 DONE in accepted deterministic/fake-live-blocked scope (architecture rebased in v1.4) | Deterministic control-plane controller advances an executable roadmap through executors (no PAC-owned generic agent loop) | No manual “go next” between ordinary technical steps; Owner appears only at gates |
-| M6. Automated Engineering Proof | AI-044 LIVE READINESS IN PROGRESS; primitives await re-gate, financial gate BLOCKED | Real Smart Algorithms feature → verified PR | Full pipeline passes; switching executor needs no pipeline change |
+| M6. Automated Engineering Proof | AI-044 LIVE READINESS IN PROGRESS; Phase L integrated, Phase S candidate; paid financial gate BLOCKED | Real Smart Algorithms feature → verified PR | Full pipeline passes; switching executor needs no pipeline change |
 | M7. Staging / Hardening | PLANNED (REBASED) | Production-like control-plane infrastructure | CI/CD, observability, TLS, backups, security and deployment gates |
 | M8. Remote Owner Control | PLANNED | Secure remote control (Telegram first) | Roadmap/runs/approvals/commit/push controlled through the same Owner Control API |
 | Post-M8. Private Execution Environment (AI-052) | PLANNED after AI-051 | Production-capable PAC-owned private/self-hosted engineering environment | Independently gated durable resource, containment, limits, network/secrets, evidence and recovery; no automatic deployment |
@@ -769,6 +769,15 @@ The AI-039 planning port bound to a REAL bounded model invocation, through the e
 ### AI-039.2 — ChatGPT Plan Access — Phase A implemented/committed; Phase B blocked
 
 Phase A implemented and committed/pushed in `c3e3db4`: Sign in with ChatGPT connection in Settings → Integrations — public-client OAuth (dynamic registration, PKCE S256, state, nonce, 127.0.0.1 loopback callback), JWKS-validated ID token, local protected credential store, serialized rotating refresh, revocation on disconnect, account-specific model discovery. The live entitlement gate is deferred by an external supported-network blocker. **No inference proof; Phase B remains blocked.** Phase B (subscription accounting, adapter, planner binding) starts only if the official grant includes `chatgpt.tokens.use.direct`. Eligibility is determined by that official OAuth grant; a private PAC installation is not guaranteed ChatGPT-plan direct access. Initial `invalid_grant` recovery remains recorded debt, not AI-040a work.
+
+AI-044 Phase S separately reuses this Phase-A foundation for a narrow engineering
+`ChatGPTPlanPatchExecutor`, **not** another OAuth system or completion of this
+generic planner/ModelProvider Phase B. Current official SIWC docs support eligible
+Plus/Pro local/open-source clients and selected private clients; this does not
+guarantee any account/model entitlement or remotely hosted commercial use.
+AI-045/VPS must re-check eligibility. The Phase S candidate requires exact
+registration/model, plan-only Owner preflight and durable one-shot approval before
+token access; no real inference proof has been performed.
 
 Purpose: use official Sign in with ChatGPT / ChatGPT plan usage as a second `ModelProvider` access mode for bounded FeaturePlan planning.
 
@@ -1311,10 +1320,27 @@ call during rendering. Production/live dispatch remains BLOCKED.
 
 ### AI-044 — Task → Verified PR — LIVE READINESS IN PROGRESS / NOT DONE
 
-Phase L freezes **Portfolio Analytics v1 — Demo Trading Terminal** on
-`lemettibooking-collab/Smart-Algorithms`, `main` at
-`ff8c035f8032417888a71c6a81aa9b9c26c816e8`. No Scanner, live trading or target
-repository code change is authorized by this PAC preparation task.
+Phase L fail-closed primitives were accepted/integrated at `41c0a166...`.
+Current Owner-approved Phase S adds a separate
+[subscription-session patch proposal executor](architecture/ai-044-subscription-patch-executor-v1.md)
+candidate using official SIWC direct Responses, exact-SHA context and existing
+approval/authority/QA-corrective boundaries. It has no coding environment/tools,
+API-key/credit/model fallback, general runtime unlock or real inference.
+Required manual external settings receipt: selected registration app limit<100%,
+credits disabled, no automatic-purchase reliance; this is not provider attestation.
+Candidate is for independent re-gate; production/live remains BLOCKED,
+`runtimeDispatchAllowed=false`. AI-044 stays NOT DONE. AI-044.1 separates exact
+readContextPaths from Admission-only allowedWritePaths and binds both to the
+approved attempt/Owner intent; context never grants write authority. The
+paid/hosted financial blocker below is unchanged.
+
+Owner replaced the production-proof target with **Smart Algorithms — Liquidity
+Intelligence Drawer v0.1**. Portfolio Analytics and its historical frozen SHA,
+source set, smoke command and zero-write assumptions are no longer required.
+Do not implement Liquidity during AI-044.1: after independent gate/integration,
+the new Owner-approved FeaturePlan selects its own exact baseline, explicit
+bounded read references, admitted writes and acceptance/verification commands.
+No Smart Algorithms fetch/source change or inference is authorized here.
 
 Owner-approved amended Phase L implements **LIVE READINESS PRIMITIVES / LIVE
 PERMIT IMPOSSIBLE**: pure hosted profile/archive/network, artifact/recovery,
@@ -1324,8 +1350,8 @@ total exposure bound covering active hosted compute and every charge category.
 Container maximum remains UNKNOWN; issuer DENY-ONLY; composition has no usable
 credential/provider port. No timeout, price rate, account hard limit, shaped
 numeric claim or Owner approval substitutes for proof. [Evidence and freeze](architecture/ai-044-live-engineering-proof-v1.md).
-Future analytics GET must use genuinely read-only facts or prove initialization
-outside GET and zero request writes; direct snapshot reuse is not proven safe.
+The historical analytics zero-write finding remains historical evidence only,
+not a requirement or assumption for the new feature or generic executor.
 Only after independent PASS may the remaining financial-bound problem be resolved
 without weakening policy. Any later live execution still needs trusted source
 integration, exact independent gate/integration and one-shot numeric Owner approval.
@@ -1554,7 +1580,7 @@ AI-041.2 Second Vendor / Portability Proof (DONE)
   → B2: AI-041.3 Executor Router (DONE)
   → B2: AI-042 minimal managed ExecutionEnvironment closure (DONE)
   → B3: AI-043.* Roadmap-Driven Autonomy (DONE in deterministic/fake-live-blocked scope)
-  → AI-044 LIVE READINESS IN PROGRESS (primitives; financial gate BLOCKED) → real feature → Verified PR
+  → AI-044 LIVE READINESS IN PROGRESS (Phase L integrated; Phase S candidate; paid financial gate BLOCKED) → real feature → Verified PR
   → AI-045 Production-like VPS Infrastructure
   → AI-046 Owner Control Contract
   → AI-047 Secure Telegram Bot
@@ -1664,7 +1690,7 @@ still belongs to the separate `ModelProvider` abstraction.
 - Preserve AI-041.1, AI-042.1/042.1a and AI-042.2 DONE; AI-042 overall PARTIAL /
   IN PROGRESS; AI-041.2/041.3 and minimal managed closure are now integrated DONE;
   B3 / AI-043 is integrated DONE in deterministic/fake-live-blocked scope;
-  AI-044 live readiness is current, preparation primitives await re-gate; financial gate BLOCKED / NOT DONE;
+  AI-044 live readiness is current, Phase L integrated, Phase S awaits independent re-gate; paid financial gate BLOCKED / NOT DONE;
   M9/M10a/M10b NON-BLOCKING DEBT; production/live
   dispatch BLOCKED and runtimeDispatchAllowed=false.
 - Managed Codex/OpenAI and conditional Claude execution precede private runtime

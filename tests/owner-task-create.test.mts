@@ -167,7 +167,7 @@ test("O. dependency direction: UI → Server Action → server composition → o
   // B3 adds explicit server-internal roadmap/controller Owner boundaries. They reuse
   // only strict input/Owner-lock/error primitives, never createTask or attachRun.
   assert.deepEqual(importers(/from\s+["'][^"']*\/tasks\/owner-task-mutations(\.ts)?["']/u),
-    ["lib/composition/owner-task-create.ts", "lib/db/development-controller-approvals.ts", "lib/db/development-controller-store.ts", "lib/db/roadmap-approvals.ts", "lib/db/roadmap-owner-read.ts", "lib/db/roadmap-store.ts",
+    ["lib/composition/owner-task-create.ts", "lib/db/ai044-subscription-approvals.ts", "lib/db/development-controller-approvals.ts", "lib/db/development-controller-store.ts", "lib/db/roadmap-approvals.ts", "lib/db/roadmap-owner-read.ts", "lib/db/roadmap-store.ts",
       "lib/development/feature-plan-mutations.ts", "lib/development/feature-plan-planning-requests.ts", "lib/integrations/chatgpt/chatgpt-owner-authority.ts", "lib/roadmap/roadmap-owner-commands.ts"]);
   for (const path of ["lib/development/feature-plan-mutations.ts", "lib/development/feature-plan-planning-requests.ts"]) {
     assert.match(code(path),
@@ -176,6 +176,9 @@ test("O. dependency direction: UI → Server Action → server composition → o
   // AI-039.2: the ChatGPT integration reuses ONLY the Owner predicate (read lock), never a task mutation.
   assert.match(code("lib/integrations/chatgpt/chatgpt-owner-authority.ts"),
     /import \{ capturedMethod, inTransaction, lockOwnerAuthority, resolveUserId \} from "\.\.\/\.\.\/tasks\/owner-task-mutations\.ts";/u);
+  // PhaseS reuses the same Owner/identity/conflict primitives for the EXISTING approval queue,
+  // not createTask/attachRun. The single task-mutation application importer assertion above remains exact.
+  assert.match(code("lib/db/ai044-subscription-approvals.ts"), /import \{ resolveUserId, lockOwnerAuthority, Conflict \} from "\.\.\/tasks\/owner-task-mutations\.ts";/u);
   // The binding is imported only by its server-only entry.
   assert.deepEqual(importers(/from\s+["'][^"']*owner-task-create(\.ts)?["']/u), ["lib/composition/owner-task-create.server.ts"]);
   // The server-only entry is imported only by the Quick Create Server Action and its page (key issue).
