@@ -3,9 +3,11 @@ import type { KnowledgeDocument } from "@/types/knowledge";
 
 type DocumentCardProps = {
   document: KnowledgeDocument;
+  // Localized label of the canonical status token (the token itself is unchanged).
+  statusLabel?: string;
 };
 
-export function DocumentCard({ document }: DocumentCardProps) {
+export function DocumentCard({ document, statusLabel }: DocumentCardProps) {
   return (
     <article className="rounded-xl border border-slate-800 bg-slate-950/70 p-5">
       <div className="flex items-start justify-between gap-3">
@@ -17,7 +19,7 @@ export function DocumentCard({ document }: DocumentCardProps) {
             {document.collection} / {document.size} / {document.updatedAt}
           </p>
         </div>
-        <StatusBadge tone={document.statusTone}>{document.status}</StatusBadge>
+        <StatusBadge tone={document.statusTone}>{statusLabel ?? document.status}</StatusBadge>
       </div>
       <p className="mt-4 text-sm leading-6 text-slate-400">
         {document.sourcePreview}

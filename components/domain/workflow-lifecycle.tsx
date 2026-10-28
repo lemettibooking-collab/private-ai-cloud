@@ -1,26 +1,30 @@
 import { StatusBadge } from "@/components/ui/status-badge";
-import { workflowLifecycleSteps } from "@/lib/mock-data";
+import { getI18n } from "@/lib/i18n/locale.server";
+import { prototypeMock } from "@/lib/i18n/prototype-mock";
+import { prototypePages } from "@/lib/i18n/prototype-pages";
 
 type WorkflowLifecycleProps = {
   compact?: boolean;
 };
 
-export function WorkflowLifecycle({ compact = false }: WorkflowLifecycleProps) {
+export async function WorkflowLifecycle({ compact = false }: WorkflowLifecycleProps) {
+  const { locale } = await getI18n();
+  const c = prototypePages[locale].workflows;
+  const { workflowLifecycleSteps } = prototypeMock[locale];
   return (
     <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-4">
       <div className="flex items-center justify-between gap-3">
         <div>
           <h2 className="text-sm font-semibold text-slate-100">
-            Workflow lifecycle
+            {c.lifecycleTitle}
           </h2>
           {!compact && (
             <p className="mt-1 text-sm leading-6 text-slate-400">
-              Mocked execution path for MVP workflows. External action remains
-              manual or locked after approval.
+              {c.lifecycleBody}
             </p>
           )}
         </div>
-        <StatusBadge tone="info">mocked</StatusBadge>
+        <StatusBadge tone="info">{c.mocked}</StatusBadge>
       </div>
       <div className="mt-4 grid gap-2 md:grid-cols-3 xl:grid-cols-6">
         {workflowLifecycleSteps.map((step, index) => (

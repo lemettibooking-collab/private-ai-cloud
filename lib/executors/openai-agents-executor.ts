@@ -1,0 +1,229 @@
+import type { NormalizedExecutorInvocation, NormalizedExecutorResult, ExecutorResultInput } from "../contracts/executor-adapter";
+import type { ExecutorTarget, ExecutorExposureSnapshot } from "./executor-start-boundary";
+import type { ExecutorProviderIdentityObserver } from "./executor-provider-identity";
+// @ts-expect-error Node direct TypeScript requires the runtime extension.
+import { providerObservation } from "./executor-provider-identity.ts";
+// @ts-expect-error Node direct TypeScript requires the runtime extension.
+import { createOpenAIAgentsCanonicalRequest } from "./openai-agents-request.ts";
+export { createOpenAIAgentsCanonicalRequest };
+// @ts-expect-error Node direct TypeScript requires the runtime extension.
+import { capturedMethod } from "../db/executor-start-transaction.ts";
+// @ts-expect-error Node direct TypeScript requires the runtime extension.
+import { createExecutorStartBoundary, isExecutorTestStart, consumeExecutorStartTicket, observeExecutorUsage, normalizeExecutorTarget } from "./executor-start-boundary.ts";
+// @ts-expect-error Node direct TypeScript requires the runtime extension.
+import { boundedData, exactRecord, freezeDeep, HandoffBlocked } from "../local-handoff/local-handoff-policy.ts";
+// @ts-expect-error Node direct TypeScript requires the runtime extension.
+import { openAIAgentsFinalText, openAIAgentsProposal } from "./openai-agents-result.ts";
+
+type Boundary = ReturnType<typeof createExecutorStartBoundary>;
+type Settings = Readonly<{ modelId: string; accountId: string; timeoutMs: number; credential(): string; workspaceIdentity?: string }>;
+export type ExecutorFetch = (url: string, init: Readonly<{ method: "POST"; headers: Readonly<Record<string, string>>;
+  body: string; redirect: "error"; signal: AbortSignal }>) => Promise<Response>;
+export type ExecutorTransportDecision = Readonly<{ verdict: "allow" | "deny"; reason: string | null;
+  normalizedResult: NormalizedExecutorResult | null; reconciliation: ExecutorExposureSnapshot | null }>;
+const limits = Object.freeze({ responseBytes: 262144, events: 64, chunks: 4096, timeoutMs: 30000 });
+class InvalidResponse extends Error { constructor() { super("invalid_executor_response"); } }
+function invalid(): never { throw new InvalidResponse(); }
+function record(input: unknown, allowed: readonly string[], required: readonly string[] = allowed): Record<string, unknown> {
+  if (!input || typeof input !== "object" || Array.isArray(input)) invalid();
+  const r = input as Record<string, unknown>;
+  if (Object.keys(r).some(key => !allowed.includes(key)) || required.some(key => !Object.hasOwn(r, key))) invalid(); return r;
+}
+function identifier(v: unknown): string { if (typeof v !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/u.test(v)) invalid(); return v; }
+function usage(input: unknown): unknown {
+  if (input === null || input === undefined) return null;
+  // The financial boundary validates counts/arithmetic. Telemetry never establishes cost or releases a reservation.
+  try {
+    const u = record(input, ["input_tokens", "output_tokens", "total_tokens", "input_tokens_details", "output_tokens_details"], ["input_tokens", "output_tokens", "total_tokens"]);
+    if (u.input_tokens_details !== undefined) {
+      const details = record(u.input_tokens_details, ["cached_tokens"]);
+      if (!Number.isSafeInteger(details.cached_tokens) || (details.cached_tokens as number) < 0 || (details.cached_tokens as number) > (u.input_tokens as number)) invalid();
+    }
+    if (u.output_tokens_details !== undefined) {
+      const details = record(u.output_tokens_details, ["reasoning_tokens"]);
+      if (!Number.isSafeInteger(details.reasoning_tokens) || (details.reasoning_tokens as number) < 0 || (details.reasoning_tokens as number) > (u.output_tokens as number)) invalid();
+    }
+    return { inputTokens: u.input_tokens, outputTokens: u.output_tokens, totalTokens: u.total_tokens };
+  } catch { return { invalidUsage: true }; }
+}
+function failure(i: NormalizedExecutorInvocation, status: "rejected" | "failed" | "outcome_unknown", budgetExceeded = false): ExecutorResultInput {
+  return { schemaVersion: 1, identity: i.identity, invocationId: i.invocationId, status,
+    failureCode: status === "outcome_unknown" ? "ambiguous_outcome" : status === "rejected" ? "policy_rejected" : budgetExceeded ? "provider_failure" : "timeout", changes: [], report: null };
+}
+/** Bounded supported SSE subset, not a copy of the SDK schema or a PAC-owned agent loop. */
+async function readTurn(response: Response, target: ExecutorTarget, credential: string, signal: AbortSignal, spendLimitCents: number,
+  observer: ExecutorProviderIdentityObserver | null, correlationFingerprint: string): Promise<{
+  terminal: "completed" | "failed" | null; answer: string | null; observedUsage: unknown; budgetExceeded: boolean;
+}> {
+  if (!response.headers.get("content-type")?.startsWith("text/event-stream") || !response.body) invalid();
+  const reader = response.body.getReader(), decoder = new TextDecoder("utf-8", { fatal: true });
+  const cancelReader = () => { void reader.cancel().catch(() => {}); };
+  signal.addEventListener("abort", cancelReader, { once: true });
+  let bytes = 0, chunks = 0, buffer = "", sessionId = "", turnId = "", answer: string | null = null;
+  let terminal: "completed" | "failed" | null = null, observedUsage: unknown = null, budgetExceeded = false;
+  const ids = new Set<string>();
+  let observedSession = false, observedTurn = false;
+  const acknowledge = async () => {
+    if (!observer || !sessionId) return;
+    const observation = providerObservation(sessionId, observedSession ? turnId || null : null);
+    if (!observation || signal.aborted || !await observer.observe(observation) || signal.aborted) invalid();
+    if (!observedSession) observedSession = true; else if (turnId) observedTurn = true;
+  };
+  const handle = async (input: unknown): Promise<void> => {
+    const e = input as Record<string, unknown>; if (!e || typeof e !== "object" || Array.isArray(e)) invalid();
+    const eventId = identifier(e.event_id); if (ids.has(eventId) || ids.size >= limits.events) invalid(); ids.add(eventId);
+    if (terminal) invalid();
+    if (e.type === "agent.session.created") {
+      record(e, ["type", "event_id", "session"]); if (sessionId) invalid();
+      const s = record(e.session, ["id", "object", "agent", "environment", "error", "status", "required_actions", "vault_ids", "usage", "created_at", "last_active_at", "metadata", "spend_control"],
+        ["id", "object", "agent", "environment", "error", "status", "required_actions", "vault_ids", "spend_control"]);
+      const spend = exactRecord(s.spend_control, ["limit", "consumed"]);
+      if (!Number.isSafeInteger(spend.limit) || spend.limit !== spendLimitCents
+        || !(spend.consumed === null || (Number.isSafeInteger(spend.consumed) && (spend.consumed as number) >= 0))) invalid();
+      const a = record(s.agent, ["id", "model", "instructions", "multi_agent", "tools", "name", "reasoning", "service_tier", "text"], ["model", "multi_agent", "tools"]);
+      const multi = record(a.multi_agent, ["enabled", "max_concurrent_subagents"], ["enabled"]);
+      const env = exactRecord(s.environment, ["type"]);
+      if (s.object !== "agent.session" || s.error !== null || !["idle", "in_progress"].includes(s.status as string) || env.type !== "none"
+        || a.model !== target.modelId || multi.enabled !== false || !Array.isArray(a.tools) || a.tools.length !== 1
+        || !Array.isArray(s.required_actions) || s.required_actions.length || !Array.isArray(s.vault_ids) || s.vault_ids.length) invalid();
+      const tool = exactRecord(a.tools[0], ["type", "enabled"]); if (tool.type !== "programmatic_tool_calling" || tool.enabled !== false) invalid();
+      if (observer && exactRecord(s.metadata, ["pac_execution"]).pac_execution !== correlationFingerprint) invalid();
+      sessionId = identifier(s.id); await acknowledge(); return;
+    }
+    if (!sessionId || e.session_id !== sessionId) invalid();
+    const currentTurn = identifier(e.turn_id); if (turnId && turnId !== currentTurn) invalid(); turnId = currentTurn;
+    if (!observedTurn) await acknowledge();
+    if (e.type === "agent.session.turn.item.done") {
+      record(e, ["type", "event_id", "session_id", "turn_id", "output_index", "item"]);
+      if (!Number.isSafeInteger(e.output_index) || (e.output_index as number) < 0 || (e.output_index as number) > 63) invalid();
+      const text = openAIAgentsFinalText(e.item, turnId);
+      if (text !== null) { if (answer !== null) invalid(); answer = text; } return;
+    }
+    if (e.type === "agent.session.turn.completed" || e.type === "agent.session.turn.failed" || e.type === "agent.session.turn.cancelled") {
+      record(e, ["type", "event_id", "session_id", "turn_id", "turn", "usage"], ["type", "event_id", "session_id", "turn_id", "turn"]);
+      const t = record(e.turn, ["id", "agent_id", "object", "session_id", "subagent_id", "status", "error", "usage", "created_at", "started_at", "completed_at"],
+        ["id", "object", "session_id", "subagent_id", "status", "error"]);
+      if (t.id !== turnId || t.session_id !== sessionId || t.object !== "agent.session.turn" || t.subagent_id !== null) invalid();
+      const completed = e.type === "agent.session.turn.completed";
+      if (t.status !== (completed ? "completed" : e.type.endsWith("cancelled") ? "cancelled" : "failed") || (completed && t.error !== null)) invalid();
+      if (e.type === "agent.session.turn.failed" && t.error !== null) {
+        const error = exactRecord(t.error, ["code", "message"]);
+        identifier(error.code); if (typeof error.message !== "string") invalid();
+        // Documented terminal category only; the untrusted message is never projected or used for settlement.
+        budgetExceeded = error.code === "session_budget_exceeded";
+      }
+      terminal = completed ? "completed" : "failed"; observedUsage = usage(t.usage); return;
+    }
+    // Progress is bounded and ignored, but unknown event types or fields never become success.
+    const progress: Record<string, readonly string[]> = {
+      "agent.session.turn.created": ["type", "event_id", "session_id", "turn_id", "turn"],
+      "agent.session.turn.in_progress": ["type", "event_id", "session_id", "turn_id", "turn"],
+      "agent.session.turn.item.added": ["type", "event_id", "session_id", "turn_id", "output_index", "item"],
+      "agent.session.turn.output_text.delta": ["type", "event_id", "session_id", "turn_id", "item_id", "output_index", "content_index", "delta"],
+      "agent.session.turn.output_text.done": ["type", "event_id", "session_id", "turn_id", "item_id", "output_index", "content_index", "text"],
+      "agent.session.turn.content_part.added": ["type", "event_id", "session_id", "turn_id", "item_id", "output_index", "content_index", "part"],
+      "agent.session.turn.content_part.done": ["type", "event_id", "session_id", "turn_id", "item_id", "output_index", "content_index", "part"],
+    };
+    const fields = progress[e.type as string]; if (!fields) invalid(); record(e, fields);
+    if (e.item && !["message", "reasoning"].includes((e.item as Record<string, unknown>).type as string)) invalid();
+  };
+  try {
+    while (!terminal) {
+      if (signal.aborted) throw Error("executor_aborted");
+      const chunk = await reader.read(); if (chunk.done) return { terminal: null, answer: null, observedUsage: null, budgetExceeded: false };
+      bytes += chunk.value.byteLength; if (bytes > limits.responseBytes || ++chunks > limits.chunks) invalid();
+      buffer += decoder.decode(chunk.value, { stream: true }); buffer = buffer.replace(/\r\n/gu, "\n");
+      let end: number;
+      while ((end = buffer.indexOf("\n\n")) >= 0) {
+        const frame = buffer.slice(0, end); buffer = buffer.slice(end + 2);
+        const lines = frame.split("\n"), data: string[] = [];
+        for (const line of lines) {
+          if (!line || line.startsWith(":")) continue;
+          if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
+          else if (!line.startsWith("event:") && !line.startsWith("id:")) invalid();
+        }
+        if (!data.length) continue; const text = data.join("\n"); if (text.includes(credential)) invalid();
+        await handle(boundedData(JSON.parse(text)));
+      }
+    }
+    if (buffer.trim()) invalid();
+    return { terminal, answer, observedUsage, budgetExceeded };
+  } finally { signal.removeEventListener("abort", cancelReader); cancelReader(); }
+}
+
+function build(boundary: Boundary, settings: Settings, fakeFetch: ExecutorFetch | null,
+  observer: ExecutorProviderIdentityObserver | null = null) {
+  const target = normalizeExecutorTarget({ providerId: "openai", modelId: settings.modelId, accountId: settings.accountId });
+  if (!Number.isSafeInteger(settings.timeoutMs) || settings.timeoutMs < 1 || settings.timeoutMs > limits.timeoutMs || typeof settings.credential !== "function") throw Error("invalid_executor_transport_configuration");
+  const timeoutMs = settings.timeoutMs, credentialProvider = settings.credential, workspaceIdentity = settings.workspaceIdentity ?? "test-only";
+  const deny = (reason: string, reconciliation: ExecutorExposureSnapshot | null = null): ExecutorTransportDecision => freezeDeep({ verdict: "deny", reason, normalizedResult: null, reconciliation });
+  const prepare = (input: unknown, contextInput: unknown, reservation: unknown) => {
+    try {
+      if (!boundary.isValidatedInvocation(input)) invalid(); const i = input;
+      const financial = boundary.budgetAuthority.forPreparation(reservation, i, target); if (!financial) invalid();
+      // 1 USD cent = 10,000 USD micros. Preserve full local exposure; NEVER round provider authority up.
+      const { body, requestFingerprint, correlationFingerprint, spendLimitCents } = createOpenAIAgentsCanonicalRequest(i, contextInput, target, financial.maximumExposureUsdMicros, workspaceIdentity);
+      if (!boundary.budgetAuthority.bindRequest(reservation, i, target, requestFingerprint)) invalid();
+      const invoke = async (ticket: unknown, abortSignal?: AbortSignal): Promise<ExecutorTransportDecision> => {
+        // Immutable production lock: no environment variable, credential, timeout or caller flag opens it.
+        if (fakeFetch === null) return deny("durable_executor_fence_required");
+        if (!boundary.budgetAuthority.isStartReservation(ticket, reservation) || !isExecutorTestStart(ticket, i, target, requestFingerprint)) return deny("executor_start_blocked");
+        let transmitted = false, timer: ReturnType<typeof setTimeout> | undefined;
+        const controller = new AbortController();
+        const aborted = () => controller.abort(); abortSignal?.addEventListener("abort", aborted, { once: true });
+        const evaluated = (result: ExecutorResultInput, observed: unknown, ambiguous: boolean): ExecutorTransportDecision => {
+          const d = boundary.contract.evaluateResult(i, result), reconciliation = observeExecutorUsage(ticket, observed, ambiguous || d.verdict !== "allow");
+          return d.verdict === "allow" ? freezeDeep({ verdict: "allow", reason: null, normalizedResult: d.normalizedResult, reconciliation }) : deny("executor_result_denied", reconciliation);
+        };
+        try {
+          if (abortSignal?.aborted) return evaluated(failure(i, "failed"), null, false);
+          if (observer && !await observer.beforeTransmission(requestFingerprint)) return deny("provider_identity_unavailable");
+          if (abortSignal?.aborted) return deny("executor_start_blocked");
+          const key = credentialProvider();
+          if (typeof key !== "string" || !/^[a-zA-Z0-9_-]{16,512}$/u.test(key) || body.includes(key)) return deny("executor_credential_unavailable");
+          if (!consumeExecutorStartTicket(ticket, i, target, requestFingerprint, "test")) return deny("executor_start_blocked");
+          const stopped = new Promise<never>((_resolve, reject) => {
+            controller.signal.addEventListener("abort", () => reject(Error("executor_stopped")), { once: true });
+            timer = setTimeout(() => controller.abort(), timeoutMs);
+          });
+          const work = async () => {
+            transmitted = true;
+            const response = await fakeFetch("https://api.openai.com/v1/agents/sessions", { method: "POST", redirect: "error", signal: controller.signal,
+              headers: { "Content-Type": "application/json", Accept: "text/event-stream", "OpenAI-Beta": "agents=v1", Authorization: `Bearer ${key}` }, body });
+            if (controller.signal.aborted) { void response.body?.cancel().catch(() => {}); throw Error("executor_stopped"); }
+            if (!response.ok) { void response.body?.cancel().catch(() => {}); return evaluated(failure(i, [400, 401, 403].includes(response.status) ? "rejected" : "outcome_unknown"), null, ![400, 401, 403].includes(response.status)); }
+            const turn = await readTurn(response, target, key, controller.signal, spendLimitCents, observer, correlationFingerprint);
+            if (controller.signal.aborted) throw Error("executor_stopped");
+            if (turn.budgetExceeded) return evaluated(failure(i, "failed", true), turn.observedUsage, true);
+            if (turn.terminal !== "completed") return evaluated(failure(i, "outcome_unknown"), turn.observedUsage, true);
+            if (turn.answer === null) invalid(); return evaluated(openAIAgentsProposal(JSON.parse(turn.answer), i), turn.observedUsage, false);
+          };
+          return await Promise.race([work(), stopped]);
+        } catch (error) {
+          if (transmitted && observer) { try { await observer.uncertain(); } catch { /* retained hold; never redispatch */ } }
+          const reconciliation = observeExecutorUsage(ticket, null, transmitted);
+          if (observer) return deny("provider_identity_or_response_unavailable", reconciliation);
+          if (error instanceof InvalidResponse || error instanceof SyntaxError || error instanceof HandoffBlocked) return deny("invalid_executor_response", reconciliation);
+          return evaluated(failure(i, transmitted ? "outcome_unknown" : "failed"), null, transmitted);
+        } finally { if (timer !== undefined) clearTimeout(timer); controller.abort(); abortSignal?.removeEventListener("abort", aborted); }
+      };
+      return Object.freeze({ verdict: "allow" as const, prepared: Object.freeze({ target, requestFingerprint, invoke }) });
+    } catch { return Object.freeze({ verdict: "deny" as const, prepared: null }); }
+  };
+  return Object.freeze({ prepare, realDispatch: "blocked" as const });
+}
+/** Concrete production entry. Deliberately no fetch/enable flag: durable financial authority is not implemented. */
+export function createOpenAIAgentsTransport(boundary: Boundary, settings: Settings) { return build(boundary, settings, null); }
+/** Trusted TEST HARNESS ONLY. Inject in-process fake transport; never pass fetch, SDK or a network wrapper here. */
+export function createOpenAIAgentsTestTransport(boundary: Boundary, settings: Settings, fakeFetch: ExecutorFetch) { return build(boundary, settings, fakeFetch); }
+/** TEST ONLY identity-observer seam; no real fetch or production unlocking. Invalid ports
+ * fail before credential access. Existing legacy ticket is still test evidence only. */
+export function createOpenAIAgentsIdentityTestTransport(boundary: Boundary, settings: Settings, fakeFetch: ExecutorFetch, port: unknown) {
+  const before = capturedMethod(port, "beforeTransmission"), observe = capturedMethod(port, "observe"), uncertain = capturedMethod(port, "uncertain");
+  if (!before || !observe || !uncertain) throw Error("invalid_executor_identity_observer");
+  return build(boundary, settings, fakeFetch, Object.freeze({
+    beforeTransmission: async fp => await Reflect.apply(before, undefined, [fp]) === true,
+    observe: async value => await Reflect.apply(observe, undefined, [value]) === true,
+    uncertain: async () => { await Reflect.apply(uncertain, undefined, []); },
+  }));
+}

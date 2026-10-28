@@ -3,30 +3,31 @@ import { AppShell } from "@/components/shell/app-shell";
 import { PageHeader } from "@/components/ui/page-header";
 import { SectionCard } from "@/components/ui/section-card";
 import { StatusBadge } from "@/components/ui/status-badge";
-import { reports, roadmapItems, weeklyOwnerReportSummary } from "@/lib/mock-data";
+import { format } from "@/lib/i18n/locale";
+import { getI18n } from "@/lib/i18n/locale.server";
+import { prototypeContent } from "@/lib/i18n/prototype-content";
+import { prototypeMock } from "@/lib/i18n/prototype-mock";
+import { prototypePages } from "@/lib/i18n/prototype-pages";
 
-export default function ReportsPage() {
+export default async function ReportsPage() {
+  const { locale } = await getI18n();
+  const c = prototypePages[locale].reports;
+  const { reports, weeklyOwnerReportSummary, labels } = prototypeMock[locale];
+  const roadmapItems = prototypeContent[locale].roadmap.items;
   return (
     <AppShell>
       <PageHeader
-        description="Generated operational summaries for owner, support, product, content, QA/dev, and usage visibility."
-        eyebrow="Reports"
-        title="Operational reports"
+        description={c.description}
+        eyebrow={c.eyebrow}
+        title={c.title}
       />
 
       <SectionCard
-        description="Executive analytics should turn activity into decisions, blockers, and recommendations for the Owner."
-        title="Owner report structure"
+        description={c.structureDescription}
+        title={c.structureTitle}
       >
         <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
-          {[
-            "Blockers",
-            "Recommendations",
-            "Owner Decision Points",
-            "System Usage Summary",
-            "Weekly Owner Report",
-            "Daily Report planned",
-          ].map((section, index) => (
+          {c.structure.map((section, index) => (
             <div
               className="rounded-lg border border-slate-800 bg-slate-900/50 p-3"
               key={section}
@@ -41,7 +42,7 @@ export default function ReportsPage() {
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(360px,0.8fr)]">
         <SectionCard
-          action={<StatusBadge tone="success">Current MVP</StatusBadge>}
+          action={<StatusBadge tone="success">{c.currentMvp}</StatusBadge>}
           description={weeklyOwnerReportSummary.subtitle}
           title={weeklyOwnerReportSummary.title}
         >
@@ -83,19 +84,18 @@ export default function ReportsPage() {
         </SectionCard>
 
         <SectionCard
-          action={<StatusBadge tone="success">current: v0.1</StatusBadge>}
-          title="Roadmap & Owner Planning"
+          action={<StatusBadge tone="success">{c.currentBadge}</StatusBadge>}
+          title={c.planningTitle}
         >
           <p className="text-sm leading-6 text-slate-300">
-            {roadmapItems[0].title} is the active scope. v0.2 and later are
-            visible in the roadmap as planned/future product direction.
+            {format(c.planningBody, { scope: roadmapItems[0].title })}
           </p>
           <div className="mt-4">
             <Link
               className="inline-flex h-9 items-center justify-center rounded-md border border-slate-600/80 bg-slate-900/80 px-3 text-sm font-medium text-slate-200 transition hover:bg-slate-800"
               href="/roadmap"
             >
-              Open Roadmap
+              {c.openRoadmap}
             </Link>
           </div>
         </SectionCard>
@@ -113,7 +113,7 @@ export default function ReportsPage() {
                   {report.title}
                 </h2>
               </div>
-              <StatusBadge tone="info">{report.status}</StatusBadge>
+              <StatusBadge tone="info">{labels.reportStatus[report.status] ?? report.status}</StatusBadge>
             </div>
             <p className="mt-4 text-sm leading-6 text-slate-400">
               {report.summary}
