@@ -240,6 +240,99 @@ test("A-4 malformed bounded JSON and unknown error/scope strings cannot enter ex
   assert.equal(transport.calls.length, 2);
 });
 
+// AI-044.3: synthetic responses only. Detail prose is NOT a stable provider code;
+// only exact allowlisted machine tokens can produce a more specific classification.
+const forbiddenDiagnosticCases = [
+  { name: "OAuth structured", json: { error: "invalid_client", error_description: SECRET("DESCRIPTION") }, shape: "oauth_error", responseClass: "invalid_client", providerErrorCode: null, detailClass: "absent" },
+  { name: "OAuth grant error", json: { error: "invalid_grant", error_description: SECRET("DESCRIPTION") }, shape: "oauth_error", responseClass: "known_oauth_error", providerErrorCode: null, detailClass: "absent" },
+  { name: "provider structured", json: { error: { code: "chatpass_v2_invalid_authorization_context", message: SECRET("MESSAGE"), param: SECRET("PARAM") } }, shape: "provider_error", responseClass: "authorization_context_denied", providerErrorCode: "chatpass_v2_invalid_authorization_context", detailClass: "absent" },
+  { name: "detail machine token", json: { detail: "chatpass_v2_scope_not_authorized" }, shape: "detail_string", responseClass: "authorization_context_denied", providerErrorCode: "chatpass_v2_scope_not_authorized", detailClass: "authorization_context_denied" },
+  { name: "detail object", json: { detail: { code: "subscription_sharing_user_not_eligible", message: SECRET("MESSAGE") } }, shape: "detail_object", responseClass: "provider_policy_denied", providerErrorCode: "subscription_sharing_user_not_eligible", detailClass: "provider_policy_denied" },
+  { name: "route policy code", json: { error: { code: "subscription_sharing_route_not_supported", message: SECRET("MESSAGE") } }, shape: "provider_error", responseClass: "provider_policy_denied", providerErrorCode: "subscription_sharing_route_not_supported", detailClass: "absent" },
+  { name: "detail OAuth token", json: { detail: "invalid_client" }, shape: "detail_string", responseClass: "invalid_client", providerErrorCode: null, detailClass: "invalid_client" },
+  { name: "unknown textual detail", json: { detail: `Policy denied ${SECRET("DETAIL")} owner@example.test` }, shape: "detail_string", responseClass: "unclassified_forbidden", providerErrorCode: null, detailClass: "unclassified_detail" },
+  { name: "unknown JSON body", json: { message: SECRET("MESSAGE"), code: SECRET("CODE") }, shape: "json_object", responseClass: "unclassified_forbidden", providerErrorCode: null, detailClass: "absent" },
+  { name: "HTML/non-JSON", raw: `<html>${SECRET("RAW_BODY")}</html>`, shape: "non_json", responseClass: "unclassified_forbidden", providerErrorCode: null, detailClass: "absent" },
+  { name: "array", json: [{ error: "invalid_client" }], shape: "json_array", responseClass: "unclassified_forbidden", providerErrorCode: null, detailClass: "absent" },
+  { name: "scalar", json: "invalid_client", shape: "json_scalar", responseClass: "unclassified_forbidden", providerErrorCode: null, detailClass: "absent" },
+  { name: "mixed ambiguous shapes", json: { error: "invalid_client", detail: "subscription_sharing_user_not_eligible" }, shape: "mixed_error", responseClass: "unclassified_forbidden", providerErrorCode: null, detailClass: "unclassified_detail" },
+] as const;
+for (const fixture of forbiddenDiagnosticCases) test(`AI-044.3 safe 403 diagnostic: ${fixture.name}`, async () => {
+  const transport = fakeFetch({ [oauth.chatgptOAuth.tokenEndpoint]: () => ({ status: 403,
+    ...("raw" in fixture ? { raw: fixture.raw } : { json: fixture.json }), headers: { "x-request-id": SECRET("HEADER"),
+      "Content-Type": "raw" in fixture ? "text/html" : "application/json", "set-cookie": SECRET("COOKIE") } }) });
+  const input = { clientId: ISSUED, code: SECRET("CODE"), codeVerifier: SECRET("VERIFIER"), redirectUri: oauth.redirectUriFor(PORT) }, before = structuredClone(input);
+  const result: any = await oauth.exchangeAuthorizationCode(transport.fetch, input);
+  assert.equal(result.ok, false); assert.equal(result.diagnostic.resultClass, "http_error"); assert.equal(result.diagnostic.httpStatus, 403);
+  assert.equal(result.diagnostic.requestIdPresent, true); assert.equal(result.diagnostic.schema, null);
+  assert.deepEqual(result.diagnostic.errorResponse, { shape: fixture.shape, responseClass: fixture.responseClass,
+    providerErrorCode: fixture.providerErrorCode, detailClass: fixture.detailClass });
+  assert.ok(Object.isFrozen(result.diagnostic.errorResponse));
+  assert.deepEqual(Object.keys(result.diagnostic).sort(), ["errorResponse", "httpStatus", "oauthError", "requestIdPresent", "resultClass", "schema"]);
+  const serialized = JSON.stringify(result.diagnostic); assert.ok(!/FAKE_CHATGPT_|owner@example.test|oaiapp_/u.test(serialized));
+  assert.deepEqual(input, before); assert.equal(transport.calls.length, 1, "one exchange, never a retry or fallback");
+  assert.deepEqual(transport.calls[0], { url: oauth.chatgptOAuth.tokenEndpoint, method: "POST", authorization: null,
+    form: { grant_type: "authorization_code", client_id: ISSUED, code: input.code, code_verifier: input.codeVerifier, redirect_uri: input.redirectUri, resource: oauth.chatgptOAuth.resource } });
+});
+
+test("AI-044.3 actual final server event includes only the safe projection; callback/UI and failure semantics unchanged", async () => {
+  for (const fixture of forbiddenDiagnosticCases) {
+    const context = await setup({ routes: { [oauth.chatgptOAuth.tokenEndpoint]: () => ({ status: 403,
+      ...("raw" in fixture ? { raw: fixture.raw } : { json: fixture.json }) }) } });
+    try {
+      const { state } = await startAndGetState(context), server = diagnosticServer(context);
+      const result = await server.complete(callback({ code: SECRET("CODE"), state, client_id: ISSUED }));
+      assert.deepEqual(Object.keys(result).sort(), ["outcome", "returnOrigin"]); assert.equal(result.outcome, "denied");
+      assert.equal(server.logs.length, 1); const event: any = server.logs[0][1];
+      assert.equal(event.stage, "token_exchange"); assert.equal(event.exchange.errorResponse.responseClass, fixture.responseClass);
+      assert.equal(event.exchange.requestIdPresent, false); assert.equal(context.transport.calls.length, 1);
+      assert.equal((await context.store.readRegistrations()).registrations.length, 0);
+      assert.ok(!/FAKE_CHATGPT_|oaiapp_|owner@example.test/u.test(JSON.stringify(server.logs)));
+    } finally { await fs.rm(context.directory, { recursive: true, force: true }); }
+  }
+});
+
+test("AI-044.3 secret-looking, oversized and near-match values cannot be echoed or classified as known codes", async () => {
+  const secrets = Object.fromEntries(["code", "state", "client_id", "code_verifier", "access_token", "refresh_token", "id_token", "email", "sub", "headers"].map(k => [k, SECRET(k)]));
+  for (const value of [SECRET("DETAIL"), "invalid_client " + SECRET("DETAIL"), "INVALID_CLIENT", "invalid_client\n", "subscription_sharing_user_not_eligible_extra",
+    "x".repeat(129), { code: SECRET("CODE"), error: "invalid_client" }, ["invalid_client"], null, 1, true]) {
+    const transport = fakeFetch({ [oauth.chatgptOAuth.tokenEndpoint]: () => ({ status: 403, json: { ...secrets, detail: value }, headers: { "x-request-id": SECRET("HEADER") } }) });
+    const result: any = await oauth.exchangeAuthorizationCode(transport.fetch, { clientId: ISSUED, code: SECRET("CODE"), codeVerifier: SECRET("VERIFIER"), redirectUri: oauth.redirectUriFor(PORT) });
+    assert.equal(result.diagnostic.errorResponse.responseClass, "unclassified_forbidden"); assert.equal(result.diagnostic.errorResponse.providerErrorCode, null);
+    assert.ok(!/FAKE_CHATGPT_|oaiapp_/u.test(JSON.stringify(result.diagnostic)));
+  }
+  const transport = fakeFetch({ [oauth.chatgptOAuth.tokenEndpoint]: () => ({ status: 403, raw: JSON.stringify({ detail: "x".repeat(oauth.chatgptOAuth.maxResponseBytes) }) }) });
+  const result: any = await oauth.exchangeAuthorizationCode(transport.fetch, { clientId: ISSUED, code: SECRET("CODE"), codeVerifier: SECRET("VERIFIER"), redirectUri: oauth.redirectUriFor(PORT) });
+  assert.deepEqual(result.diagnostic.errorResponse, { shape: "non_json", responseClass: "unclassified_forbidden", providerErrorCode: null, detailClass: "absent" });
+});
+
+test("AI-044.3 success tokens unchanged; error projection is non-200 only and repeat evaluation is fresh/deterministic", async () => {
+  const body = await tokenResponse(), input = { clientId: ISSUED, code: SECRET("CODE"), codeVerifier: SECRET("VERIFIER"), redirectUri: oauth.redirectUriFor(PORT) };
+  const success = fakeFetch({ [oauth.chatgptOAuth.tokenEndpoint]: () => ({ status: 200, json: body }) });
+  const allowed: any = await oauth.exchangeAuthorizationCode(success.fetch, input);
+  assert.equal(allowed.ok, true); assert.deepEqual(allowed.tokens, oauth.parseTokenResponse(body)); assert.equal(allowed.diagnostic.errorResponse, null);
+  assert.equal(allowed.diagnostic.resultClass, "success"); assert.equal(success.calls.length, 1);
+  const transport = fakeFetch({ [oauth.chatgptOAuth.tokenEndpoint]: () => ({ status: 403, json: { detail: SECRET("DETAIL") } }) });
+  const first: any = await oauth.exchangeAuthorizationCode(transport.fetch, input), second: any = await oauth.exchangeAuthorizationCode(transport.fetch, input);
+  assert.deepEqual(first, second); assert.notEqual(first.diagnostic, second.diagnostic); assert.notEqual(first.diagnostic.errorResponse, second.diagnostic.errorResponse);
+  assert.ok(Object.isFrozen(first.diagnostic)); assert.ok(Object.isFrozen(first.diagnostic.errorResponse));
+});
+
+test("AI-044.3 non-403 and transport/schema failures retain existing outcomes; classification never controls recovery", async () => {
+  const input = { clientId: ISSUED, code: SECRET("CODE"), codeVerifier: SECRET("VERIFIER"), redirectUri: oauth.redirectUriFor(PORT) };
+  for (const [status, failure] of [[400, "reauthorization_required"], [401, "reauthorization_required"], [429, "invalid_response"], [503, "temporarily_unavailable"]] as const) {
+    const transport = fakeFetch({ [oauth.chatgptOAuth.tokenEndpoint]: () => ({ status, json: { detail: SECRET("DETAIL") } }) });
+    const result: any = await oauth.exchangeAuthorizationCode(transport.fetch, input);
+    assert.equal(result.ok, false); assert.equal(result.failure, failure); assert.equal(result.diagnostic.errorResponse.responseClass, "unclassified_error");
+    assert.equal(transport.calls.length, 1);
+  }
+  for (const response of ["network", { status: 200, raw: "not-json" }, { status: 200, json: { error: "invalid_client" } }] as const) {
+    const transport = fakeFetch({ [oauth.chatgptOAuth.tokenEndpoint]: () => response });
+    const result: any = await oauth.exchangeAuthorizationCode(transport.fetch, input);
+    assert.equal(result.ok, false); assert.equal(result.diagnostic.errorResponse, null); assert.equal(transport.calls.length, 1);
+  }
+});
+
 test("A-4 invalid_grant recovery audit: consumes code, never activates initial identity, but loses issued client id (separate documented recovery defect)", async () => {
   const context = await setup({ routes: { [oauth.chatgptOAuth.tokenEndpoint]: () => ({ status: 400, json: { error: "invalid_grant" } }) } });
   const { state } = await startAndGetState(context);

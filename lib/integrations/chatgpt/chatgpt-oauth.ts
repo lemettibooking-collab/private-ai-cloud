@@ -166,6 +166,19 @@ export type TokenEndpointFailure = "reauthorization_required" | "invalid_client"
 
 const diagnosticOAuthErrors = ["invalid_grant", "invalid_client", "invalid_request", "unauthorized_client", "unsupported_grant_type", "invalid_scope", "access_denied", "server_error", "temporarily_unavailable", "invalid_refresh_token", "token_expired", "refresh_token_expired", "refresh_token_invalidated", "refresh_token_reused"] as const;
 type DiagnosticOAuthError = typeof diagnosticOAuthErrors[number];
+// Diagnostic recognition only, NOT an eligibility assertion or a recovery rule.
+// Official errors-and-recovery (checked 2026-10-28) documents these Responses
+// codes; the token endpoint is NOT assumed to guarantee this schema or code set.
+const diagnosticProviderErrors = ["chatpass_v2_scope_not_authorized", "chatpass_v2_invalid_authorization_context",
+  "subscription_sharing_user_not_eligible", "subscription_sharing_route_not_supported"] as const;
+type DiagnosticErrorClass = "invalid_client" | "authorization_context_denied" | "provider_policy_denied" | "known_oauth_error";
+type TokenErrorResponseDiagnostic = Readonly<{
+  shape: "non_json" | "json_object" | "json_array" | "json_scalar" | "oauth_error" | "provider_error" | "error_other"
+    | "detail_string" | "detail_object" | "detail_other" | "mixed_error";
+  responseClass: DiagnosticErrorClass | "unclassified_forbidden" | "unclassified_error";
+  providerErrorCode: typeof diagnosticProviderErrors[number] | null;
+  detailClass: DiagnosticErrorClass | "absent" | "unclassified_detail";
+}>;
 type SchemaValueType = "missing" | "null" | "array" | "object" | "string" | "number" | "boolean";
 export type TokenResponseSchema = Readonly<{
   access_token_present: boolean; refresh_token_present: boolean; id_token_present: boolean;
@@ -179,6 +192,7 @@ export type TokenExchangeDiagnostic = Readonly<{
   requestIdPresent: boolean;
   oauthError: DiagnosticOAuthError | null;
   schema: TokenResponseSchema | null;
+  errorResponse: TokenErrorResponseDiagnostic | null;
 }>;
 
 function tokenResponseSchema(body: unknown): TokenResponseSchema {
@@ -218,6 +232,42 @@ async function boundedJson(response: Response): Promise<unknown> {
 
 const plainRecord = (input: unknown): input is Record<string, unknown> =>
   typeof input === "object" && input !== null && !Array.isArray(input) && Object.getPrototypeOf(input) === Object.prototype;
+
+/** Only exact bounded machine tokens map to constant outputs. No prose matching,
+ * substrings, case-folding, arbitrary keys, raw detail/message/headers or hashes.
+ * Called only on the existing size-bounded JSON.parse result; no recursive walk. */
+function diagnosticErrorCode(value: unknown): Readonly<{ responseClass: DiagnosticErrorClass; providerErrorCode: TokenErrorResponseDiagnostic["providerErrorCode"] }> | null {
+  if (typeof value !== "string" || value.length > 128) return null;
+  const providerErrorCode = diagnosticProviderErrors.find(code => code === value);
+  if (providerErrorCode) return {
+    providerErrorCode, responseClass: providerErrorCode === "chatpass_v2_scope_not_authorized" || providerErrorCode === "chatpass_v2_invalid_authorization_context"
+      ? "authorization_context_denied" : "provider_policy_denied",
+  };
+  const oauthError = diagnosticOAuthErrors.find(code => code === value);
+  return oauthError ? { providerErrorCode: null, responseClass: oauthError === "invalid_client" ? "invalid_client" : "known_oauth_error" } : null;
+}
+function tokenErrorResponseDiagnostic(result: Readonly<{ status: number; invalidJson: boolean; body: unknown }>): TokenErrorResponseDiagnostic {
+  const fallback = result.status === 403 ? "unclassified_forbidden" as const : "unclassified_error" as const;
+  const body = result.body, record = plainRecord(body) ? body : null;
+  const hasError = record !== null && Object.hasOwn(record, "error"), hasDetail = record !== null && Object.hasOwn(record, "detail");
+  let shape: TokenErrorResponseDiagnostic["shape"] = result.invalidJson ? "non_json" : Array.isArray(body) ? "json_array" : record ? "json_object" : "json_scalar";
+  let code: ReturnType<typeof diagnosticErrorCode> = null;
+  let detailClass: TokenErrorResponseDiagnostic["detailClass"] = "absent";
+  // Mixed envelopes cannot select an arbitrary winning cause. Existing OAuth
+  // failure/outcome precedence is unchanged; this projection grants nothing.
+  if (hasError && hasDetail) { shape = "mixed_error"; detailClass = "unclassified_detail"; }
+  else if (hasError) {
+    const error = record!.error;
+    shape = typeof error === "string" ? "oauth_error" : plainRecord(error) ? "provider_error" : "error_other";
+    code = diagnosticErrorCode(plainRecord(error) && Object.hasOwn(error, "code") ? error.code : error);
+  } else if (hasDetail) {
+    const detail = record!.detail;
+    shape = typeof detail === "string" ? "detail_string" : plainRecord(detail) ? "detail_object" : "detail_other";
+    code = diagnosticErrorCode(plainRecord(detail) && Object.hasOwn(detail, "code") ? detail.code : detail);
+    detailClass = code?.responseClass ?? "unclassified_detail";
+  }
+  return Object.freeze({ shape, responseClass: code?.responseClass ?? fallback, providerErrorCode: code?.providerErrorCode ?? null, detailClass });
+}
 const boundedToken = (input: unknown, max = 16_384): input is string => typeof input === "string" && input.length >= 1 && input.length <= max && callbackValuePattern.test(input.slice(0, 2048));
 
 export function parseTokenResponse(input: unknown): TokenSet | null {
@@ -285,6 +335,7 @@ Promise<Readonly<{ ok: true; tokens: TokenSet; diagnostic: TokenExchangeDiagnost
     resultClass: !result ? "network_error" : result.status !== 200 ? "http_error" : result.invalidJson ? "invalid_json" : !tokens ? "invalid_token_response" : "success",
     httpStatus: result?.status ?? null, requestIdPresent: result?.requestIdPresent ?? false, oauthError,
     schema: result?.status === 200 && !result.invalidJson && !tokens ? tokenResponseSchema(result.body) : null,
+    errorResponse: result && result.status !== 200 ? tokenErrorResponseDiagnostic(result) : null,
   });
   if (!result || result.status !== 200) return { ok: false, failure: classifyTokenError(result), diagnostic };
   return tokens ? { ok: true, tokens, diagnostic } : { ok: false, failure: "invalid_response", diagnostic };
