@@ -4,6 +4,14 @@
 
 Private AI Cloud is a **vendor-neutral AI Engineering Control Plane**. The canonical status lives in [`docs/ROADMAP.md`](docs/ROADMAP.md). This file is a short summary and does not override the roadmap.
 
+**Owner infrastructure sequencing decision (2026-11-07):** AI-045.0
+[VPS container foundation](docs/operations/vps-container-foundation.md) is pulled forward
+before completion of the AI-044 Smart Algorithms real proof. AI-045.0 is an IN REVIEW
+candidate; AI-045 becomes IN PROGRESS as infrastructure work after acceptance. AI-044
+remains IN PROGRESS. AI-052 remains PLANNED / BLOCKED after AI-051; hosting PAC on VPS
+does not authorize private/VPS coding execution. Public exposure/TLS remains later
+AI-045.1 work. `runtimeDispatchAllowed=false`; generic production/live dispatch BLOCKED.
+
 **AI-044.1 — DONE:** subscription executor foundation integrated at
 `c5658002aaf67a835e480e42f4ca0d1003b76af7`. **AI-044.2 — IN REVIEW:** narrow
 [local Owner proof runner](docs/operations/ai-044-owner-production-proof.md), separate
@@ -126,7 +134,8 @@ AI-044.1 is a PAC-only FeaturePlan-driven read/write authority correction, not
 feature implementation. A future approved plan selects its own SHA/read/write
 sets and acceptance; no old Portfolio context/smoke/zero-write gate is required.
 
-VPS is after AI-044 by default; earlier infrastructure needs separate Owner approval.
+VPS was after AI-044 by default; the 2026-11-07 explicit Owner decision above approves
+only early AI-045.0 infrastructure hosting, without advancing AI-052 coding execution.
 **AI-045 infrastructure containers ≠ AI-052 coding sandbox.** Containers for the
 control plane, orchestration workers, PostgreSQL-related services, reverse proxy,
 monitoring or infrastructure do not authorize a coding/executor containment runtime.

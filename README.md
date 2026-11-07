@@ -31,7 +31,7 @@ The canonical roadmap is [`docs/ROADMAP.md`](docs/ROADMAP.md). The documentation
 
 ## Local Prerequisites
 
-- Node.js 24.13.x (`.nvmrc` pins 24.13.1).
+- Node.js 24.22.x (`.nvmrc` pins 24.22.2).
 - npm 11.8.0, as declared by the `packageManager` contract.
 
 With `nvm`, activate the project runtime before installing dependencies:

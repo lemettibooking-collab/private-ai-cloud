@@ -8,6 +8,16 @@
 **Integrated checkpoint:** `4f64f5b5b519da855498d5d56131b94ee8601a26`\
 **Canonical source:** `docs/ROADMAP.md`
 
+**Owner-approved infrastructure sequencing exception (2026-11-07):** bring
+AI-045.0 [VPS container foundation](operations/vps-container-foundation.md) forward
+before completion of the AI-044 real Smart Algorithms feature proof. This is a narrow
+infrastructure exception to the default sequence, not an architecture rebase. AI-045.0
+is an IN REVIEW candidate; after acceptance AI-045 is IN PROGRESS for infrastructure
+deployment only. AI-044 remains IN PROGRESS, not DONE. AI-052 remains PLANNED / BLOCKED
+after AI-051. VPS hosting grants no VPS/private coding execution. Public web exposure,
+reverse proxy/domain/TLS stay in later AI-045.1 work. `runtimeDispatchAllowed=false`;
+generic production/live executor dispatch remains BLOCKED.
+
 **AI-044 operational update:** AI-044.1 subscription foundation is integrated at
 `c5658002aaf67a835e480e42f4ca0d1003b76af7`. AI-044.2 [local Owner production-proof
 runner](operations/ai-044-owner-production-proof.md) is an IN REVIEW candidate only:
@@ -1383,6 +1393,13 @@ principal proof that PAC works as an engineering system, not only as contracts.
 ## 15. M7 — Staging / Hardening
 
 ### AI-045 — Production-like Infrastructure — PLANNED
+
+AI-045.0 VPS Container Foundation is an IN REVIEW candidate under the explicit
+2026-11-07 Owner early-infrastructure exception recorded above. Acceptance starts
+AI-045 IN PROGRESS for hosting only: PAC + PostgreSQL 16, loopback access, explicit
+checksummed migration gate; no VPS mutation in implementation. Public reverse proxy/
+TLS is later AI-045.1. AI-044 remains IN PROGRESS; AI-052 remains PLANNED / BLOCKED.
+See [operator runbook](operations/vps-container-foundation.md).
 
 Canonical default: after the proven AI-044 Smart Algorithms engineering case.
 An earlier VPS/infrastructure step requires a separate explicit Owner-approved
