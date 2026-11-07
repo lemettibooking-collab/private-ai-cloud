@@ -39,6 +39,10 @@ import { normalizeSubscriptionIntent, subscriptionIntentFingerprint, subscriptio
 import { normalizeAI044SubscriptionContextManifest } from "../executors/ai044-subscription-context.ts";
 // @ts-expect-error Node direct TypeScript needs the runtime extension.
 import { readAI044SubscriptionOutcomeInTransaction } from "./ai044-subscription-approvals.ts";
+// @ts-expect-error Node direct TypeScript needs the runtime extension.
+import { normalizeOpenAIApiIntent, openAIApiIntentFingerprint, openAIApiExecutorIdentity } from "../executors/openai-api-intent.ts";
+// @ts-expect-error Node direct TypeScript needs the runtime extension.
+import { readOpenAIApiHistoricalOutcome } from "./openai-api-approvals.ts";
 
 export type ControllerApprovedPlan = Readonly<{ plan: FeaturePlan; planId: string; revision: number; draftFingerprint: string; executionFingerprint: string; approvalRequestId: string; approvalTaskVersion: number }>;
 export type ControllerDevelopmentRun = Readonly<{ run: DevelopmentExecutionRun; revision: number; fingerprint: string }>;
@@ -187,7 +191,8 @@ export function createDevelopmentControllerStore(raw:unknown){
     if(!proposed||roadmapFingerprint(proposed.plan)!==roadmapFingerprint(plan.plan)||proposed.taskId!==task.id||proposed.taskOwnerApprovalGranted!==true)throw new Conflict();
     const admission=evaluateDevelopmentTaskAdmission({...proposed,completedTaskIds:completed,activeTaskIds:active});if(admission.verdict!=="allow")throw new Conflict();
     const others=await client.query(`select r.run_snapshot,(exists(select 1 from executor_attempt_exposures e where e.workspace_id=r.workspace_id and e.development_run_id=r.development_run_id and e.state in ('start_committed','reconciliation_required'))
-      or exists(select 1 from ai044_subscription_approval_bindings s where s.workspace_id=r.workspace_id and s.development_run_id=r.development_run_id and s.state in ('consumed','started','outcome_unknown'))) as unresolved_started
+      or exists(select 1 from ai044_subscription_approval_bindings s where s.workspace_id=r.workspace_id and s.development_run_id=r.development_run_id and s.state in ('consumed','started','outcome_unknown'))
+      or exists(select 1 from ai044_api_approval_bindings s where s.workspace_id=r.workspace_id and s.development_run_id=r.development_run_id and s.state in ('consumed','started','outcome_unknown'))) as unresolved_started
       from controller_development_runs r where r.workspace_id=$1 and r.project_key=$2 and r.project_task_key<>$3 limit 257`,[tenant.workspaceDatabaseId,c.projectId,c.taskId]);if(others.rowCount>256)throw new Conflict();
     for(const row of others.rows){const other=normalizedRun(row.run_snapshot);if((row.unresolved_started===true||!["completed","cancelled","blocked"].includes(other.status))&&other.admittedAllowedPaths.some(a=>admission.normalizedAllowedPaths.some(b=>repositoryPathsOverlap(a,b))))throw new Conflict();}
     const creation={id:c.developmentRunId,planId:plan.planId,taskId:task.id,admissionDecision:admission,requiredVerificationCommands:task.verificationCommands,protectedPaths:[]};
@@ -199,6 +204,12 @@ export function createDevelopmentControllerStore(raw:unknown){
   async function durableOutcome(client:WorkflowRuntimeSqlClient,state:DevelopmentControllerState,run:DevelopmentExecutionRun){
     const intent=state.attempts.find(i=>i.developmentRunId===run.id&&i.attemptNumber===run.currentAttemptNumber);if(!intent)throw new Conflict();
     const subscriptionPolicy=exactOwnData(intent.executionPolicy,["profile","intent"]);
+    if(subscriptionPolicy?.profile==="ai044_openai_api"){
+      const approved=normalizeOpenAIApiIntent(subscriptionPolicy.intent);if(!approved)throw new Conflict();
+      const factual=await readOpenAIApiHistoricalOutcome(client,tenant,{projectId:state.task.projectId,projectTaskId:state.task.taskId,
+        configuration:intent.configuration,invocation:intent.invocation,intentFingerprint:openAIApiIntentFingerprint(approved)});
+      if(!factual)throw new Conflict();return Object.freeze({result:factual.normalizedResult,fingerprint:factual.resultFingerprint,intent});
+    }
     if(subscriptionPolicy?.profile==="ai044_subscription"){
       const approved=normalizeSubscriptionIntent(subscriptionPolicy.intent);if(!approved)throw new Conflict();
       const factual=await readAI044SubscriptionOutcomeInTransaction(client,tenant,{projectId:state.task.projectId,projectTaskId:state.task.taskId,
@@ -233,7 +244,8 @@ export function createDevelopmentControllerStore(raw:unknown){
     }else if(event.type==="start_attempt"){
       if(run.status==="awaiting_correction"){
         const unresolved=await client.query(`select development_run_id from executor_attempt_exposures where workspace_id=$1 and development_run_id=$2 and state in ('start_committed','reconciliation_required')
-          union all select development_run_id from ai044_subscription_approval_bindings where workspace_id=$1 and development_run_id=$2 and state in ('consumed','started','outcome_unknown') limit 1`,[tenant.workspaceDatabaseId,run.id]);if(unresolved.rowCount)throw new Conflict();
+          union all select development_run_id from ai044_subscription_approval_bindings where workspace_id=$1 and development_run_id=$2 and state in ('consumed','started','outcome_unknown')
+          union all select development_run_id from ai044_api_approval_bindings where workspace_id=$1 and development_run_id=$2 and state in ('consumed','started','outcome_unknown') limit 1`,[tenant.workspaceDatabaseId,run.id]);if(unresolved.rowCount)throw new Conflict();
       }
     }else if(event.type!=="cancel")throw new Conflict();
     const result=transitionDevelopmentExecutionRun(run,event);if(!result.ok)throw new Conflict();const next=captureRoadmapData(result.value) as DevelopmentExecutionRun;
@@ -257,11 +269,12 @@ export function createDevelopmentControllerStore(raw:unknown){
     const selection=decision&&exactOwnData(decision.selectedRoute,["routeId","executor","providerId","environment","accessMode"]);
     if(!r||!decision||!selection||decision.verdict!=="allow"||decision.dispatchAuthorized!==false||decision.runtimeDispatchAllowed!==false||!isRoadmapFingerprint(decision.routeFingerprint)
       ||roadmapFingerprint(selection.executor)!==roadmapFingerprint(config.identity)||!["openai","anthropic"].includes(selection.providerId as string)||r.taskClass!==deriveRoadmapTaskClass(state.task.taskType,run.currentAttemptNumber>1))throw new Conflict();
-    if(valid.identity.id===subscriptionExecutorIdentity.id){
+    if(valid.identity.id===subscriptionExecutorIdentity.id||valid.identity.id===openAIApiExecutorIdentity.id){
       // Narrow subscription proposal identity only; never invent a paid monetary policy or unlock dispatch.
-      const policy=exactOwnData(executionPolicy,["profile","intent"]),approved=policy?.profile==="ai044_subscription"?normalizeSubscriptionIntent(policy.intent):null;
+      const api=valid.identity.id===openAIApiExecutorIdentity.id;
+      const policy=exactOwnData(executionPolicy,["profile","intent"]),approved=api?(policy?.profile==="ai044_openai_api"?normalizeOpenAIApiIntent(policy.intent):null):(policy?.profile==="ai044_subscription"?normalizeSubscriptionIntent(policy.intent):null);
       const manifest=normalizeAI044SubscriptionContextManifest(context),environment=exactOwnData(selection.environment,["id","kind"]);
-      if(!approved||!manifest||!environment||environment.kind!=="patch_proposal_only"||selection.providerId!=="openai"||selection.accessMode!=="subscription_session"
+      if(!approved||!manifest||!environment||environment.kind!=="patch_proposal_only"||selection.providerId!=="openai"||selection.accessMode!==(api?"api_key":"subscription_session")
         ||valid.identity.version!==subscriptionExecutorIdentity.version||valid.capability!=="coding"||valid.mode!=="patch_proposal"
         ||approved.workspaceId!==tenant.workspaceId||approved.workspaceDatabaseId!==tenant.workspaceDatabaseId||approved.projectId!==state.task.projectId||approved.projectTaskId!==state.task.taskId
         ||approved.planId!==state.approvedPlan!.planId||approved.planRevision!==state.approvedPlan!.revision||approved.planFingerprint!==state.approvedPlan!.draftFingerprint
@@ -306,7 +319,8 @@ export function createDevelopmentControllerStore(raw:unknown){
     if(!state.approvedPlan||state.task.status!=="waiting_owner"||typeof c.resultApprovalRequestId!=="string"||state.runs.length!==state.approvedPlan.plan.tasks.length||state.runs.some(r=>r.run.status!=="completed"))throw new Conflict();
     for(const record of state.runs){await durableOutcome(client,state,record.run);for(const kind of ["quality","security"]){const evidence=state.operations.find(o=>o.developmentRunId===record.run.id&&o.attemptNumber===record.run.currentAttemptNumber&&o.kind===kind&&o.status==="recorded")?.evidence as {outcome?:unknown}|null;if(evidence?.outcome!=="pass")throw new Conflict();}}
     const held=await client.query(`select e.development_run_id from executor_attempt_exposures e join controller_development_runs r on r.workspace_id=e.workspace_id and r.development_run_id=e.development_run_id where r.workspace_id=$1 and r.project_task_key=$2 and e.state not in ('settled','cancelled')
-      union all select s.development_run_id from ai044_subscription_approval_bindings s join controller_development_runs r on r.workspace_id=s.workspace_id and r.development_run_id=s.development_run_id where r.workspace_id=$1 and r.project_task_key=$2 and s.state in ('consumed','started','outcome_unknown') limit 1`,[tenant.workspaceDatabaseId,c.taskId]);if(held.rowCount)throw new Conflict();
+      union all select s.development_run_id from ai044_subscription_approval_bindings s join controller_development_runs r on r.workspace_id=s.workspace_id and r.development_run_id=s.development_run_id where r.workspace_id=$1 and r.project_task_key=$2 and s.state in ('consumed','started','outcome_unknown')
+      union all select s.development_run_id from ai044_api_approval_bindings s join controller_development_runs r on r.workspace_id=s.workspace_id and r.development_run_id=s.development_run_id where r.workspace_id=$1 and r.project_task_key=$2 and s.state in ('consumed','started','outcome_unknown') limit 1`,[tenant.workspaceDatabaseId,c.taskId]);if(held.rowCount)throw new Conflict();
     const approval=await client.query(`select b.state_fingerprint from controller_owner_gate_bindings b join approval_requests r on r.workspace_id=b.workspace_id and r.id=b.approval_request_id join approval_decisions d on d.workspace_id=r.workspace_id and d.approval_request_id=r.id where b.workspace_id=$1 and b.project_key=$2 and b.task_key=$3 and b.approval_request_id=$4 and b.purpose='result_acceptance' and b.expected_task_version=$5 and r.status='approved' and d.decision='approved' and r.approved_by::text=d.decided_by_actor_id and r.resolved_at is not null`,[tenant.workspaceDatabaseId,c.projectId,c.taskId,c.resultApprovalRequestId,state.task.version]);if(approval.rowCount!==1||approval.rows[0].state_fingerprint!==controllerResultAcceptanceFingerprint(state))throw new Conflict();
     const q=await client.query(`update project_tasks set status='completed',completed_at=clock_timestamp(),state_version=state_version+1 where workspace_id=$1 and project_key=$2 and task_key=$3 and state_version=$4 returning task_key`,[tenant.workspaceDatabaseId,c.projectId,c.taskId,state.task.version]);if(q.rowCount!==1)throw new Conflict();await journalRoadmapTask(client,tenant,c,roadmapFingerprint(["controller.complete.v1",c]),state.task,"completed","state_changed");
   });}

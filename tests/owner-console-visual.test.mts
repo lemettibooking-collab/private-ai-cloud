@@ -52,7 +52,7 @@ test("no new client components or write paths in the Owner Console", () => {
   assert.ok(!/^\s*["']use client["']/mu.test(source(ambientRenderer)), "the renderer is a plain module");
   const serverActions = [...walk("app"), ...walk("components"), ...walk("lib")].filter((path) => /\.(tsx?|mts)$/u.test(path) && /["']use server["']/u.test(code(path)));
   // AI-039.2 adds the ChatGPT plan integration actions (local integration credential store only).
-  assert.deepEqual(serverActions, ["app/settings/integrations/actions.ts", "app/tasks/[taskId]/development/actions.ts", "app/tasks/[taskId]/development/draft-actions.ts", "app/tasks/new/actions.ts", "app/workflows/development-execution/proof/actions.ts"]);
+  assert.deepEqual(serverActions, ["app/settings/integrations/actions.ts", "app/settings/integrations/openai-api-actions.ts", "app/tasks/[taskId]/development/actions.ts", "app/tasks/[taskId]/development/draft-actions.ts", "app/tasks/new/actions.ts", "app/workflows/development-execution/proof/actions.ts", "app/workflows/development-execution/proof/api-actions.ts"]);
   for (const path of consoleUi) {
     assert.ok(!/\bfetch\(|lib\/db\/|lib\/tasks\/owner-task-mutations|lib\/providers|lib\/workflows/u.test(code(path)), `${path} reaches data or write layers`);
   }

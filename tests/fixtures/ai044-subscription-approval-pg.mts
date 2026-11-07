@@ -12,19 +12,20 @@ const controllers = await import(new URL("../../lib/db/development-controller-st
 const authorities = await import(new URL("../../lib/db/executor-current-authority-store.ts", import.meta.url).href) as typeof import("../../lib/db/executor-current-authority-store");
 const approvals = await import(new URL("../../lib/db/ai044-subscription-approvals.ts", import.meta.url).href) as typeof import("../../lib/db/ai044-subscription-approvals");
 const intents = await import(new URL("../../lib/executors/ai044-subscription-intent.ts", import.meta.url).href) as typeof import("../../lib/executors/ai044-subscription-intent");
-export async function subscriptionApprovalPgFixture(db: LiveDatabase, label: string, options: { registerAuthority?: boolean; repository?: { id: string; baseline: string }; writePaths?: string[] } = {}) {
-  const f = await roadmapFixture(db, label), task = await f.task("subscription", "feature", false), draft = roadmapPlan(); draft.tasks[0].allowedPaths = options.writePaths ?? ["src/server/terminal/account"];
+export async function subscriptionApprovalPgFixture(db: LiveDatabase, label: string, options: { registerAuthority?: boolean; repository?: { id: string; baseline: string }; writePaths?: string[]; foundation?: Awaited<ReturnType<typeof roadmapFixture>> } = {}) {
+  const f = options.foundation ?? await roadmapFixture(db, label), task = await f.task(options.foundation ? `api-${label}` : "subscription", "feature", false), draft = roadmapPlan(); draft.tasks[0].allowedPaths = options.writePaths ?? ["src/server/terminal/account"];
   const saved = await f.planWriter.saveDraftRevision({ idempotencyKey: `subscription-plan-${label}-000000`, taskId: task.taskId, plan: draft }); assert.equal(saved.status, "created");
   const base = { database: f.database, tenant: f.tenant }, owner = owners.createRoadmapOwnerCommands({ ...base, identitySource: f.identitySource });
-  assert.equal((await owner.createMilestone({ commandId: "milestone", projectId: "project-a", milestoneId: "m1", title: "Subscription", goal: "Bounded proposal", priority: 1 })).status, "applied");
-  assert.equal((await owner.enroll({ commandId: "enroll", projectId: "project-a", taskId: task.taskId, expectedVersion: 0, milestoneId: "m1", metadata: roadmapMetadata(), dependencyIds: [] })).status, "applied");
-  assert.equal((await owner.changeState({ commandId: "ready", projectId: "project-a", taskId: task.taskId, expectedVersion: 1, nextStatus: "ready" })).status, "applied");
+  const prefix=options.foundation?`${label}-`:"",milestoneId=options.foundation?`m-${label}`:"m1";
+  assert.equal((await owner.createMilestone({ commandId: `${prefix}milestone`, projectId: "project-a", milestoneId, title: "Subscription", goal: "Bounded proposal", priority: 1 })).status, "applied");
+  assert.equal((await owner.enroll({ commandId: `${prefix}enroll`, projectId: "project-a", taskId: task.taskId, expectedVersion: 0, milestoneId, metadata: roadmapMetadata(), dependencyIds: [] })).status, "applied");
+  assert.equal((await owner.changeState({ commandId: `${prefix}ready`, projectId: "project-a", taskId: task.taskId, expectedVersion: 1, nextStatus: "ready" })).status, "applied");
   const controller = controllers.createDevelopmentControllerStore(base); let sequence = 0;
-  async function command() { const state = await controller.read("project-a", task.taskId); assert.ok(state); return { commandId: `state-${++sequence}`, projectId: "project-a", taskId: task.taskId, expectedVersion: state.task.version, expectedControllerRevision: state.revision }; }
+  async function command() { const state = await controller.read("project-a", task.taskId); assert.ok(state); return { commandId: `${prefix}state-${++sequence}`, projectId: "project-a", taskId: task.taskId, expectedVersion: state.task.version, expectedControllerRevision: state.revision }; }
   assert.equal((await controller.claimReady(await command())).status, "applied");
   const c = await command(), { expectedControllerRevision: unused, ...planCommand } = c; void unused;
   const asked = await planApprovals.createRoadmapApprovalRequests(base).requestPlanApproval(planCommand); assert.ok(asked.status === "applied");
-  assert.equal((await planApprovals.createRoadmapOwnerApprovalDecisions({ ...base, identitySource: f.identitySource }).decide({ ...planCommand, commandId: "plan-decision", approvalRequestId: asked.approvalRequestId, bindingFingerprint: asked.bindingFingerprint, decision: "approved" })).status, "applied");
+  assert.equal((await planApprovals.createRoadmapOwnerApprovalDecisions({ ...base, identitySource: f.identitySource }).decide({ ...planCommand, commandId: `${prefix}plan-decision`, approvalRequestId: asked.approvalRequestId, bindingFingerprint: asked.bindingFingerprint, decision: "approved" })).status, "applied");
   assert.equal((await controller.consumePlanApproval({ ...await command(), approvalRequestId: asked.approvalRequestId })).status, "applied");
   assert.equal((await controller.changeTaskState({ ...await command(), nextStatus: "running" })).status, "applied");
   const state = await controller.read("project-a", task.taskId); assert.ok(state?.approvedPlan);
@@ -45,5 +46,5 @@ export async function subscriptionApprovalPgFixture(db: LiveDatabase, label: str
     return request.approvalRequestId;
   }
   const invocation = { schemaVersion: 1, invocationId: intent.invocationId, identity: intent.executor, planId: intent.planId, taskId: intent.taskId, repository: intent.repository, capability: "coding", mode: "patch_proposal", attempt: intent.attempt };
-  return { ...f, task, configuration, intent, invocation, store, authority, config, approve, controller, command };
+  return { ...f, foundation:f, task, configuration, intent, invocation, store, authority, config, approve, controller, command };
 }

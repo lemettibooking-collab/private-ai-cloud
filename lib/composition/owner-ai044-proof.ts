@@ -93,7 +93,7 @@ export function normalizeOwnerAI044ProofPolicy(raw: unknown): OwnerAI044ProofPol
 /** Wrap EXISTING transaction owners, not a new transaction/lifecycle. Authenticate
  * inside their BEGIN on the SAME session; the Owner SHARE locks survive to COMMIT.
  * No second pooled connection, provider await, session SET or credentials here. */
-function ownerCheckedDatabase(database: WorkflowRuntimeDatabase, tenant: ResolvedWorkflowRuntimeTenant, actor: string,
+export function ownerCheckedDatabase(database: WorkflowRuntimeDatabase, tenant: ResolvedWorkflowRuntimeTenant, actor: string,
   policy: OwnerAI044ProofPolicy): WorkflowRuntimeDatabase {
   return Object.freeze({ async connect() {
     const client = await database.connect();

@@ -679,7 +679,7 @@ function classifyError(error: unknown): ErrorClassification {
 function usageFromResponse(
   input: Record<string, unknown>,
   config: OpenAIModelProviderConfig,
-  preflight: ModelProviderPreflight,
+  preflight: Pick<ModelProviderPreflight, "inputTokenCount" | "effectiveMaxOutputTokens">,
 ): Readonly<{ inputTokens: number; outputTokens: number; totalTokens: number; cost: number }> | null {
   const usage = input.usage;
   if (!isPlainRecord(usage)) return null;
@@ -740,9 +740,9 @@ function extractOutput(
 
 function mapResponse(
   input: unknown,
-  request: ModelInvocationRequest,
+  request: Pick<ModelInvocationRequest, "invocationId">,
   config: OpenAIModelProviderConfig,
-  preflight: ModelProviderPreflight,
+  preflight: Pick<ModelProviderPreflight, "inputTokenCount" | "effectiveMaxOutputTokens">,
   latencyMs: number,
 ): MappedResponse {
   const snapshot = snapshotModelProviderAdapterInput(input);
@@ -850,6 +850,17 @@ function mapResponse(
     return { ok: false, code: "invalid_response", message: "OpenAI response has no supported meaningful output." };
   }
   return { ok: true, result };
+}
+
+/** Shared bounded Responses protocol decoder ONLY. This does not grant AI-022 admission,
+ * start, financial authority or task success. Model-provider callers still pass factual
+ * AI-022 validation; the narrow API patch executor separately requires its durable fence. */
+export function readOpenAIPatchResponse(input: unknown, config: OpenAIModelProviderConfig, inputTokenCount: number) {
+  const mapped = mapResponse(input, { invocationId: "patch-protocol-evidence" }, config,
+    { inputTokenCount, effectiveMaxOutputTokens: config.maxOutputTokens }, 0);
+  if (!mapped.ok) return null;
+  return freezeModelProviderAdapterData({ text: mapped.result.outputText, finishReason: mapped.result.finishReason,
+    usage: mapped.result.usage });
 }
 
 function transportFailureResult(

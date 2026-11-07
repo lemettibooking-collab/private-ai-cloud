@@ -48,14 +48,14 @@ const allow = (status: AI044SubscriptionApprovalDecision["status"], approvalRequ
 const uuid = (v: unknown): v is string => typeof v === "string" && /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(v);
 const commandId = (v: unknown): v is string => typeof v === "string" && /^[a-z0-9][a-z0-9._-]{0,39}$/u.test(v);
 const fact = (v: unknown): void => { if (!v) throw new Conflict(); };
-function canonicalResultPayload(raw: unknown): string {
+export function canonicalResultPayload(raw: unknown): string {
   const sort = (v: unknown): unknown => Array.isArray(v) ? v.map(sort) : v && typeof v === "object"
     ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([k, value]) => [k, sort(value)])) : v;
   return JSON.stringify(sort(boundedData(raw)));
 }
 /** For an already validated canonical result. Bounded independently from the small intent envelope. */
 export const subscriptionResultFingerprint = (raw: unknown): string => sha256(canonicalResultPayload(raw));
-function validateCanonicalResult(configuration: unknown, invocation: unknown, raw: unknown): NormalizedExecutorResult | null {
+export function validateCanonicalResult(configuration: unknown, invocation: unknown, raw: unknown): NormalizedExecutorResult | null {
   try {
     const snapshot = boundedData(raw) as NormalizedExecutorResult, adapter = createExecutorAdapterContract(configuration).adapter;
     const receipt = adapter?.validateInvocation(invocation).normalizedInvocation;

@@ -76,8 +76,9 @@ function candidate(v: unknown): ExecutorRouteCandidate {
   const e = record(r.executor, ["id", "version"]), providerId = enumeration(r.providerId, ["openai", "anthropic"]);
   const executor = { id: safeAtom(e.id), version: safeAtom(e.version, 32) };
   const subscription = providerId === "openai" && executor.id === "chatgpt-plan-patch" && executor.version === "v1";
-  if (executor.version !== "v1" || (!subscription && executor.id !== (providerId === "openai" ? "openai-agents" : "claude-managed-agents"))) invalid();
-  const environment: RouteEnvironment = subscription
+  const apiPatch = providerId === "openai" && executor.id === "openai-api-patch" && executor.version === "v1";
+  if (executor.version !== "v1" || (!subscription && !apiPatch && executor.id !== (providerId === "openai" ? "openai-agents" : "claude-managed-agents"))) invalid();
+  const environment: RouteEnvironment = subscription || apiPatch
     ? (() => { const e = record(r.environment, ["id", "kind"]); if (e.kind !== "patch_proposal_only") invalid(); return { id: safeAtom(e.id), kind: "patch_proposal_only" as const }; })()
     : normalizeEnvironment(r.environment);
   if (providerId !== "openai" && ["openai_hosted", "codex_cloud_if_supported"].includes(environment.kind)) invalid();
@@ -96,6 +97,8 @@ function candidate(v: unknown): ExecutorRouteCandidate {
     || result.capabilities.length !== 1 || result.capabilities[0] !== "coding" || result.modes.length !== 1 || result.modes[0] !== "patch_proposal"
     || result.artifacts.length !== 2 || !result.artifacts.includes("patch") || !result.artifacts.includes("report")
     || result.estimatedCostUsdMicros !== null)) invalid();
+  if (apiPatch && (result.accessModes.length !== 1 || result.accessModes[0] !== "api_key" || result.capabilities.join(",") !== "coding"
+    || result.modes.join(",") !== "patch_proposal" || result.artifacts.join(",") !== "patch,report" || result.estimatedCostUsdMicros === null)) invalid();
   return result;
 }
 function requirements(v: unknown): NormalizedRoutingRequirements | RouteReason {
@@ -118,8 +121,8 @@ function requirements(v: unknown): NormalizedRoutingRequirements | RouteReason {
   let environment: RouteEnvironmentRequirements;
   if (proposalOnly) {
     if (!Array.isArray(rawEnvironment.capabilities) || rawEnvironment.capabilities.length || !Array.isArray(rawEnvironment.privacy)
-      || rawEnvironment.privacy.length || rawEnvironment.residency !== null || p.requiredExecutorId !== "chatgpt-plan-patch"
-      || !Array.isArray(p.accessModes) || p.accessModes.length !== 1 || p.accessModes[0] !== "subscription_session"
+      || rawEnvironment.privacy.length || rawEnvironment.residency !== null || !["chatgpt-plan-patch", "openai-api-patch"].includes(p.requiredExecutorId as string)
+      || !Array.isArray(p.accessModes) || p.accessModes.length !== 1 || p.accessModes[0] !== (p.requiredExecutorId === "openai-api-patch" ? "api_key" : "subscription_session")
       || capability !== "coding" || mode !== "patch_proposal") invalid();
     environment = { kinds: ["patch_proposal_only"], capabilities: [], residency: null, privacy: [] };
   } else environment = normalizeEnvironmentRequirements(p.environment);

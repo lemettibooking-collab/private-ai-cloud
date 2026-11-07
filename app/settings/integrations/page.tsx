@@ -1,13 +1,17 @@
 import { ChatGPTPlanCard } from "@/components/domain/settings/chatgpt-plan-card";
+import { OpenAIApiCard } from "@/components/domain/settings/openai-api-card";
 import { AppShell } from "@/components/shell/app-shell";
 import { PageHeader } from "@/components/ui/page-header";
 import { SectionCard } from "@/components/ui/section-card";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { loadChatGPTIntegration } from "@/lib/composition/chatgpt-integration.server";
+import { loadOpenAIApiAccess } from "@/lib/composition/openai-api-access.server";
+import { openAIApiCopy } from "@/lib/i18n/openai-api-copy";
 import { getI18n } from "@/lib/i18n/locale.server";
 import { prototypeContent } from "@/lib/i18n/prototype-content";
 import type { StatusTone } from "@/types/app";
 import { connectChatGPTAction, disconnectChatGPTAction, refreshChatGPTModelsAction, selectChatGPTModelAction } from "./actions";
+import { connectOpenAIApiAction, configureOpenAIApiAction, disconnectOpenAIApiAction } from "./openai-api-actions";
 
 const integrationTone: Record<string, StatusTone> = {
   "not connected": "neutral",
@@ -24,6 +28,8 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
   const rawNotice = (await searchParams).chatgpt;
   const notice = typeof rawNotice === "string" && /^[a-z_]{1,40}$/u.test(rawNotice) ? rawNotice : null;
   const chatgpt = await loadChatGPTIntegration();
+  const openai = await loadOpenAIApiAccess();
+  const apiNotice = (await searchParams).openai_api;
   return (
     <AppShell>
       <PageHeader
@@ -39,6 +45,8 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
           notice={notice}
           view={chatgpt}
         />
+        <OpenAIApiCard actions={{ connect: connectOpenAIApiAction, configure: configureOpenAIApiAction, disconnect: disconnectOpenAIApiAction }}
+          labels={openAIApiCopy[locale]} notice={typeof apiNotice === "string" ? apiNotice : null} view={openai} />
         {c.items.map((integration) => (
           <SectionCard key={integration.id}>
             <div className="flex items-start justify-between gap-3">
