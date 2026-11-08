@@ -39,6 +39,12 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
 
+      - name: Pin npm toolchain
+        run: |
+          npm install --global npm@11.8.0 --ignore-scripts --no-audit --no-fund
+          test "$(node --version)" = "v24.22.2"
+          test "$(npm --version)" = "11.8.0"
+
       - name: Show runtime versions
         run: |
           node --version
