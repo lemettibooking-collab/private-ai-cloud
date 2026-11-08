@@ -8,6 +8,8 @@ import { createSubscriptionFixture, subscriptionTestPath } from "../fixtures/ai0
 import { createOwnerAI044Proof } from "../../lib/composition/owner-ai044-proof.ts";
 // @ts-expect-error Node direct TypeScript requires the runtime extension.
 import { createAI044SubscriptionRun } from "../../lib/composition/ai044-subscription-run.ts";
+// @ts-expect-error Node direct TypeScript requires the runtime extension.
+import { createAI044SubscriptionApprovals } from "../../lib/db/ai044-subscription-approvals.ts";
 import type { OwnerAI044ProofView, OwnerAI044ProofDependencies } from "../../lib/composition/owner-ai044-proof";
 const live = await import(new URL("./helpers/live-pg.ts", import.meta.url).href) as typeof import("./helpers/live-pg");
 const db = await live.useLiveDatabase("owner_ai044_proof");
@@ -21,10 +23,10 @@ async function setup(label: string, ambiguous = false) {
   state = await x.controller.read("project-a", x.task.taskId); assert.ok(state?.approvedPlan);
   const configuration = { ...x.configuration, developmentRun: state.runs[0].run };
   const foundation = await createSubscriptionFixture({ ownerUserId: x.ownerId, configuration, intent: x.intent });
-  let posts = 0, now = Date.now();
+  let posts = 0, now = Date.now(), afterPost: (() => void) | null = null;
   let resolve: OwnerAI044ProofDependencies["identitySource"]["resolve"] = x.identitySource.resolve;
   const transport: typeof fetch = async () => {
-    posts++; if (ambiguous) throw Error("SYNTHETIC_PRIVATE_PROVIDER_ERROR");
+    posts++; afterPost?.(); if (ambiguous) throw Error("SYNTHETIC_PRIVATE_PROVIDER_ERROR");
     const event = { type: "response.completed", response: { id: "resp_owner_proof", model: foundation.intent.model, status: "completed", error: null, incomplete_details: null,
       output: [{ type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: JSON.stringify(foundation.proposal) }] }] } };
     return new Response(`data: ${JSON.stringify(event)}\n\n`, { headers: { "content-type": "text/event-stream" } });
@@ -48,7 +50,8 @@ async function setup(label: string, ambiguous = false) {
       attestation: name === "prepare" ? { registration: view.registration, model: view.model, appLimitPercent: 50, confirmed: true } : null });
   }
   return { ...x, foundation, dependencies, load, action, posts: () => posts, expire: () => { now += 16 * 60 * 1000; },
-    revokeSession: () => { resolve = () => null; }, setIdentity: (userId: string) => { resolve = () => ({ userId }); } };
+    revokeSession: () => { resolve = () => null; }, restoreSession: () => { resolve = x.identitySource.resolve; },
+    onPost: (callback: () => void) => { afterPost = callback; }, setIdentity: (userId: string) => { resolve = () => ({ userId }); } };
 }
 test("Owner proof PG: fresh requests prepare/request/approve with ZERO POST, explicit invoke ONE, canonical durable result and replay blocked", async () => {
   const x = await setup("pipeline");
@@ -121,6 +124,61 @@ test("Owner proof PG: ambiguous POST holds one-shot state across process-equival
       const q = await c.query("select state,normalized_result_payload from ai044_subscription_approval_bindings where workspace_id=$1 and development_run_id=$2", [x.tenant.workspaceDatabaseId, x.intent.attempt.developmentRunId]);
       assert.equal(q.rowCount, 1); assert.equal(q.rows[0].state, "outcome_unknown"); assert.equal(q.rows[0].normalized_result_payload, null);
     } finally { c.release(); }
+  } finally { await x.foundation.cleanup(); }
+});
+test("Owner proof PG: post-dispatch identity loss stays opaque and uncertain with one durable start and no retry right", async () => {
+  const x = await setup("post-dispatch-revoke");
+  async function hold() {
+    const client = await x.database.connect();
+    try {
+      const q = await client.query(`select state,consumed_at,started_at,resolved_at,result_fingerprint,normalized_result_payload
+        from ai044_subscription_approval_bindings where workspace_id=$1 and development_run_id=$2`,
+      [x.tenant.workspaceDatabaseId, x.intent.attempt.developmentRunId]);
+      assert.equal(q.rowCount, 1); return q.rows[0];
+    } finally { client.release(); }
+  }
+  try {
+    await x.action("prepare"); await x.action("request"); const approved = await x.action("approve"); available(approved);
+    assert.equal(x.posts(), 0); assert.equal(x.foundation.counters.tokenReads, 0);
+    const controllerBefore = await x.controller.read("project-a", x.task.taskId); assert.ok(controllerBefore);
+    x.onPost(x.revokeSession);
+    // POST initiation is factual; neither a later authorization failure nor the opaque
+    // public result can prove that the previously approved request did not start.
+    const result = await x.action("invoke", approved);
+    assert.deepEqual(result, { status: "unavailable" }); assert.equal(x.posts(), 1);
+    const tokenReads = x.foundation.counters.tokenReads;
+    const before = await hold();
+    assert.equal(before.state, "started"); assert.ok(before.consumed_at); assert.ok(before.started_at);
+    assert.equal(before.resolved_at, null); assert.equal(before.result_fingerprint, null); assert.equal(before.normalized_result_payload, null);
+    assert.deepEqual(await x.load(), { status: "unavailable" });
+    assert.deepEqual(await x.action("invoke", approved), { status: "unavailable" });
+
+    // Restoring authorization permits only a factual read: it cannot regenerate a
+    // consumed right through a fresh root, stale approved form or direct store call.
+    x.restoreSession();
+    const current = await x.load(); available(current); assert.equal(current.phase, "INVOCATION_STARTED");
+    assert.equal(current.result, null); assert.equal(current.runtimeDispatchAllowed, false); assert.equal(current.productionLiveDispatch, "BLOCKED");
+    assert.deepEqual(await x.action("invoke", current), { status: "unavailable" });
+    assert.deepEqual(await x.action("invoke", approved), { status: "unavailable" });
+    assert.deepEqual(await x.action("prepare", current), { status: "unavailable" });
+    const state = await x.controller.read("project-a", x.task.taskId); assert.ok(state);
+    assert.deepEqual(state, controllerBefore); // No retry attempt or controller recovery transition.
+    const stored = state.attempts.find(a => a.developmentRunId === x.intent.attempt.developmentRunId); assert.ok(stored);
+    const store = createAI044SubscriptionApprovals({ database: x.database, tenant: x.tenant, projectId: "project-a", projectTaskId: x.task.taskId,
+      configuration: stored.configuration, identitySource: x.identitySource,
+      controllerBinding: { projectTaskId: x.task.taskId, intentFingerprint: stored.intentFingerprint } });
+    const replay = await store.consume({ approvalRequestId: approved.approvalRequestId,
+      intent: (stored.executionPolicy as { intent: unknown }).intent });
+    assert.equal(replay.verdict, "deny"); assert.equal(replay.status, "recovery_required");
+    assert.equal(replay.approvalCapability, null); assert.equal(replay.startCapability, null);
+    assert.equal(x.posts(), 1); assert.equal(x.foundation.counters.tokenReads, tokenReads);
+    assert.deepEqual(await hold(), before); // No automatic resolution, recovery or retry transition.
+
+    const { ai044ProofCopy } = await import(new URL("../../lib/i18n/ai044-proof-copy.ts", import.meta.url).href) as typeof import("../../lib/i18n/ai044-proof-copy");
+    for (const locale of ["en", "ru"] as const) {
+      assert.match(ai044ProofCopy[locale].unavailableDetail, /(?:do not repeat|не повторяйте) INVOKE/iu);
+      assert.doesNotMatch(ai044ProofCopy[locale].unavailableDetail, /No invocation was authorized|Вызов не разреш[её]н/iu);
+    }
   } finally { await x.foundation.cleanup(); }
 });
 for (const mode of ["unauthenticated", "non-owner", "expired", "changed-model", "changed-context", "changed-selection"] as const) test(`Owner proof PG: ${mode} denies without provider POST`, async () => {

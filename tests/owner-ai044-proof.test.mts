@@ -75,3 +75,17 @@ test("Owner proof: RU/EN presentation has exact key/phase parity; locale never e
   const core = await readFile(new URL("../lib/composition/owner-ai044-proof.ts", import.meta.url), "utf8");
   assert.equal(/i18n|pac_locale|parseLocale|ai044ProofCopy/u.test(core), false);
 });
+
+for (const [locale, required, falseAssurance] of [
+  ["en", [/authorization.*cannot be confirmed/iu, /execution status/iu, /earlier invocation may already have started/iu,
+    /do not repeat INVOKE/iu, /restore authorization/iu, /reload durable status/iu, /authorized review/iu],
+    /no invocation (?:was |has been )?(?:authorized|started)|invocation (?:was |has )?never (?:authorized|started)/iu],
+  ["ru", [/не удалось подтвердить полномочия/iu, /состояние выполнения/iu, /предыдущий вызов.*мог начаться/iu,
+    /не повторяйте INVOKE/iu, /восстановите авторизацию/iu, /обновите сохран[её]нный статус.*проверк/iu],
+    /вызов не (?:разреш[её]н|начат|начинался)|вызов (?:никогда не|не был) (?:разреш[её]н|начат)/iu],
+] as const) test(`Owner proof: ${locale} unavailable copy preserves uncertainty after dispatch and forbids retry`, async () => {
+  const { ai044ProofCopy } = await import(new URL("../lib/i18n/ai044-proof-copy.ts", import.meta.url).href) as typeof import("../lib/i18n/ai044-proof-copy");
+  const detail = ai044ProofCopy[locale].unavailableDetail;
+  for (const meaning of required) assert.match(detail, meaning);
+  assert.doesNotMatch(detail, falseAssurance);
+});

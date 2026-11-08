@@ -2,7 +2,7 @@
 const en = {
   title: "AI-044 Production Proof", eyebrow: "Owner only · subscription_session",
   description: "One exact FeaturePlan attempt. Prepare, approval and invocation are separate Owner actions. Generic production dispatch remains blocked.",
-  unavailable: "Unavailable", unavailableDetail: "Owner authorization, exact factual attempt or local proof configuration is unavailable. No invocation was authorized. Reload to read durable status.",
+  unavailable: "Unavailable", unavailableDetail: "Owner authorization or execution status cannot be confirmed. An earlier invocation may already have started. Do not repeat INVOKE. Restore authorization and reload durable status for an authorized review.",
   reload: "Reload durable status (no invocation)", statusDetail: "Canonical durable attempt/approval status; never an optimistic client state.",
   pending: "Owner action in progress. Do not repeat an invocation.", selection: "Project / ProjectTask / DevelopmentTask / attempt",
   baseline: "Plan revision / exact baseline", model: "Selected model / account-registration fingerprint", reads: "Read context (NOT write authority)", writes: "Admitted write scope",
@@ -22,7 +22,7 @@ export type AI044ProofCopy = typeof en;
 const ru: AI044ProofCopy = {
   title: "AI-044 — проверочный запуск", eyebrow: "Только владелец · subscription_session",
   description: "Одна точная попытка плана разработки. Подготовка, одобрение и вызов — отдельные действия владельца. Общий запуск в рабочей среде заблокирован.",
-  unavailable: "Недоступно", unavailableDetail: "Не подтверждены полномочия владельца, фактическая попытка или локальная конфигурация. Вызов не разрешён. Обновите сохранённый статус.",
+  unavailable: "Недоступно", unavailableDetail: "Не удалось подтвердить полномочия владельца или состояние выполнения. Предыдущий вызов уже мог начаться. Не повторяйте INVOKE. Восстановите авторизацию и обновите сохранённый статус для проверки.",
   reload: "Обновить сохранённый статус (без вызова)", statusDetail: "Фактический сохранённый статус попытки и одобрения, без оптимистичного состояния браузера.",
   pending: "Действие владельца выполняется. Не повторяйте вызов.", selection: "Проект / задача проекта / задача разработки / попытка",
   baseline: "Ревизия плана / точная базовая версия", model: "Выбранная модель / отпечаток регистрации аккаунта", reads: "Контекст чтения (НЕ разрешение записи)", writes: "Допущенная область записи",
