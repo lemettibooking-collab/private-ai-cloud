@@ -122,7 +122,7 @@ function gate(input: unknown, required: readonly Field[], optional: readonly Fie
   const runId = required.includes("runId")
     ? boundedString(values.runId, tenantBoundWorkflowRuntimeFacadeLimits.maxIdLength, stableIdPattern)
     : null;
-  const projectId = required.includes("projectId")
+  const projectId = required.includes("projectId") || Object.hasOwn(values, "projectId")
     ? boundedString(values.projectId, tenantBoundWorkflowRuntimeFacadeLimits.maxIdLength, stableIdPattern)
     : null;
   const taskId = required.includes("taskId")
@@ -233,8 +233,8 @@ export function createTenantBoundWorkflowRuntimeFacade(input: unknown): TenantBo
       (context, gated) => access.getRunModelUsage(context, gated.runId)),
     listApprovalQueue: (request: unknown) => guarded<readonly WorkflowRuntimePublicApprovalSummary[]>(request, ["workspaceId", "actorId"], ["limit"],
       (context, gated) => access.listApprovalQueue(context, gated.limit)),
-    listProjects: (request: unknown) => guarded<readonly WorkflowRuntimePublicProjectSummary[]>(request, ["workspaceId", "actorId"], ["limit"],
-      (context, gated) => access.listProjects(context, gated.limit)),
+    listProjects: (request: unknown) => guarded<readonly WorkflowRuntimePublicProjectSummary[]>(request, ["workspaceId", "actorId"], ["limit", "projectId"],
+      (context, gated) => access.listProjects(context, gated.limit, gated.projectId ?? undefined)),
     listProjectRuns: (request: unknown) => guarded<readonly WorkflowRuntimePublicProjectRunSummary[]>(request, ["workspaceId", "actorId", "projectId"], ["limit"],
       (context, gated) => access.listProjectRuns(context, gated.projectId, gated.limit)),
     listTasks: (request: unknown) => guarded<readonly WorkflowRuntimePublicTaskSummary[]>(request, ["workspaceId", "actorId", "view"], [],

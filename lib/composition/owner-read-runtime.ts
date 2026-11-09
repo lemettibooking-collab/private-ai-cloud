@@ -62,7 +62,7 @@ export interface OwnerReadBackend {
   getRunModelUsage(runId: unknown): Promise<TenantBoundWorkflowRuntimeDecision<WorkflowRuntimePublicModelUsage>>;
   listApprovalQueue(limit?: unknown): Promise<TenantBoundWorkflowRuntimeDecision<readonly WorkflowRuntimePublicApprovalSummary[]>>;
   // AI-038.3.1: projects registered in the bound workspace (archived excluded).
-  listProjects(limit?: unknown): Promise<TenantBoundWorkflowRuntimeDecision<readonly WorkflowRuntimePublicProjectSummary[]>>;
+  listProjects(limit?: unknown, projectId?: unknown): Promise<TenantBoundWorkflowRuntimeDecision<readonly WorkflowRuntimePublicProjectSummary[]>>;
   // AI-038.3.1: runtime runs of one registered project of the bound workspace. `projectId` is an
   // untrusted resource selector; it never selects the workspace, actor or role.
   listRuns(projectId: unknown, limit?: unknown): Promise<TenantBoundWorkflowRuntimeDecision<readonly WorkflowRuntimePublicProjectRunSummary[]>>;
@@ -201,7 +201,7 @@ function buildOwnerReadBackend(
       guarded(() => facade.getRunAuditTimeline(request({ runId, limit }, true))),
     getRunModelUsage: (runId: unknown) => guarded(() => facade.getRunModelUsage(request({ runId }, false))),
     listApprovalQueue: (limit?: unknown) => guarded(() => facade.listApprovalQueue(request({ limit }, true))),
-    listProjects: (limit?: unknown) => guarded(() => facade.listProjects(request({ limit }, true))),
+    listProjects: (limit?: unknown, projectId?: unknown) => guarded(() => facade.listProjects(request(projectId === undefined ? { limit } : { limit, projectId }, true))),
     listRuns: (projectId: unknown, limit?: unknown) => guarded(() => facade.listProjectRuns(request({ projectId, limit }, true))),
     listTasks: (view: unknown) => guarded(() => facade.listTasks(request({ view }, false))),
     listProjectTasks: (projectId: unknown, view: unknown) => guarded(() => facade.listProjectTasks(request({ projectId, view }, false))),

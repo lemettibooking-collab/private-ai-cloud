@@ -1,5 +1,43 @@
 # Private AI Cloud — Development Roadmap
 
+## Owner-approved onboarding sequence — PAC-ONB-01 (2026-11-09)
+
+This incremental sequence is approved for the existing control plane; it does not
+enable execution, change AI-044 approvals/invocation semantics or close the real
+production proof. `runtimeDispatchAllowed=false`; generic production/live dispatch
+remains BLOCKED. AI-044 remains IN PROGRESS.
+
+1. **Project Onboarding — PAC-ONB-01, IN REVIEW:** persistent Owner creation of
+   registry identity (stable Project ID, display name, server-fixed active status),
+   atomic audit, tenant isolation and safe identical retries. No description/type/
+   credentials or repository configuration is introduced. Bounded discovery keeps
+   its 100-project page; authenticated exact lookup opens scoped projects beyond it.
+2. **GitHub Binding — PLANNED:** explicit repository association and its separate
+   authorization, without treating project creation as repository authority.
+3. **Knowledge Ingestion — PLANNED:** project-scoped ingestion and provenance.
+4. **Manual Planning — PLANNED onboarding integration:** use the existing manual
+   FeaturePlan foundation; this onboarding flow does not yet wire that step.
+5. **AI Planning — PLANNED onboarding integration:** reuse the existing bounded
+   planning foundation with its separate egress approval and budget gates.
+6. **Dependency-Aware Task Queue — PLANNED:** project tasks ordered by factual
+   dependencies and current admission, never implicit provider dispatch.
+7. **Verified Development Workflow — PLANNED production proof:** preserve explicit
+   Owner approval, QA/Security, recovery and Verified PR acceptance. Existing
+   factory foundations are not evidence that this end-to-end flow is complete.
+
+Project creation is the explicit Owner-authorized control-plane write only. It
+does not connect GitHub/OAuth, ingest knowledge, create tasks, invoke a model or
+executor, modify an external repository, apply migrations or deploy.
+
+PAC-ONB-01 C1 strengthens only this mutation's transaction boundary: the original
+server-session provider/subject and its resolved PAC user must still have an active
+mapping held with SHARE through commit. Another identity of the same user cannot
+substitute. Existing shared auth/read contracts remain request-scoped and unchanged.
+Identical creation retries remain intentionally strict about the current project:
+future GitHub Binding, rename or pause/archive causes conflict, never removal or
+overwrite of later state. Any broader historical replay semantics requires a
+separate justified lifecycle change in the binding task.
+
 **Version:** v1.5\
 **Date:** 2026-10-26\
 **Status:** AUTHORITATIVE / CURRENT\

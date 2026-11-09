@@ -314,6 +314,7 @@ export interface AuthorizedWorkflowRuntimeAccess {
   listProjects(
     context: unknown,
     limit?: number,
+    projectId?: unknown,
   ): Promise<WorkflowRuntimeAccessDecision<readonly WorkflowRuntimePublicProjectSummary[]>>;
   listProjectRuns(
     context: unknown,
@@ -809,12 +810,15 @@ export function createAuthorizedWorkflowRuntimeAccess(
   async function listProjects(
     contextInput: unknown,
     limit?: number,
+    projectIdInput?: unknown,
   ): Promise<WorkflowRuntimeAccessDecision<readonly WorkflowRuntimePublicProjectSummary[]>> {
     const readModel = dependencies.readModel;
     if (typeof readModel.listProjects !== "function") return unavailable();
+    const projectId = projectIdInput === undefined ? undefined : runId(projectIdInput);
+    if (projectIdInput !== undefined && !projectId) return unavailable();
     if (!await authorize(contextInput, "list_projects", null)) return unavailable();
     try {
-      const result = await readModel.listProjects(limit);
+      const result = await readModel.listProjects(limit, projectId ?? undefined);
       return rawAllowed(result)
         ? availableProjected(result.data.map(projectProjectSummary))
         : unavailable();

@@ -39,7 +39,7 @@ test("primary Owner navigation is unchanged (labels, order, availability, projec
   ]);
 });
 
-test("no new client components or write paths in the Owner Console", () => {
+test("Owner Console client components and write paths match the exact approved inventory", () => {
   const clientFiles = [...walk("components/shell"), ...walk("components/domain/owner-console"), ...walk("components/ui"), ...ownerPages]
     .filter((path) => /^\s*["']use client["']/mu.test(source(path))).sort();
   // AI-038.6 adds exactly one small client component: the interface-language selector.
@@ -48,11 +48,12 @@ test("no new client components or write paths in the Owner Console", () => {
   // AI-039 adds the Plan Builder form (draft FeaturePlan revisions only) and, in P-1, the planning
   // flow around it (interview → unsaved AI candidate → review; it saves only through the builder).
   // AI-044.2: one scoped Owner form; no browser transport, raw reads or auto-invoke.
-  assert.deepEqual(clientFiles, ["components/domain/owner-console/ai044-production-proof.tsx", "components/domain/owner-console/feature-plan-builder.tsx", "components/domain/owner-console/feature-plan-planning.tsx", "components/domain/owner-console/quick-create-form.tsx", ambientComponent, "components/shell/locale-switcher.tsx", "components/shell/project-switcher.tsx", "components/shell/sidebar.tsx"]);
+  // PAC-ONB-01 adds only the Owner project identity form.
+  assert.deepEqual(clientFiles, ["components/domain/owner-console/ai044-production-proof.tsx", "components/domain/owner-console/feature-plan-builder.tsx", "components/domain/owner-console/feature-plan-planning.tsx", "components/domain/owner-console/project-create-form.tsx", "components/domain/owner-console/quick-create-form.tsx", ambientComponent, "components/shell/locale-switcher.tsx", "components/shell/project-switcher.tsx", "components/shell/sidebar.tsx"]);
   assert.ok(!/^\s*["']use client["']/mu.test(source(ambientRenderer)), "the renderer is a plain module");
   const serverActions = [...walk("app"), ...walk("components"), ...walk("lib")].filter((path) => /\.(tsx?|mts)$/u.test(path) && /["']use server["']/u.test(code(path)));
   // AI-039.2 adds the ChatGPT plan integration actions (local integration credential store only).
-  assert.deepEqual(serverActions, ["app/settings/integrations/actions.ts", "app/settings/integrations/openai-api-actions.ts", "app/tasks/[taskId]/development/actions.ts", "app/tasks/[taskId]/development/draft-actions.ts", "app/tasks/new/actions.ts", "app/workflows/development-execution/proof/actions.ts", "app/workflows/development-execution/proof/api-actions.ts"]);
+  assert.deepEqual(serverActions, ["app/projects/actions.ts", "app/settings/integrations/actions.ts", "app/settings/integrations/openai-api-actions.ts", "app/tasks/[taskId]/development/actions.ts", "app/tasks/[taskId]/development/draft-actions.ts", "app/tasks/new/actions.ts", "app/workflows/development-execution/proof/actions.ts", "app/workflows/development-execution/proof/api-actions.ts"]);
   for (const path of consoleUi) {
     assert.ok(!/\bfetch\(|lib\/db\/|lib\/tasks\/owner-task-mutations|lib\/providers|lib\/workflows/u.test(code(path)), `${path} reaches data or write layers`);
   }

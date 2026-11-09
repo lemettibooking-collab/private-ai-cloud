@@ -1,4 +1,7 @@
 import Link from "next/link";
+import { ProjectCreateForm } from "@/components/domain/owner-console/project-create-form";
+import { projectCreateCopy } from "@/lib/i18n/project-create-copy";
+import { createProjectAction } from "./actions";
 import { OwnerDataUnavailable, SignInRequired } from "@/components/domain/owner-console/owner-state";
 import { ProjectStatusBadge } from "@/components/domain/owner-console/run-status";
 import { AppShell } from "@/components/shell/app-shell";
@@ -14,7 +17,7 @@ import { projectScopedHref } from "@/lib/projects/project-context";
 // only from server configuration; selecting a project here only opens its project-scoped view.
 export default async function ProjectsPage() {
   const view = await loadOwnerProjects();
-  const { t } = await getI18n();
+  const { t, locale } = await getI18n();
   const k = t.projects;
 
   return (
@@ -30,6 +33,10 @@ export default async function ProjectsPage() {
 
       {view.state === "available" && (
         <>
+          <details className="pac-surface mb-4">
+            <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-accent">{projectCreateCopy(locale).title}</summary>
+            <ProjectCreateForm action={createProjectAction} copy={projectCreateCopy(locale)} />
+          </details>
           <Link
             className="pac-surface mb-4 flex items-center justify-between gap-3 !border-accent/30 px-4 py-3 transition-colors hover:!border-accent/50"
             href={projectScopedHref("/dashboard", null)}

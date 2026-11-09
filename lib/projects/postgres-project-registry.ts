@@ -50,17 +50,20 @@ export async function queryProjects(
   client: WorkflowRuntimeSqlClient,
   workspaceDatabaseId: string,
   limitInput: unknown,
+  projectKeyInput?: unknown,
 ): Promise<ProjectRegistryRead<readonly PublicProjectSummary[]>> {
   const limit = boundedProjectLimit(limitInput);
-  if (limit === null) return { verdict: "deny", reason: "invalid_input" };
+  if (limit === null || (projectKeyInput !== undefined && !isProjectKey(projectKeyInput))) return { verdict: "deny", reason: "invalid_input" };
   const result = await client.query<Row>(
     `/* project-registry:list */
      select project_key, display_name, status, repository_url, default_branch
      from projects
      where workspace_id = $1 and status = any($2::text[])
+     ${projectKeyInput === undefined ? "" : "and project_key = $4"}
      order by project_key
      limit $3`,
-    [workspaceDatabaseId, [...discoverableProjectStatuses], limit],
+    projectKeyInput === undefined ? [workspaceDatabaseId, [...discoverableProjectStatuses], limit]
+      : [workspaceDatabaseId, [...discoverableProjectStatuses], limit, projectKeyInput],
   );
   if (result.rowCount > limit) return { verdict: "deny", reason: "inconsistent_state" };
   const projects = result.rows.map(projectSummaryFromRow);

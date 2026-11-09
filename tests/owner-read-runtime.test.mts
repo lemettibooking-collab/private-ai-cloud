@@ -166,10 +166,10 @@ test("J–K. the caller cannot supply or override workspaceId or actorId", async
   assert.equal(queue.status, "available");
   assert.ok(db.calls.readWorkspaceParameters.every((value) => value === workspaceDatabaseId), "still only the bound tenant");
   // No method signature takes an identity.
-  // AI-038.3.1: listProjects(limit), listRuns(projectId, limit); AI-038.4a: listTasks(view),
+  // PAC-ONB-01: listProjects(limit, projectId?), listRuns(projectId, limit); AI-038.4a: listTasks(view),
   // listProjectTasks(projectId, view), getTask(taskId); AI-039: getTaskFeaturePlans(taskId) — still no
   // identity parameter.
-  assert.deepEqual(Object.values(owner).map((method: any) => method.length), [1, 2, 1, 1, 1, 2, 1, 2, 1, 1]);
+  assert.deepEqual(Object.values(owner).map((method: any) => method.length), [1, 2, 1, 1, 2, 2, 1, 2, 1, 1]);
 });
 
 test("L–M. the Owner read authorizer denies execute_runtime_command, unknown actions and malformed input", () => {

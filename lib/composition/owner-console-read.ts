@@ -561,11 +561,19 @@ export function createOwnerConsoleReader(dependencies: OwnerConsoleDependencies)
     };
   }
 
-  // The selector narrows only to a project the authenticated registry read returned.
-  function resolveScope(selector: ProjectSelector, list: ProjectList): OwnerConsoleScope {
+  // The selector narrows only to a project the authenticated registry read returned. A bounded
+  // exact lookup keeps valid projects beyond the first discovery page accessible (PAC-ONB-01).
+  async function resolveScope(selector: ProjectSelector, list: ProjectList, backend: OwnerReadBackend): Promise<OwnerConsoleScope> {
     if (selector.kind === "all") return Object.freeze({ mode: "all" as const });
     if (selector.kind !== "candidate") throw new ProjectUnavailable();
-    const project = list.projects.find((item) => item.projectId === selector.projectId);
+    let project = list.projects.find((item) => item.projectId === selector.projectId);
+    if (!project) {
+      const found = await backend.listProjects(1, selector.projectId);
+      if (found.verdict !== "allow" || found.data.length !== 1) throw new ProjectUnavailable();
+      const value = projectView(found.data[0] as unknown as Record<string, unknown>);
+      if (!value || value.projectId !== selector.projectId) throw new ProjectUnavailable();
+      project = value;
+    }
     if (!project) throw new ProjectUnavailable();
     return Object.freeze({ mode: "project" as const, project });
   }
@@ -697,7 +705,7 @@ export function createOwnerConsoleReader(dependencies: OwnerConsoleDependencies)
       return gate(async (backend) => {
         if (selector.kind === "invalid") throw new ProjectUnavailable();
         const list = await projectList(backend);
-        const scope = resolveScope(selector, list);
+        const scope = await resolveScope(selector, list, backend);
         if (scope.mode === "all") {
           const queue = await approvalQueue(backend);
           const aggregate = await aggregateRuns(backend, list, ownerConsoleLimits.dashboardActiveWorkLimit);
@@ -715,7 +723,7 @@ export function createOwnerConsoleReader(dependencies: OwnerConsoleDependencies)
       return gate(async (backend) => {
         if (selector.kind === "invalid") throw new ProjectUnavailable();
         const list = await projectList(backend);
-        const scope = resolveScope(selector, list);
+        const scope = await resolveScope(selector, list, backend);
         if (scope.mode === "all") {
           return { ...list, mode: "all" as const, scope, aggregate: await aggregateRuns(backend, list, ownerConsoleLimits.runsPageDisplayLimit) };
         }
@@ -729,7 +737,7 @@ export function createOwnerConsoleReader(dependencies: OwnerConsoleDependencies)
       return gate(async (backend) => {
         if (selector.kind === "invalid") throw new ProjectUnavailable();
         const list = await projectList(backend);
-        const scope = resolveScope(selector, list);
+        const scope = await resolveScope(selector, list, backend);
         if (scope.mode === "all") return { ...list, mode: "all" as const, scope, ...(await approvalQueue(backend)) };
         return { ...list, mode: "project" as const, scope, projectApprovals: await classifyProjectApprovals(backend, scope.project.projectId) };
       });
@@ -740,7 +748,7 @@ export function createOwnerConsoleReader(dependencies: OwnerConsoleDependencies)
       return gate(async (backend) => {
         if (selector.kind === "invalid") throw new ProjectUnavailable();
         const list = await projectList(backend);
-        const scope = resolveScope(selector, list);
+        const scope = await resolveScope(selector, list, backend);
         const tasks = await taskList(backend, "all", scope.mode === "project" ? scope.project.projectId : null);
         return { ...list, mode: scope.mode, scope, ...tasks };
       });
@@ -752,7 +760,7 @@ export function createOwnerConsoleReader(dependencies: OwnerConsoleDependencies)
       return gate(async (backend) => {
         if (selector.kind === "invalid") throw new ProjectUnavailable();
         const list = await projectList(backend);
-        const scope = resolveScope(selector, list);
+        const scope = await resolveScope(selector, list, backend);
         if (scope.mode === "all") {
           return { ...list, scope, target: "choose" as const, creatableProjects: Object.freeze(list.projects.filter((item) => item.status === "active")) };
         }
@@ -769,7 +777,7 @@ export function createOwnerConsoleReader(dependencies: OwnerConsoleDependencies)
       return gate(async (backend) => {
         if (selector.kind === "invalid") throw new ProjectUnavailable();
         const list = await projectList(backend);
-        const scope = resolveScope(selector, list);
+        const scope = await resolveScope(selector, list, backend);
         const opaque = { ...list, scope, task: Object.freeze({ state: "unavailable" as const }) };
         if (typeof taskId !== "string" || !runIdPattern.test(taskId)) return opaque;
         let result;
@@ -819,7 +827,7 @@ export function createOwnerConsoleReader(dependencies: OwnerConsoleDependencies)
       return gate(async (backend) => {
         if (selector.kind === "invalid") throw new ProjectUnavailable();
         const list = await projectList(backend);
-        const scope = resolveScope(selector, list);
+        const scope = await resolveScope(selector, list, backend);
         const opaque = { ...list, scope, development: Object.freeze({ state: "unavailable" as const }) };
         if (typeof taskId !== "string" || !runIdPattern.test(taskId)) return opaque;
         let detail;
@@ -861,7 +869,7 @@ export function createOwnerConsoleReader(dependencies: OwnerConsoleDependencies)
       return gate(async (backend) => {
         if (selector.kind === "invalid") throw new ProjectUnavailable();
         const list = await projectList(backend);
-        const scope = resolveScope(selector, list);
+        const scope = await resolveScope(selector, list, backend);
         if (scope.mode === "all") {
           const attentionTasks = await taskList(backend, "attention", null);
           return { ...list, mode: "all" as const, scope, attentionTasks, ...(await approvalQueue(backend)) };
@@ -878,7 +886,7 @@ export function createOwnerConsoleReader(dependencies: OwnerConsoleDependencies)
       return gate(async (backend) => {
         if (selector.kind === "invalid") throw new ProjectUnavailable();
         const list = await projectList(backend);
-        const scope = resolveScope(selector, list);
+        const scope = await resolveScope(selector, list, backend);
         const opaque = { ...list, scope, run: Object.freeze({ state: "unavailable" as const }) };
         if (typeof runId !== "string" || runId.length > ownerConsoleLimits.maxRunIdLength || !runIdPattern.test(runId)) return opaque;
         let overview;

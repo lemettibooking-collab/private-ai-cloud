@@ -437,10 +437,10 @@ export class PostgresWorkflowRuntimeReadModel {
 
   // One SELECT already executes against one PostgreSQL MVCC snapshot.
   // AI-038.3.1: discoverable projects of THIS tenant (one bounded statement).
-  async listProjects(limit?: number): Promise<WorkflowRuntimeReadDecision<readonly PublicProjectSummary[]>> {
+  async listProjects(limit?: number, projectId?: string): Promise<WorkflowRuntimeReadDecision<readonly PublicProjectSummary[]>> {
     try {
       return await this.#withClient(async (client) => {
-        const result = await queryProjects(client, this.#workspaceDatabaseId, limit);
+        const result = await queryProjects(client, this.#workspaceDatabaseId, limit, projectId);
         return result.verdict === "allow" ? allow(result.data) : deny<readonly PublicProjectSummary[]>(result.reason);
       });
     } catch { return deny("read_failed"); }

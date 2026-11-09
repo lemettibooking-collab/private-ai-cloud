@@ -214,7 +214,7 @@ test("listRuns: hostile projectId / limit never reach SQL and never select a wor
 test("public Owner methods accept no workspace / actor / role / user parameter and no write method exists", async () => {
   const { backend } = await owner();
   assert.deepEqual(Object.keys(backend).sort(), ["getRunAuditTimeline", "getRunModelUsage", "getRunOverview", "getTask", "getTaskFeaturePlans", "listApprovalQueue", "listProjectTasks", "listProjects", "listRuns", "listTasks"]);
-  assert.equal(backend.listProjects.length, 1);
+  assert.equal(backend.listProjects.length, 2); // PAC-ONB-01 optional resource selector, never identity.
   assert.equal(backend.listRuns.length, 2);
   const authorizer = bundle.createOwnerReadAuthorizer(ownerActorId, workspaceId);
   for (const action of ["list_projects", "list_project_runs"]) {
