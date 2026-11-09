@@ -12,9 +12,12 @@ remains BLOCKED. AI-044 remains IN PROGRESS.
    atomic audit, tenant isolation and safe identical retries. No description/type/
    credentials or repository configuration is introduced. Bounded discovery keeps
    its 100-project page; authenticated exact lookup opens scoped projects beyond it.
-2. **GitHub Binding — PLANNED:** explicit repository association and its separate
-   authorization, without treating project creation as repository authority.
-3. **Knowledge Ingestion — PLANNED:** project-scoped ingestion and provenance.
+2. **GitHub Binding — PAC-ONB-02-KB-01 IN REVIEW:** Owner-only unverified GitHub
+   metadata configuration with revision fencing and audit. Trusted repository
+   verification/access remains PLANNED; login is not repository authority.
+3. **Knowledge Ingestion — PAC-ONB-02-KB-01 IN REVIEW:** project-scoped UTF-8
+   Markdown/YAML uploads, immutable exact-byte versions and protected text reads.
+   ZIP/PDF/DOCX, embeddings, semantic parsing and vector search remain PLANNED.
 4. **Manual Planning — PLANNED onboarding integration:** use the existing manual
    FeaturePlan foundation; this onboarding flow does not yet wire that step.
 5. **AI Planning — PLANNED onboarding integration:** reuse the existing bounded
@@ -37,6 +40,11 @@ Identical creation retries remain intentionally strict about the current project
 future GitHub Binding, rename or pause/archive causes conflict, never removal or
 overwrite of later state. Any broader historical replay semantics requires a
 separate justified lifecycle change in the binding task.
+
+PAC-ONB-02-KB-01 extends the approved local onboarding foundation; it performs no
+GitHub/provider call, automatic migration, repository action or execution. See
+[repository and knowledge v1](architecture/project-repository-knowledge-v1.md) for
+the additive 0023 migration, quotas, retry/rollback semantics and unverified states.
 
 **Version:** v1.5\
 **Date:** 2026-10-26\

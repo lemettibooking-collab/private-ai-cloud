@@ -2,7 +2,9 @@ import { createHash } from "node:crypto";
 import type { WorkflowRuntimeDatabase } from "../db/workflow-runtime-store";
 import type { PublicProjectSummary } from "./project-registry";
 // @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
-import { capturedMethod, Conflict, exactOwnData, inTransaction, lockOwnerAuthority, resolveUserId, Unavailable } from "../tasks/owner-task-mutations.ts";
+import { capturedMethod, Conflict, exactOwnData, inTransaction, resolveUserId, Unavailable } from "../tasks/owner-task-mutations.ts";
+// @ts-expect-error Direct Node TypeScript execution needs the extension.
+import { lockProjectOwner } from "./project-owner-access.ts";
 // @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
 import { createPostgresWorkflowRuntimeTenantResolver, isResolvedWorkflowRuntimeTenant } from "../db/workflow-runtime-tenant.ts";
 // @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
@@ -51,18 +53,10 @@ export function createOwnerProjectMutations(input: unknown): OwnerProjectMutatio
         if (!sessionIdentity) return outcome("unavailable");
         const fingerprint = projectCreationFingerprint(intent);
         return await inTransaction(database, async client => {
-          await lockOwnerAuthority(client, tenant, userId);
           // C1: serialize this write with revocation of the ORIGINAL session mapping. Another
           // active identity for the same user is not authority for this request. SHARE (not KEY
           // SHARE) blocks status-only UPDATE/delete until commit. Keep the existing Owner prefix.
-          const identity = await client.query(
-            `/* project-mutation:identity-lock */
-             select id::text from auth_identities
-             where provider = $1 and provider_subject = $2 and user_id = $3::uuid and status = 'active'
-             limit 2 for share`,
-            [sessionIdentity.provider, sessionIdentity.providerSubject, userId],
-          );
-          if (identity.rowCount !== 1 || identity.rows.length !== 1) throw new Unavailable();
+          await lockProjectOwner(client, tenant, userId, sessionIdentity);
           const inserted = await client.query(
             `/* project-mutation:create */
              insert into projects (workspace_id, project_key, display_name, status)

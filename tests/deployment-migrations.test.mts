@@ -34,7 +34,7 @@ test("migration loader rejects gaps, unknown files, symlinks, oversized SQL befo
 });
 test("real migration inventory parses, is contiguous and never loads seeds", async () => {
   const files = await m.readDeploymentMigrations(fileURLToPath(new URL("../db/migrations/", import.meta.url)));
-  assert.equal(files.length, 22); assert.equal(files.at(-1)?.name, "0022_openai_api_cost_reservations.sql");
+  assert.equal(files.length, 23); assert.equal(files[21]?.name, "0022_openai_api_cost_reservations.sql"); assert.equal(files.at(-1)?.name, "0023_project_repository_knowledge_versions.sql");
 });
 test("migration failure/unknown ACK is sanitized and destroys the connection, no automatic retry", async t => {
   const dir = await mkdtemp(join(tmpdir(), "pac-migrations-ack-")); t.after(() => rm(dir, { recursive: true, force: true }));

@@ -219,11 +219,11 @@ test("V-1 survives localization: only the state WORD is localized; the bounded-c
 // There are no redirect-only or non-UI page routes; app/api/auth/[...nextauth]/route.ts is a route
 // handler, not a page.
 const coverage: Readonly<Record<string, "owner" | "prototype">> = {
-  "/": "owner", "/dashboard": "owner", "/attention": "owner", "/projects": "owner", "/tasks": "owner", "/tasks/[taskId]": "owner",
+  "/": "owner", "/dashboard": "owner", "/attention": "owner", "/projects": "owner", "/projects/[projectId]": "owner", "/tasks": "owner", "/tasks/[taskId]": "owner",
   "/tasks/new": "owner", "/tasks/[taskId]/development": "owner", "/runs": "owner", "/runs/[runId]": "owner", "/approvals": "owner",
   "/approvals/[approvalId]": "prototype", "/roadmap": "owner", "/settings": "prototype", "/settings/assistants": "prototype",
   "/settings/integrations": "prototype", "/settings/operator-console": "prototype", "/settings/roles": "prototype", "/settings/security": "prototype",
-  "/knowledge": "prototype", "/knowledge/[documentId]": "prototype", "/chat": "prototype", "/departments": "prototype", "/reports": "prototype",
+  "/knowledge": "owner", "/knowledge/[documentId]": "prototype", "/chat": "prototype", "/departments": "prototype", "/reports": "prototype",
   "/workflows": "prototype", "/workflows/runs/[runId]": "prototype", "/workflows/support-reply/run": "prototype",
   "/workflows/qa-review/run": "prototype", "/workflows/telegram-content/run": "prototype",
   "/operations": "prototype", "/workflows/codex-task/run": "prototype", "/workflows/development-plan/run": "prototype",

@@ -60,7 +60,7 @@ test("AI-045: no automatic migrations/seed, provider keys, repository mounts or 
   assert.match(read("lib/executors/executor-router.ts"), /runtimeDispatchAllowed:\s*false/u);
 });
 test("AI-045: historical migrations 0001–0022 remain exact baseline bytes", () => {
-  // SHA-256 captured at e7546bea before edits. New schema is not needed for gate metadata.
+  // SHA-256 captured at e7546bea before edits. PAC-ONB-02 appends 0023; the historical 22 hashes remain pinned.
   const hashes = [
     "507e66aa93e6af2e7797f6a0658ed606927e9bb3cf45247a1c38f248d5f8bb47", "c1f956637cc6abee2def461b20526c3e3fb89b199e878ea9b0a9f26c4c52145e",
     "59180e0fb0b647798352b8849e4205354888865fb63992110b83e16b5f88e9e6", "49121d113233a1b66c8c66d903bd9d95158be71615979a83ece8342256dde082",
@@ -75,6 +75,7 @@ test("AI-045: historical migrations 0001–0022 remain exact baseline bytes", ()
     "f78043b70d10481734787c12f04f577479c0b275a50cfb246ef2b9f2100f7d13", "c72ec5e17fadd24882d3d621def785280d06ec6391b362259c46c2f231f64b58"
   ];
   const files = readdirSync(new URL("db/migrations/", root)).filter(f => f.endsWith(".sql")).sort();
-  assert.equal(files.length, 22);
-  assert.deepEqual(files.map(f => createHash("sha256").update(read(`db/migrations/${f}`)).digest("hex")), hashes);
+  assert.equal(files.length, 23);
+  assert.equal(files[22], "0023_project_repository_knowledge_versions.sql");
+  assert.deepEqual(files.slice(0, 22).map(f => createHash("sha256").update(read(`db/migrations/${f}`)).digest("hex")), hashes);
 });

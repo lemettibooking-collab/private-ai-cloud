@@ -7,23 +7,14 @@ import { createOwnerProjectMutations, projectCreationIntent } from "../projects/
 // @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
 import { isProjectKey } from "../projects/project-registry.ts";
 // @ts-expect-error Node.js direct TypeScript execution requires the runtime extension.
-import { pacIdentityFromProjection } from "../auth/auth-config.ts";
+import { snapshotProjectSession } from "../projects/project-owner-access.ts";
 
 // The real Auth.js session is resolved ONCE by the request-scoped server entry, outside every
 // database transaction. Copy only its validated primitive identity; no caller-owned object or
 // later session resolution can replace the original subject after the mapping read.
-function snapshotSession(session: unknown) {
-  if (typeof session !== "object" || session === null || isProxy(session) || Array.isArray(session)) return null;
-  const prototype = Object.getPrototypeOf(session);
-  if ((prototype !== Object.prototype && prototype !== null) || Reflect.ownKeys(session).some(key => typeof key !== "string")) return null;
-  const descriptor = Object.getOwnPropertyDescriptor(session, "pacIdentity");
-  const identity = descriptor && Object.hasOwn(descriptor, "value") ? pacIdentityFromProjection(descriptor.value) : null;
-  return identity ? Object.freeze({ pacIdentity: identity }) : null;
-}
-
 export function createGitHubOwnerProjectCreate(input: { database: unknown; domainWorkspaceId: string; session: unknown }): OwnerProjectMutations {
   if (typeof window !== "undefined") throw new Error("Owner project creation is server-only.");
-  const session = snapshotSession(input.session);
+  const session = snapshotProjectSession(input.session);
   const identitySource = createGitHubSessionIdentitySource({ database: input.database, sessionResolver: { resolve: () => session } });
   return createOwnerProjectMutations({ database: input.database, domainWorkspaceId: input.domainWorkspaceId, identitySource, sessionIdentity: session?.pacIdentity ?? null });
 }

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { ProjectCreateForm } from "@/components/domain/owner-console/project-create-form";
 import { projectCreateCopy } from "@/lib/i18n/project-create-copy";
+import { projectResourcesCopy } from "@/lib/i18n/project-resources-copy";
 import { createProjectAction } from "./actions";
 import { OwnerDataUnavailable, SignInRequired } from "@/components/domain/owner-console/owner-state";
 import { ProjectStatusBadge } from "@/components/domain/owner-console/run-status";
@@ -77,6 +78,8 @@ export default async function ProjectsPage() {
                         <td className="font-mono text-[11.5px] text-ink-2">{project.repository ? project.repository.url : <span className="text-ink-3">{k.notConfigured}</span>}</td>
                         <td className="font-mono text-[11.5px] text-ink-2">{project.repository?.defaultBranch ?? <span className="text-ink-3">—</span>}</td>
                         <td className="text-right">
+                          <Link className="mr-3 text-xs text-accent" href={`/projects/${encodeURIComponent(project.projectId)}`}>{projectResourcesCopy(locale).repository}</Link>
+                          <Link className="mr-3 text-xs text-accent" href={`/knowledge?project=${encodeURIComponent(project.projectId)}`}>{projectResourcesCopy(locale).knowledge}</Link>
                           <Link className="text-xs text-accent hover:underline" href={projectScopedHref("/dashboard", project.projectId)}>{k.openDashboard}</Link>
                         </td>
                       </tr>
