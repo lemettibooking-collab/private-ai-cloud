@@ -219,7 +219,7 @@ test("V-1 survives localization: only the state WORD is localized; the bounded-c
 // There are no redirect-only or non-UI page routes; app/api/auth/[...nextauth]/route.ts is a route
 // handler, not a page.
 const coverage: Readonly<Record<string, "owner" | "prototype">> = {
-  "/": "owner", "/dashboard": "owner", "/attention": "owner", "/projects": "owner", "/projects/[projectId]": "owner", "/tasks": "owner", "/tasks/[taskId]": "owner",
+  "/": "owner", "/dashboard": "owner", "/attention": "owner", "/projects": "owner", "/projects/[projectId]": "owner", "/projects/[projectId]/planning": "owner", "/tasks": "owner", "/tasks/[taskId]": "owner",
   "/tasks/new": "owner", "/tasks/[taskId]/development": "owner", "/runs": "owner", "/runs/[runId]": "owner", "/approvals": "owner",
   "/approvals/[approvalId]": "prototype", "/roadmap": "owner", "/settings": "prototype", "/settings/assistants": "prototype",
   "/settings/integrations": "prototype", "/settings/operator-console": "prototype", "/settings/roles": "prototype", "/settings/security": "prototype",

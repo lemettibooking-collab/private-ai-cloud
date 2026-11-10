@@ -36,6 +36,31 @@ function summary(row: Record<string, unknown>, filename: string): KnowledgeDocum
   return Object.freeze({ filename, version, sha256: row.sha256, uploadedAt: date.toISOString(), verificationStatus: "uploaded_unverified" });
 }
 
+// Reuse the exact authorized version reader inside another short Owner/project transaction.
+// The caller must already hold createProjectOwnerAccess authority/project locks.
+export async function readProjectKnowledgeVersion(
+  client: import("../db/workflow-runtime-store").WorkflowRuntimeSqlClient,
+  context: import("./project-owner-access").ProjectOwnerContext,
+  projectId: string, filename: string, version: unknown,
+) {
+  if (!isDocumentFilename(filename) || (version !== undefined && (!Number.isSafeInteger(version) || (version as number) < 1 || (version as number) > 50))) throw new Unavailable();
+  const history = await client.query(`/* project-knowledge:history */
+    select v.id::text,v.version,v.sha256,v.created_at,d.current_version_id::text from knowledge_documents d
+    join knowledge_document_versions v on v.workspace_id=d.workspace_id and v.document_id=d.id
+    where d.workspace_id=$1 and d.project_key=$2 and d.filename=$3 and d.status='active' order by v.version desc limit 51`, [context.workspaceId, projectId, filename]);
+  if (history.rowCount < 1 || history.rowCount > 50 || history.rows[0].id !== history.rows[0].current_version_id) throw new Unavailable();
+  const versions = history.rows.map(row => summary(row, filename));
+  if (versions.some((v, i) => v.version !== versions.length - i)) throw new Unavailable();
+  const selected = history.rows.find(row => Number(row.version) === (version ?? versions[0].version));
+  if (!selected) throw new Unavailable();
+  const content = await client.query(`/* project-knowledge:content */
+    select v.content from knowledge_document_versions v join knowledge_documents d on d.workspace_id=v.workspace_id and d.id=v.document_id
+    where v.workspace_id=$1 and d.project_key=$2 and d.filename=$3 and d.status='active' and v.id=$4::uuid`, [context.workspaceId, projectId, filename, selected.id]);
+  const snapshot = content.rowCount === 1 ? documentSnapshot(content.rows[0].content) : null;
+  if (!snapshot || snapshot.sha256 !== selected.sha256) throw new Unavailable();
+  return Object.freeze({ document: summary(selected, filename), versions: Object.freeze(versions), content: snapshot.text });
+}
+
 export function createProjectKnowledge(access: ReturnType<typeof createProjectOwnerAccess>) {
   return Object.freeze({
     list(projectId: unknown) {
@@ -51,21 +76,7 @@ export function createProjectKnowledge(access: ReturnType<typeof createProjectOw
     read(projectId: unknown, filename: unknown, version: unknown) {
       if (!isDocumentFilename(filename) || (version !== undefined && (!Number.isSafeInteger(version) || (version as number) < 1 || (version as number) > 50))) return Promise.resolve(Object.freeze({ status: "invalid_input" as const }));
       return access.run(projectId, false, async (client, context) => {
-        const history = await client.query(`/* project-knowledge:history */
-          select v.id::text,v.version,v.sha256,v.created_at,d.current_version_id::text from knowledge_documents d
-          join knowledge_document_versions v on v.workspace_id=d.workspace_id and v.document_id=d.id
-          where d.workspace_id=$1 and d.project_key=$2 and d.filename=$3 and d.status='active' order by v.version desc limit 51`, [context.workspaceId, projectId, filename]);
-        if (history.rowCount < 1 || history.rowCount > 50 || history.rows[0].id !== history.rows[0].current_version_id) throw new Unavailable();
-        const versions = history.rows.map(row => summary(row, filename));
-        if (versions.some((v, i) => v.version !== versions.length - i)) throw new Unavailable();
-        const selected = history.rows.find(row => Number(row.version) === (version ?? versions[0].version));
-        if (!selected) throw new Unavailable();
-        const content = await client.query(`/* project-knowledge:content */
-          select v.content from knowledge_document_versions v join knowledge_documents d on d.workspace_id=v.workspace_id and d.id=v.document_id
-          where v.workspace_id=$1 and d.project_key=$2 and d.filename=$3 and d.status='active' and v.id=$4::uuid`, [context.workspaceId, projectId, filename, selected.id]);
-        const snapshot = content.rowCount === 1 ? documentSnapshot(content.rows[0].content) : null;
-        if (!snapshot || snapshot.sha256 !== selected.sha256) throw new Unavailable();
-        return Object.freeze({ document: summary(selected, filename), versions: Object.freeze(versions), content: snapshot.text });
+        return readProjectKnowledgeVersion(client, context, projectId as string, filename, version);
       });
     },
     async upload(raw: unknown) {

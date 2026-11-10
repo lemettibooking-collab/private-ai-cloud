@@ -18,10 +18,13 @@ remains BLOCKED. AI-044 remains IN PROGRESS.
 3. **Knowledge Ingestion — PAC-ONB-02-KB-01 IN REVIEW:** project-scoped UTF-8
    Markdown/YAML uploads, immutable exact-byte versions and protected text reads.
    ZIP/PDF/DOCX, embeddings, semantic parsing and vector search remain PLANNED.
-4. **Manual Planning — PLANNED onboarding integration:** use the existing manual
-   FeaturePlan foundation; this onboarding flow does not yet wire that step.
-5. **AI Planning — PLANNED onboarding integration:** reuse the existing bounded
-   planning foundation with its separate egress approval and budget gates.
+4. **Manual Planning — PAC-PLAN-01-02 IN REVIEW:** strict project Knowledge import,
+   immutable backlog drafts and explicit Owner activation into ordinary draft
+   ProjectTasks. Task FeaturePlans and dependency-aware queue remain separate.
+5. **AI Planning — PAC-PLAN-01-02 safe preparation IN REVIEW / generation BLOCKED:**
+   shared structured proposal validation and source-bound bounded request only.
+   A project-document provider/egress/budget/provenance binding remains PLANNED;
+   existing task-interview planning is not that authority.
 6. **Dependency-Aware Task Queue — PLANNED:** project tasks ordered by factual
    dependencies and current admission, never implicit provider dispatch.
 7. **Verified Development Workflow — PLANNED production proof:** preserve explicit
@@ -45,6 +48,10 @@ PAC-ONB-02-KB-01 extends the approved local onboarding foundation; it performs n
 GitHub/provider call, automatic migration, repository action or execution. See
 [repository and knowledge v1](architecture/project-repository-knowledge-v1.md) for
 the additive 0023 migration, quotas, retry/rollback semantics and unverified states.
+
+PAC-PLAN-01-02 [project planning v1](architecture/project-planning-v1.md) records
+the strict source schema, additive 0024 draft/approval provenance migration and
+manual/AI capability split. No model/executor/queue invocation is introduced.
 
 **Version:** v1.5\
 **Date:** 2026-10-26\
