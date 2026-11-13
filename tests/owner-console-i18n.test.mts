@@ -216,14 +216,14 @@ test("V-1 survives localization: only the state WORD is localized; the bounded-c
 //   prototype — prototype copy / data (lib/i18n/prototype-{pages,mock,content}) via getI18n()
 // There is no "Russian-native" exception (L10N-2): every human-facing page is bilingual, and
 // "contains Russian" is never evidence of localization.
-// There are no redirect-only or non-UI page routes; app/api/auth/[...nextauth]/route.ts is a route
-// handler, not a page.
-const coverage: Readonly<Record<string, "owner" | "prototype">> = {
+// The retired legacy document page renders only Next's not-found boundary.
+// app/api/auth/[...nextauth]/route.ts is a route handler, not a page.
+const coverage: Readonly<Record<string, "owner" | "prototype" | "retired">> = {
   "/": "owner", "/dashboard": "owner", "/attention": "owner", "/projects": "owner", "/projects/[projectId]": "owner", "/projects/[projectId]/planning": "owner", "/tasks": "owner", "/tasks/[taskId]": "owner",
   "/tasks/new": "owner", "/tasks/[taskId]/development": "owner", "/runs": "owner", "/runs/[runId]": "owner", "/approvals": "owner",
   "/approvals/[approvalId]": "prototype", "/roadmap": "owner", "/settings": "prototype", "/settings/assistants": "prototype",
   "/settings/integrations": "prototype", "/settings/operator-console": "prototype", "/settings/roles": "prototype", "/settings/security": "prototype",
-  "/knowledge": "owner", "/knowledge/[documentId]": "prototype", "/chat": "prototype", "/departments": "prototype", "/reports": "prototype",
+  "/knowledge": "owner", "/knowledge/[documentId]": "retired", "/chat": "prototype", "/departments": "prototype", "/reports": "prototype",
   "/workflows": "prototype", "/workflows/runs/[runId]": "prototype", "/workflows/support-reply/run": "prototype",
   "/workflows/qa-review/run": "prototype", "/workflows/telegram-content/run": "prototype",
   "/operations": "prototype", "/workflows/codex-task/run": "prototype", "/workflows/development-plan/run": "prototype",
@@ -310,6 +310,12 @@ test("L10N-1 coverage: every app page is inventoried and renders no English-only
   for (const { path, route } of pages) {
     const text = code(path);
     const kind = coverage[route];
+    if (kind === "retired") {
+      assert.equal(route, "/knowledge/[documentId]", "only the approved legacy route is retired");
+      assert.match(text, /import \{ notFound \} from "next\/navigation"/u);
+      assert.match(text, /notFound\(\)/u);
+      assert.ok(!/prototype|return\s*\(?\s*</u.test(text), "retired route renders no prototype UI");
+    }
     if (kind === "owner") assert.match(text, /await getI18n\(\)/u, `${route} resolves the locale`);
     if (kind === "prototype") {
       assert.match(text, /await getI18n\(\)/u, `${route} resolves the locale`);
