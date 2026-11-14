@@ -1,6 +1,23 @@
 # Private AI Cloud — Development Roadmap
 
+## Current Owner-approved sequencing — PAC-ROADMAP-UPDATE-01 (2026-11-14)
+
+**Series A — Database Finalization → Comprehensive Security Audit → Production
+Release → Series B — Complete Autonomous AI Development Pipeline → Smart
+Algorithms Real Pilot.** The detailed acceptance checkpoints are in §1.4; the
+current critical path is in §18. This v1.6 sequencing decision supersedes the old
+assumption that AI-044 real engineering proof must precede general PAC
+infrastructure release. It preserves the v1.4 architecture and v1.5 private-execution
+boundaries; it grants no execution, migration, commit, push or deployment authority.
+Production release remains **BLOCKED** until its own evidence and approvals exist;
+`runtimeDispatchAllowed=false` and generic production/live dispatch remain BLOCKED.
+
 ## Owner-approved onboarding sequence — PAC-ONB-01 (2026-11-09)
+
+This capability order is retained within Series B and reuses the existing
+foundations after the Series A release checkpoints. It does not compete with the
+production-first priority. Existing implementation/review labels are retained;
+this documentation change neither accepts their gates nor declares them DONE.
 
 This incremental sequence is approved for the existing control plane; it does not
 enable execution, change AI-044 approvals/invocation semantics or close the real
@@ -53,27 +70,30 @@ PAC-PLAN-01-02 [project planning v1](architecture/project-planning-v1.md) record
 the strict source schema, additive 0024 draft/approval provenance migration and
 manual/AI capability split. No model/executor/queue invocation is introduced.
 
-**Version:** v1.5\
-**Date:** 2026-10-26\
+**Version:** v1.6\
+**Date:** 2026-11-14\
 **Status:** AUTHORITATIVE / CURRENT\
-**Revision:** Owner-approved private execution sequencing (not an architecture rebase)\
-**Execution status aligned:** 2026-10-27 (B3/Phase L integrated; Phase S candidate; paid financial gate blocked)\
-**Integrated checkpoint:** `4f64f5b5b519da855498d5d56131b94ee8601a26`\
+**Revision:** Owner-approved production-first sequencing (not an architecture rebase)\
+**Historical execution-status checkpoint:** 2026-10-27 (B3/Phase L integrated; Phase S candidate; paid financial gate blocked)\
+**Preserved B3 integrated checkpoint:** `4f64f5b5b519da855498d5d56131b94ee8601a26`\
+**Documentation baseline:** `4f072e7115cd890b1e75291b850f9748bdd2dae0`\
 **Canonical source:** `docs/ROADMAP.md`
 
-**Owner-approved infrastructure sequencing exception (2026-11-07):** bring
-AI-045.0 [VPS container foundation](operations/vps-container-foundation.md) forward
-before completion of the AI-044 real Smart Algorithms feature proof. This is a narrow
-infrastructure exception to the default sequence, not an architecture rebase. AI-045.0
-is an IN REVIEW candidate; after acceptance AI-045 is IN PROGRESS for infrastructure
-deployment only. AI-044 remains IN PROGRESS, not DONE. AI-052 remains PLANNED / BLOCKED
+**Historical Owner-approved infrastructure exception (2026-11-07):** AI-045.0
+[VPS container foundation](operations/vps-container-foundation.md) was brought
+forward before the AI-044 real feature proof. The recorded implementation
+checkpoint was IN REVIEW, with acceptance starting AI-045 IN PROGRESS for hosting
+only. v1.6 now makes gated infrastructure release the approved Series A priority,
+rather than requiring a new early-infrastructure exception. This preserves that
+historical record and does not independently close AI-045 or its release gates.
+AI-044 remains IN PROGRESS, not DONE. AI-052 remains PLANNED / BLOCKED
 after AI-051. VPS hosting grants no VPS/private coding execution. Public web exposure,
 reverse proxy/domain/TLS stay in later AI-045.1 work. `runtimeDispatchAllowed=false`;
 generic production/live executor dispatch remains BLOCKED.
 
-**AI-044 operational update:** AI-044.1 subscription foundation is integrated at
+**Recorded AI-044 implementation checkpoint (historical, not live acceptance):** AI-044.1 subscription foundation is integrated at
 `c5658002aaf67a835e480e42f4ca0d1003b76af7`. AI-044.2 [local Owner production-proof
-runner](operations/ai-044-owner-production-proof.md) is an IN REVIEW candidate only:
+runner](operations/ai-044-owner-production-proof.md) was recorded as an IN REVIEW candidate at that checkpoint:
 explicit separate prepare/approval/invoke actions, existing durable attempt/queue/fence,
 no generic dispatch enablement. AI-044 remains IN PROGRESS; real production proof NOT
 YET EXECUTED. `runtimeDispatchAllowed=false`; generic production/live dispatch BLOCKED;
@@ -87,11 +107,11 @@ paid/hosted Phase L remains DENY-ONLY. No Liquidity Intelligence implementation 
 
 Private AI Cloud is an AI Operations / Development Control Plane for Lemetti projects. Its goal is to evolve into an AI Development Operating System that can move through an approved product roadmap autonomously and stop only at predefined Owner approval gates, hard stops, or budget/risk limits.
 
-The Owner defines product strategy and approves roadmap changes. Private AI Cloud plans and executes work within the approved scope, selects models/executors through replaceable contracts, performs QA/security verification, attempts bounded self-fix where policy allows, and escalates only when an Owner decision is required.
+The Owner defines product strategy and retains approval of the roadmap and its changes. AI may propose changes and improvements but cannot authorize them. Private AI Cloud plans and executes work within the approved scope, selects models/executors through replaceable contracts, performs QA/security verification, attempts bounded self-fix where policy allows, and escalates only when an Owner decision is required.
 
 Roadmap changes are versioned. A strategic change must be represented as a Roadmap Change Request and requires Owner approval.
 
-Important external actions remain separate approvals: accepting a result, allowing commit, allowing push, and allowing deploy are distinct decisions.
+Important external actions remain separate approvals: result approval, commit, push, merge and deployment are distinct decisions; none implies permission for another action. Autonomous execution remains limited to explicit approved policies, with independent QA/Security mandatory.
 
 The development pipeline must not depend on one specific model, executor, or payment mechanism. API credits, officially supported subscription access and future self-hosted routes are implementation choices behind stable provider/backend contracts, subject to the v1.5 sequencing and hard execution rule (§1.3).
 
@@ -109,7 +129,7 @@ Development is milestone-driven. We do not close technical debt merely because i
 - A code/task commit should update roadmap status when the task changes the actual execution state of a roadmap item.
 - Later, when the executable-roadmap subsystem exists, machine-readable roadmap state may be added alongside this document, but this Markdown remains the human-readable strategic source until the Owner approves a replacement governance model.
 - `docs/README.md` classifies every document as current, supporting, historical or QA evidence. Older strategic documents (v0.3 / v0.4 / v0.5, ADR-001 copy) are historical; where they conflict with this roadmap, this roadmap wins.
-- The preserved v1.4 architecture decision record is `docs/ROADMAP_REBASE_V1.4.md`. The latest Owner-approved sequencing decision is v1.5 (§1.3 / AI-052); it takes precedence over earlier factual-need scheduling language without rebasing that architecture.
+- The preserved v1.4 architecture decision record is `docs/ROADMAP_REBASE_V1.4.md`. The latest Owner-approved sequencing decision is v1.6 (§1.4 / §18). It supersedes older release-order assumptions while retaining v1.5 private-execution sequencing (§1.3 / AI-052) and all security/readiness gates. Approved revisions and decisions remain versioned and auditable; machine-generated proposals never activate themselves.
 
 ### 1.2 PAC-owned vs provider-owned (v1.4)
 
@@ -172,6 +192,174 @@ an inferred operational need. Such approval does not waive security/readiness
 gates or itself grant dispatch authority. AI-045 infrastructure containers are
 distinct from the AI-052 trusted coding sandbox (§15 / AI-052).
 
+### 1.4 Owner-approved production-first sequencing (v1.6)
+
+Decision record: **PAC-ROADMAP-UPDATE-01**, approved by the Owner on 2026-11-14.
+This is a scheduling change, not an architecture rebase or an operational permit.
+It preserves all historical DONE / IN REVIEW / BLOCKED facts and the v1.5
+managed-first/private-execution boundary. No operational task becomes DONE merely
+because this version is written.
+
+The delivery order is **Series A — Database Finalization → Comprehensive Security
+Audit → Production Release → Series B — Complete Autonomous AI Development
+Pipeline → Smart Algorithms Real Pilot**. Series A releases the bounded PAC
+control-plane/infrastructure scope; it does not claim that the autonomous
+engineering product or a live executor is already proven. M6/M7 milestone IDs are
+retained as stable identifiers, not an instruction to finish M6 before M7.
+
+#### Series A — Production Readiness
+
+**A.1 — Outstanding Release Gates — OPEN.** Close or explicitly disposition all
+required gates for the exact proposed release SHA and artifact:
+
+- Remaining production and development/build dependency vulnerabilities and
+  supply-chain findings; no broad update or implicit risk acceptance.
+- Supported Node.js/npm verification, clean installation, lint/typecheck/full unit
+  and build evidence. Existing CI applies only to its recorded SHA, not later
+  candidates, production dependency closure, native runtime or database checks.
+- PostgreSQL integration tests, concurrency/authorization regressions and
+  production-like populated migration rehearsal.
+- HTTP and authentication/Owner/tenant authorization smoke, including the retired
+  Knowledge route; Linux/native/optional packages, production dependency closure
+  and startup evidence where required by the deployed profile.
+- **OP-1 migration uncertainty handling:** the reviewed recovery documentation is
+  not implemented session correlation. Before real migration, separately review
+  and prove exact original target/backend PID + backend_start correlation,
+  transaction-completion/lock-release evidence and a fresh read-only ledger/catalog
+  snapshot. Missing/contradictory evidence or timeout stays UNKNOWN/STOP; a ledger
+  count or disconnected client does not establish rollback. Preserve the writer
+  fence; no automatic replay, old-image restart, downgrade or destructive restore.
+- Fresh backup/restore validation, retention and recovery readiness. Historical
+  restore PASS or old test counts do not grant a future migration/deployment.
+
+Release-blocking findings require remediation or explicit evidence-based Owner
+risk disposition **under the approved release policy**. If that policy or required
+evidence is absent, remain BLOCKED. Risk disposition never waives non-negotiable
+tenant, authorization, secret, financial or ambiguity/recovery invariants.
+
+**A.2 — PAC-DB-FINAL — REQUIRED / NOT YET ACCEPTED.** Mandatory database acceptance
+on a controlled production-like database before release, with independent DB
+security review and evidence covering:
+
+- Schema and exact migration/ledger checksum integrity; schema drift and retained
+  data/audit/provenance consistency.
+- RLS inventory/policies/bypass behavior and tenant isolation, including existing
+  application/composite-FK boundaries. Do not assume RLS is implemented/enforced
+  where it is absent; identify and review the actual isolation/privilege model.
+- Database roles, ownership, effective privileges and least-privilege boundaries.
+- SQL injection and unsafe query boundaries, trusted parameters and sanitized errors.
+- Transactions, race conditions, concurrent/replayed mutations and ambiguous COMMIT.
+- Constraints, foreign keys, indexes and resource/performance implications.
+- Connection pool/session safety, timeouts and resource limits.
+- Backup/restore, rollback/recovery procedures and independently reviewed evidence.
+
+The controlled pre-release assessment does not replace **post-deployment database
+verification on the actual deployed environment**. That second acceptance checks
+the actual target, migration history/schema, role/tenant configuration and
+application-read consistency. PAC-DB-FINAL is not DONE until both required phases
+and their evidence/gates exist; this document executes neither phase.
+
+**A.3 — PAC Security Final Audit — REQUIRED / NOT YET ACCEPTED.** Comprehensive
+independently reviewed security assessment before production release, covering:
+
+- Trivy filesystem/repository scanning; dependency and supply-chain vulnerabilities.
+- Container image scanning, Docker and infrastructure configuration.
+- Secret exposure scanning and SAST, including CodeQL or an approved equivalent.
+- API/Server Action authorization and authentication, IDOR and tenant isolation.
+- SSRF, injection, unsafe file access and request validation.
+- Rate limiting and abuse prevention.
+- Race conditions and idempotency on state-changing operations.
+- GitHub Actions and supply-chain permissions.
+- Independent review of findings, remediation/retest evidence and policy-bound
+  Owner risk disposition for release-blocking findings.
+
+**Trivy alone does not establish complete application security.** Scan output,
+mock tests, successful image build or Owner approval alone cannot substitute for
+missing application/security evidence. The audit remains open until its required
+scope and findings are independently accepted.
+
+**A.4 — Production Release — BLOCKED until mandatory gates pass.** After required
+pre-release gates and approved risk dispositions, obtain a separate Owner
+**deployment approval** for the exact Git SHA and build artifact. Verify
+infrastructure configuration, protected secrets, fresh backups, restore/recovery
+readiness and the applicable schema/app compatibility. Only then execute the
+separately authorized migrations and deploy PAC to VPS. Complete post-deploy
+HTTP/database/security smoke, logs/monitoring checks, rollback/recovery readiness
+and final release evidence, including the actual-environment PAC-DB-FINAL phase.
+
+This is the approved infrastructure-release sequence; it supersedes the older
+assumption that AI-044's Smart Algorithms feature proof must precede general PAC
+release. It does not remove prerequisites for **actual live executor authorization**.
+Keep `runtimeDispatchAllowed=false` and generic production/live dispatch BLOCKED
+until their own independently approved enablement gates are satisfied. Hosting
+PAC does not itself authorize provider calls, coding execution or autonomous work.
+
+#### Series B — Autonomous AI Development Platform
+
+Series B **continues the existing foundations**, rather than rebuilding them.
+Its completion/operational work is PLANNED; foundation implementation and existing
+independent acceptance statuses remain as recorded in their task evidence.
+
+Target workflow:
+
+**Project Creation → GitHub Repository Binding → Knowledge Base → AI Project
+Planning → Interactive Clarifications & Roadmap Improvements → Owner Approval →
+Autonomous Development → QA / Security / Corrective Loop → Verified GitHub PR →
+Owner Final Approval.**
+
+**B.1 — Project Onboarding and Knowledge.** Reuse Project Registry, persistent
+project creation, repository binding, immutable versioned Knowledge and existing
+Owner/tenant authorization. A configured GitHub locator is **unverified metadata**,
+not verified repository access; GitHub login is not repository authority. Exact
+source access/materialization and egress still need their own trusted evidence.
+
+**B.2 — AI Project Planning — end-to-end completion PLANNED / current generation
+BLOCKED.** Analyze uploaded requirements, architecture and roadmap; identify gaps
+and conflicts; propose backlog/dependencies, priorities, milestones and technically
+justified improvements; ask Owner clarifications and create reviewable, versioned
+roadmap revisions. Require explicit Owner approval before activation; never
+silently overwrite approved requirements. Source versions/hashes and approved
+revision history stay auditable.
+
+Existing strict **manual structured-plan import** creates draft ProjectTasks only
+after explicit approval; it does not enroll a runnable queue. Existing AI-039.1
+**task-level FeaturePlan planning** is not project-document AI planning. The latter
+still needs reviewed provider/egress/budget/provenance and durable approval/result
+binding. Credentials, uploaded text or a synthetic proposal are not that authority.
+Unsupported real-source schemas require a separate conversion/acceptance gate.
+
+**B.3 — Autonomous Development Orchestration — operational completion PLANNED.**
+Reuse AI-041/042/043: approved task graph and dependency-aware queue; trusted task
+classification, routing/admission and managed ExecutorAdapter invocation; durable
+task/Run/attempt state; budget, risk and authority fences; independent QA/Security;
+bounded corrective loop; recovery/audit and controlled continuation between tasks.
+No parallel provider-specific store, new generic agent loop or substitute financial
+lifecycle is implied. AI-043's accepted deterministic/fake-live-blocked foundation
+is not live-execution proof. Unknown/ambiguous outcomes keep holds/recovery and
+never authorize redispatch. Ordinary continuation is allowed only inside policy;
+Owner gates and hard stops remain stronger.
+
+**B.4 — AI-044 Real Engineering Proof / Smart Algorithms Real Pilot — IN PROGRESS,
+NOT DONE.** After the operational pipeline and live prerequisites are separately
+accepted, develop one real Smart Algorithms feature through PAC, from an approved
+FeaturePlan to a verified GitHub PR and final Owner acceptance. Preserve the
+existing Liquidity Intelligence Drawer v0.1 target (§14); this task implements none
+of it. Evidence must bind exact repository baseline, readContextPaths and separate
+allowedWritePaths, one real authorized executor operation, isolated allowed source
+changes, successful verification, independent review, bounded corrective-loop
+evidence when needed and the verified PR. Merge and deployment remain separate
+Owner decisions. No live proof or external provider capability is invented here.
+
+**B.5 — Remote Control and Future Execution.** Preserve AI-045 infrastructure and
+the actual canonical chain: AI-046 Owner Control Contract → AI-047 Secure Telegram
+Bot → AI-048 Remote Roadmap / Run Control → AI-048.1 Durable Owner Notifications →
+AI-049 Telegram Approvals → AI-050 Commit / Push Approvals → AI-051 Telegram
+Hardening → AI-052 Private Execution Environment. Existing task scopes and statuses
+remain unchanged. AI-052 remains after AI-051 and its other predecessor/readiness
+gates, including the working managed pipeline; it is **not a prerequisite for the
+managed-executor MVP**. Local/VPS/private coding stays BLOCKED until AI-052's own
+gates; infrastructure release is not self-hosted execution or automatic self-deploy.
+
 ## 2. Target product model
 
 Private AI Cloud is not a CRM and not merely a chat interface. It is a control plane for projects, AI capabilities, development workflows, approvals, budgets, audit, infrastructure, and later business-operation departments.
@@ -230,6 +418,10 @@ FeaturePlan remains the execution-planning unit even when it is not directly sho
 
 ## 4. Current development point
 
+Current delivery priority is Series A in §1.4. The task history below preserves
+implementation/gate facts; its numeric order is not the v1.6 release sequence.
+The roadmap update closes no implementation, live-proof or operational gate.
+
 ### Completed foundation
 
 **AI-001…AI-036.7 — DONE**
@@ -287,9 +479,9 @@ The census recorded the current hardening debt and moved development to mileston
 - **AI-041.3 Executor Router — DONE** (`f36d4ac923f12c5b61602c4cb0a950ad1602edcc`; consolidated independent PASS/integration; deterministic policy only, no dispatch authority)
 - **AI-042 minimal managed ExecutionEnvironment closure — DONE** (same B2 integration; AI-042 overall remains PARTIAL / IN PROGRESS)
 - **B3 / AI-043.0–AI-043.5 and AI-043 — DONE** (`4f64f5b5b519da855498d5d56131b94ee8601a26`; consolidated independent PASS + exact integration, deterministic/fake-live-blocked scope including within-wave progress; not live provider readiness)
-- **AI-044 — LIVE READINESS IN PROGRESS / NOT DONE** (Phase L preparation integrated; Phase S subscription candidate awaits independent re-gate; paid issuer DENY-ONLY; no provider call)
+- **AI-044 — LIVE READINESS IN PROGRESS / NOT DONE** (existing foundations retained; real engineering proof pending in Series B; paid/hosted Phase L issuer DENY-ONLY; no live proof claimed)
 - **AI-052 Private Execution Environment — PLANNED after AI-051** (first production-capable PAC-owned private/self-hosted coding environment; no implementation/dispatch authorization now)
-- **Roadmap v1.5 — Owner-approved private execution sequencing** (current; managed paths first, AI-052 after VPS + Telegram, local/VPS/private coding blocked until its gates)
+- **Roadmap v1.6 — Owner-approved production-first sequencing** (current; Series A → Series B → Smart Algorithms real pilot; v1.5 managed-first/private rules retained, AI-052 after AI-051)
 - **Roadmap Rebase v1.4 — preserved vendor-neutral architecture baseline** (`docs/ROADMAP_REBASE_V1.4.md`; historical rebase, not repeated by v1.5)
 
 AI-037.1.1 passed independent re-gate and was committed/pushed through the Owner-approved repository workflow.
@@ -298,15 +490,20 @@ M1 Real Money Safety is DONE. The M1 Roadmap Review Gate first found one blocker
 
 ## 5. Milestone map
 
-| Milestone | Status (v1.5) | Goal | Exit criterion |
+Milestone IDs and accepted statuses are retained. Delivery order is §1.4/§18:
+Series A M7 release gates precede the remaining Series B M6 real proof. Runtime
+capability definitions do not silently become prerequisites for an infrastructure
+release that keeps those capabilities blocked.
+
+| Milestone | Recorded status / v1.6 delivery placement | Goal | Exit criterion |
 |---|---|---|---|
 | M1. Real Money Safety | DONE | Safely spend real money on model calls | No automatic duplicate paid dispatch; safe recovery path; timeout/lease guard; pool guard; minimum observability |
 | M2. Direct Model Provider Capability | IN REVIEW (M2.2 deferred by Owner) | Connect a real model through the `ModelProvider` abstraction | Real usage/cost/latency recorded; persistence failures do not silently create a second provider call |
 | M3. Owner Product | ACTIVE | Useful Projects-first Owner experience | Owner can understand projects, runs, approvals, blockers, cost and roadmap without tenant bypass |
 | M4. Vendor-Neutral Executor Platform | IN PROGRESS (AI-041.2/041.3 + minimal managed closure DONE; live dispatch BLOCKED; AI-042 overall PARTIAL) | Replaceable managed executors behind `ExecutorAdapter`, routed by `ExecutorRouter`, over an `ExecutionEnvironment` abstraction | First executor works in the production path; a second, different managed executor proves portability without pipeline change |
 | M5. Roadmap-Driven Autonomy | B3 DONE in accepted deterministic/fake-live-blocked scope (architecture rebased in v1.4) | Deterministic control-plane controller advances an executable roadmap through executors (no PAC-owned generic agent loop) | No manual “go next” between ordinary technical steps; Owner appears only at gates |
-| M6. Automated Engineering Proof | AI-044 LIVE READINESS IN PROGRESS; Phase L integrated, Phase S candidate; paid financial gate BLOCKED | Real Smart Algorithms feature → verified PR | Full pipeline passes; switching executor needs no pipeline change |
-| M7. Staging / Hardening | PLANNED (REBASED) | Production-like control-plane infrastructure | CI/CD, observability, TLS, backups, security and deployment gates |
+| M7. Staging / Hardening | PLANNED release acceptance; prioritized in Series A | Production-ready bounded control-plane infrastructure, no live-dispatch unlock | A.1 gates, pre-release PAC-DB-FINAL, Security Final Audit, separate deployment approval and actual-environment post-deploy acceptance |
+| M6. Automated Engineering Proof | AI-044 IN PROGRESS / NOT DONE; real proof in Series B; paid/hosted financial gate BLOCKED | Real Smart Algorithms feature → verified PR → final Owner acceptance | Full authorized pipeline passes; executor switching preserves it; merge/deploy remain separate |
 | M8. Remote Owner Control | PLANNED | Secure remote control (Telegram first) | Roadmap/runs/approvals/commit/push controlled through the same Owner Control API |
 | Post-M8. Private Execution Environment (AI-052) | PLANNED after AI-051 | Production-capable PAC-owned private/self-hosted engineering environment | Independently gated durable resource, containment, limits, network/secrets, evidence and recovery; no automatic deployment |
 
@@ -1389,17 +1586,24 @@ call during rendering. Production/live dispatch remains BLOCKED.
 
 ## 14. M6 — Automated Engineering Proof
 
+**Series B acceptance, after the Series A infrastructure release (§1.4).** This
+real proof remains mandatory for the engineering-system claim, not a prerequisite
+for general PAC infrastructure release. All actual live prerequisites remain.
+The dated preparation narratives below retain their historical scope; they do not
+close live acceptance or promote AI-044 to DONE.
+
 ### AI-044 — Task → Verified PR — LIVE READINESS IN PROGRESS / NOT DONE
 
 Phase L fail-closed primitives were accepted/integrated at `41c0a166...`.
-Current Owner-approved Phase S adds a separate
+The Owner-approved Phase S preparation introduced a separate
 [subscription-session patch proposal executor](architecture/ai-044-subscription-patch-executor-v1.md)
 candidate using official SIWC direct Responses, exact-SHA context and existing
 approval/authority/QA-corrective boundaries. It has no coding environment/tools,
 API-key/credit/model fallback, general runtime unlock or real inference.
 Required manual external settings receipt: selected registration app limit<100%,
 credits disabled, no automatic-purchase reliance; this is not provider attestation.
-Candidate is for independent re-gate; production/live remains BLOCKED,
+That preparation required independent re-gate; it grants no live authority.
+Generic production/live remains BLOCKED,
 `runtimeDispatchAllowed=false`. AI-044 stays NOT DONE. AI-044.1 separates exact
 readContextPaths from Admission-only allowedWritePaths and binds both to the
 approved attempt/Owner intent; context never grants write authority. The
@@ -1415,8 +1619,8 @@ No Smart Algorithms fetch/source change or inference is authorized here.
 
 Owner-approved amended Phase L implements **LIVE READINESS PRIMITIVES / LIVE
 PERMIT IMPOSSIBLE**: pure hosted profile/archive/network, artifact/recovery,
-approval/QA binding and explicit financial categories. Awaiting independent
-re-gate; not live-ready. Current official evidence does not establish a finite
+approval/QA binding and explicit financial categories. These primitives do not
+establish live readiness. Current official evidence does not establish a finite
 total exposure bound covering active hosted compute and every charge category.
 Container maximum remains UNKNOWN; issuer DENY-ONLY; composition has no usable
 credential/provider port. No timeout, price rate, account hard limit, shaped
@@ -1445,18 +1649,25 @@ principal proof that PAC works as an engineering system, not only as contracts.
 
 ## 15. M7 — Staging / Hardening
 
+**Series A production-readiness/release track (§1.4).** PAC-DB-FINAL and the
+comprehensive PAC Security Final Audit are mandatory checkpoints before release;
+actual-environment database/HTTP/security verification follows deployment. No
+required release acceptance is marked complete by this sequencing change.
+
 ### AI-045 — Production-like Infrastructure — PLANNED
 
-AI-045.0 VPS Container Foundation is an IN REVIEW candidate under the explicit
-2026-11-07 Owner early-infrastructure exception recorded above. Acceptance starts
-AI-045 IN PROGRESS for hosting only: PAC + PostgreSQL 16, loopback access, explicit
-checksummed migration gate; no VPS mutation in implementation. Public reverse proxy/
-TLS is later AI-045.1. AI-044 remains IN PROGRESS; AI-052 remains PLANNED / BLOCKED.
-See [operator runbook](operations/vps-container-foundation.md).
+The historical AI-045.0 implementation checkpoint recorded an IN REVIEW
+foundation under the 2026-11-07 early-infrastructure exception. Its acceptance
+criteria concern hosting only: PAC + PostgreSQL16, loopback access and an explicit
+checksummed migration gate. Public reverse proxy/TLS remains AI-045.1 work unless
+separately accepted. See [operator runbook](operations/vps-container-foundation.md).
+Foundation/image/backup smoke evidence does not close general release acceptance.
+AI-044 remains IN PROGRESS; AI-052 remains PLANNED / BLOCKED.
 
-Canonical default: after the proven AI-044 Smart Algorithms engineering case.
-An earlier VPS/infrastructure step requires a separate explicit Owner-approved
-infrastructure need; AI-042.2 does not move VPS or a Container Runner forward.
+Current canonical order is Series A gated PAC infrastructure release **before**
+Series B AI-044 real proof. v1.6 supersedes the old default and its need for a
+special early-infrastructure exception; it does not erase that historical decision
+or authorize deployment now. AI-042.2 never grants a coding-container runtime.
 
 **AI-045 infrastructure containers are not an AI-052 coding sandbox.** Docker/
 containers may host ordinary PAC infrastructure: control plane, orchestration
@@ -1651,36 +1862,51 @@ now DONE, with production/live dispatch still BLOCKED.
 
 AI-038.2, AI-038.3, AI-038.3.1 and AI-038.3.2 are DONE: the Owner Console reads real runtime data with All Projects and real project switching, read-only. AI-038.4a (DONE) adds persistent Owner Tasks as read surfaces; AI-038.4b (DONE) adds Quick Create, the only UI write (draft task intent through the audited `createTask`). AI-039 (DONE) adds the second UI write: saving immutable draft FeaturePlan revisions of a ProjectTask, with no execution. AI-039.1 (DONE; direct API-key live smoke deferred by Owner) adds the Owner-approved planning request, which runs one budget-bounded planning Run and never saves a plan or changes the task. Other UI write actions need separate tasks.
 
-### Current development critical path — v1.5, B3 integrated / AI-044 current
+### Current development critical path — v1.6, production first
+
+Accepted foundations remain available, not rebuilt: AI-041.1/041.2/041.3,
+AI-042.1/042.1a/042.2 and minimal managed closure, B3/AI-043 in its accepted
+deterministic/fake-live-blocked scope, plus existing onboarding/Knowledge/planning
+components. AI-042 overall and M4 are not DONE; no live permission is inferred.
 
 ```text
-AI-041.2 Second Vendor / Portability Proof (DONE)
-  → B2: AI-041.3 Executor Router (DONE)
-  → B2: AI-042 minimal managed ExecutionEnvironment closure (DONE)
-  → B3: AI-043.* Roadmap-Driven Autonomy (DONE in deterministic/fake-live-blocked scope)
-  → AI-044 LIVE READINESS IN PROGRESS (Phase L integrated; Phase S candidate; paid financial gate BLOCKED) → real feature → Verified PR
-  → AI-045 Production-like VPS Infrastructure
-  → AI-046 Owner Control Contract
-  → AI-047 Secure Telegram Bot
-  → AI-048 Remote Roadmap / Run Control
-  → AI-048.1 Durable Notifications
-  → AI-049 Telegram Approvals
-  → AI-050 Commit / Push Approvals
-  → AI-051 Telegram Hardening
-  → AI-052 Private Execution Environment
+Series A — Production Readiness
+  A.1 Outstanding release gates / OP-1 / rehearsal / backup-restore evidence
+  → A.2 PAC-DB-FINAL (controlled production-like pre-release acceptance)
+  → A.3 PAC Security Final Audit (comprehensive independent review)
+  → A.4 Separate Owner approval of exact SHA + artifact + migrations/deployment
+  → PAC infrastructure release + post-deploy HTTP/DB/security acceptance
+
+Series B — Complete Autonomous AI Development Pipeline
+  Existing Project Creation → Repository Binding → versioned Knowledge
+  → AI Project Planning completion → clarifications / roadmap improvements
+  → Owner-approved versioned plan / task graph
+  → AI-041/042/043 managed operational integration / dependency-aware queue
+  → Smart Algorithms Real Pilot / AI-044: authorized feature → QA/Security
+    → bounded corrective loop if needed → Verified PR → Owner final acceptance
+  → AI-046 → AI-047 → AI-048 → AI-048.1 → AI-049 → AI-050 → AI-051
+  → AI-052 (private/self-hosted execution; its own gates remain mandatory)
 ```
 
-AI-041.1, AI-042.1/042.1a and AI-042.2 are DONE prerequisites; AI-042 overall
-and M4 are not DONE. v1.5 records Owner-approved private execution sequencing,
-not an architecture rebase. This path selects no live executor and grants no
-dispatch permission. Parallelism is still allowed when dependency and ownership
-rules permit; it cannot silently pull the self-hosted coding runtime before AI-052.
+Pre-release database acceptance and final audit precede deployment; the required
+actual-environment database verification follows it. This two-phase acceptance
+avoids treating a staging/rehearsal result as proof of the deployed database.
+A.1 prerequisites may be prepared in parallel only when existing dependency,
+writer-fencing and ownership rules permit; no mandatory gate may be skipped.
 
-Qwen/DeepSeek remain deferred; local/private coding is assigned to AI-052, not
-automatically activated by product need. Codex/OpenAI and Claude managed execution
-are the intended pre-AI-052 paths. Specific Codex Cloud interfaces, Codex Security,
-Sign in with ChatGPT and Dots retain their fact-based research/access status (§11);
-no unsupported route is made a mandatory dependency.
+The Owner-approved sequence supersedes the older AI-044-before-general-release
+scheduling assumption, not the live executor prerequisites. M6 real proof still
+needs factual supported access, exact plan/context/admission, budgets, authority,
+QA/Security and separate one-shot Owner approval. `runtimeDispatchAllowed=false`
+and generic production/live dispatch stay BLOCKED until independently approved
+enablement. Infrastructure hosting never supplies that approval.
+
+v1.5 private-execution rules are unchanged: AI-052 follows AI-051 and the required
+managed pipeline/readiness gates. Qwen/DeepSeek remain deferred; no unsupported
+Codex Cloud, Claude, SIWC or other access/capability becomes a mandatory assumed
+route. Local/VPS/private coding remains BLOCKED before AI-052's own gates. Earlier
+private-runtime implementation still needs a new explicit Owner roadmap-change
+approval, which cannot waive the security/readiness gates.
 
 ### Store/recovery debt
 
@@ -1688,7 +1914,7 @@ AI-037.2/.3/.6b/.8 are pulled forward by autonomy/staging gates, not merely by n
 
 ### Infrastructure
 
-AI-045 follows a proven automated development case, unless an earlier deployment need is explicitly approved by the Owner.
+AI-045 infrastructure release is now prioritized in Series A, after its mandatory database/security/recovery gates and separate deployment approval. AI-044 real engineering proof follows in Series B; neither hosting nor that scheduling change enables AI-052 or provider dispatch.
 
 ### Remote control
 
@@ -1707,7 +1933,9 @@ alone does not authorize local/VPS coding execution before AI-052's own gates.
 | Vendor-Neutral Executor Platform | First managed executor works through `ExecutorAdapter`; a second, different executor proves portability without pipeline change; every execution environment satisfies the environment safety policy |
 | Roadmap Autonomy | System selects next ready work and does not require manual “go next” between normal technical steps |
 | Automated Engineering Proof | Real Smart Algorithms feature reaches verified PR; switching executor needs no pipeline change |
-| Staging | Production-like deployment with observability, backups, TLS, CI/CD and security gates |
+| Staging / Series A production release | Exact approved control-plane artifact, required CI/PG/HTTP gates, PAC-DB-FINAL pre-release assessment, comprehensive Security Final Audit and separately approved deployment with actual-environment post-deploy verification; live dispatch remains separately gated |
+| PAC-DB-FINAL | Independent controlled production-like DB acceptance plus actual post-deployment target verification; schema/ledger, isolation/RLS, roles, transactions, constraints, resources and backup/recovery evidence (§1.4 A.2) |
+| PAC Security Final Audit | Independent comprehensive application/supply-chain/container/infrastructure review, validated findings and policy-bound release disposition (§1.4 A.3); Trivy alone is insufficient |
 | Telegram Owner | Owner safely manages roadmap/runs/approvals through the same control plane from mobile |
 | Private Execution Environment (AI-052, post-Telegram) | Independently gated production-capable private resource ownership, process/file containment, limits, network/secrets, evidence/recovery and private executor support; no automatic deployment |
 
@@ -1728,7 +1956,7 @@ It must support both:
 - manual Feature Mode
 - Fix / Investigate mode
 
-The key production proof remains a real Smart Algorithms feature moving from executable roadmap to verified PR. Private Exchange then becomes the second, higher-risk production proof.
+The first complete real-world engineering pilot remains Smart Algorithms: a real feature moving from approved roadmap to verified PR and final Owner acceptance in Series B. This engineering proof does not precede or implicitly authorize Series A infrastructure release. Private Exchange then becomes the second, higher-risk engineering proof.
 
 One control plane can serve multiple Projects, including Private AI Cloud,
 Smart Algorithms, Trading Terminal and Private Exchange. PAC itself may be a
@@ -1751,16 +1979,38 @@ still belongs to the separate `ModelProvider` abstraction.
 | Field | Value |
 |---|---|
 | Document | Private AI Cloud Development Roadmap |
-| Version | v1.5 — Owner-approved private execution sequencing |
+| Version | v1.6 — Owner-approved production-first sequencing |
 | Status | Current / Authoritative |
 | Canonical source | `docs/ROADMAP.md` |
 | PDF | Generated snapshot only |
 | Change control | New strategic version requires Owner approval |
-| Priority | v1.5 supersedes earlier private-execution scheduling where it conflicts; preserves the v1.4 vendor-neutral architecture |
-| Decision record | Owner-approved v1.5 sequencing in §1.3 / AI-052; preserved architecture provenance: `docs/ROADMAP_REBASE_V1.4.md` |
+| Priority | v1.6 supersedes AI-044-before-general-infrastructure-release scheduling; preserves v1.5 private-execution gates and the v1.4 vendor-neutral architecture |
+| Decision record | PAC-ROADMAP-UPDATE-01 (Owner-approved 2026-11-14), §1.4 / §18; v1.5 private sequencing in §1.3 / AI-052; architecture provenance: `docs/ROADMAP_REBASE_V1.4.md` |
 | Document index | `docs/README.md` |
 
+### v1.6 change summary — Owner-approved production-first sequencing
+
+- PAC-ROADMAP-UPDATE-01 changes scheduling only: Series A database finalization →
+  comprehensive security audit → PAC infrastructure release → Series B complete
+  autonomous development pipeline → Smart Algorithms real pilot.
+- Add mandatory PAC-DB-FINAL with controlled production-like pre-release review
+  and actual post-deployment verification, and comprehensive Security Final Audit;
+  all evidence, risk disposition and separate deployment approvals remain required.
+- Keep OP-1, release/security/PG/HTTP/native/recovery gates factual and open where
+  evidence is missing. No scan, test, migration or deployment is executed here.
+- Reuse implemented onboarding/Knowledge/manual planning and AI-041/042/043
+  foundations; distinguish blocked project-document AI planning from existing
+  task-level FeaturePlan planning and manual draft import.
+- Preserve AI-044 IN PROGRESS / NOT DONE and its exact live prerequisites; merge
+  and deployment remain separate Owner decisions after Verified PR acceptance.
+- Keep v1.5 managed-first/private execution boundaries, AI-052 after AI-051,
+  vendor-neutral control-plane ownership and all security invariants unchanged.
+  No operational status is promoted to DONE and no dispatch authority is granted.
+
 ### v1.5 change summary — Owner-approved private execution sequencing
+
+Historical version/checkpoint record; current release order is superseded by
+v1.6 (§1.4 / §18). The architectural/private-execution rules remain in force.
 
 - Strategic sequencing change, **not an architecture rebase**. Preserve the
   v1.4 vendor-neutral control plane, managed-first approach, separate ModelProvider
