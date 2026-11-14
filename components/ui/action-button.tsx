@@ -8,12 +8,9 @@ type ActionButtonProps = {
 };
 
 const variants = {
-  primary:
-    "border-cyan-400/40 bg-cyan-400/15 text-cyan-100 hover:bg-cyan-400/25",
-  secondary:
-    "border-slate-600/80 bg-slate-900/80 text-slate-200 hover:bg-slate-800",
-  danger:
-    "border-rose-400/40 bg-rose-500/10 text-rose-100 hover:bg-rose-500/20",
+  primary: "pac-control-accent",
+  secondary: "pac-control text-ink-2 hover:text-ink",
+  danger: "border-bad/40 bg-bad/10 text-bad hover:bg-bad/20",
 };
 
 export function ActionButton({
@@ -22,7 +19,7 @@ export function ActionButton({
   variant = "primary",
   disabled = false,
 }: ActionButtonProps) {
-  const className = `inline-flex h-9 items-center justify-center rounded-md border px-3 text-sm font-medium transition ${variants[variant]} ${
+  const className = `inline-flex h-8 items-center justify-center rounded-pac border px-3 text-[13px] font-medium transition ${variants[variant]} ${
     disabled ? "cursor-not-allowed opacity-50 hover:bg-inherit" : ""
   }`;
 

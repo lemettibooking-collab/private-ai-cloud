@@ -50,8 +50,8 @@ function validateRuntimeContract(packageJson: RuntimeContractPackage): string[] 
     errors.push("packageManager must be npm@11.8.0");
   }
 
-  if (packageJson.engines?.node !== "24.13.x") {
-    errors.push("Node.js engine must be pinned to 24.13.x");
+  if (packageJson.engines?.node !== "24.22.x") {
+    errors.push("Node.js engine must be pinned to 24.22.x");
   }
 
   if (packageJson.engines?.npm !== "11.8.x") {
@@ -73,7 +73,10 @@ test("runtime and verification metadata matches the supported contract", () => {
   ) as RuntimeContractPackage;
 
   assert.deepEqual(validateRuntimeContract(packageJson), []);
-  assert.match(process.versions.node, /^24\.13\./);
+  assert.equal(readFileSync(new URL("../.nvmrc", import.meta.url), "utf8").trim(), "24.22.2");
+  const lock = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url), "utf8"));
+  assert.deepEqual(lock.packages[""].engines, packageJson.engines);
+  assert.equal(process.versions.node, "24.22.2");
   assert.match(process.env.npm_config_user_agent ?? "", /^npm\/11\.8\.0(?:\s|$)/);
 });
 

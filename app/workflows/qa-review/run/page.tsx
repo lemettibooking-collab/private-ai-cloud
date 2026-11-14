@@ -2,34 +2,31 @@ import { WorkflowLifecycle } from "@/components/domain/workflow-lifecycle";
 import { WorkflowRunForm } from "@/components/domain/workflow-run-form";
 import { AppShell } from "@/components/shell/app-shell";
 import { PageHeader } from "@/components/ui/page-header";
-import { workflowPreviews } from "@/lib/workflow-config";
+import { getI18n } from "@/lib/i18n/locale.server";
+import { prototypeMock } from "@/lib/i18n/prototype-mock";
+import { prototypePages } from "@/lib/i18n/prototype-pages";
 
-export default function QaReviewRunPage() {
+// Which fields are multi-line (presentation shape; the copy is localized).
+const textareaFields = [true, true];
+
+export default async function QaReviewRunPage() {
+  const { locale } = await getI18n();
+  const pages = prototypePages[locale].runPages;
+  const c = pages.qa;
   return (
     <AppShell>
       <PageHeader
-        description="Analyze diff/log context, list risks, note failed checks, and recommend approve, revise, or reject."
-        eyebrow="Workflow run"
-        title="QA / Review Report"
+        description={c.description}
+        eyebrow={pages.eyebrow}
+        title={c.title}
       />
       <WorkflowLifecycle compact />
       <div className="mt-6">
         <WorkflowRunForm
-          description="The QA analysis is mocked. It demonstrates the target review report structure."
-          fields={[
-            {
-              label: "Diff/log input",
-              placeholder: "Paste changed files, lint output, build output, or review context",
-              textarea: true,
-            },
-            {
-              label: "Task context",
-              placeholder: "What the implementation was supposed to achieve",
-              textarea: true,
-            },
-          ]}
-          preview={workflowPreviews["qa-review"]}
-          title="Review input"
+          description={c.formDescription}
+          fields={c.fields.map(([label, placeholder], index) => ({ label, placeholder, textarea: textareaFields[index] }))}
+          preview={prototypeMock[locale].workflowPreviews["qa-review"]}
+          title={c.formTitle}
         />
       </div>
     </AppShell>

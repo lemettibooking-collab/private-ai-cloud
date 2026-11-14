@@ -1,5 +1,17 @@
 # Проект «Инфраструктура для ИИ»
 
+> **HISTORICAL / SUPERSEDED FOR STRATEGIC ARCHITECTURE** (notice added 2026-10-01, Roadmap v1.4)
+>
+> This document remains useful as historical context and is kept unchanged below. Where it conflicts with:
+>
+> - `docs/ROADMAP.md` v1.4 (canonical roadmap),
+> - `docs/architecture/control-plane-architecture-v1.0.md`,
+> - `docs/architecture/executor-adapter-strategy-v0.1.md`,
+>
+> the newer documents are authoritative. Private AI Cloud is now a vendor-neutral AI Engineering Control Plane: PAC owns the engineering process, and executors own the internal agent execution. Implementation status is determined by repository code, not by this document. See `docs/README.md`.
+>
+> Historical assumptions here that are **not** current requirements: isolated Qwen Code worker and Docker/Podman sandbox as PAC components; moving roles into separate PAC-run workers/services. The multi-provider principle and human-approval principle still hold. Current direction: managed executor first, an `ExecutionEnvironment` abstraction, and a self-hosted/local fallback only when justified.
+
 ## Архитектурное решение ADR-001: оркестратор и специализированные агенты
 
 **Статус:** принято 14 августа 2026 года  

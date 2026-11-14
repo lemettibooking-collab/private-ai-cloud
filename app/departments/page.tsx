@@ -3,7 +3,10 @@ import { AppShell } from "@/components/shell/app-shell";
 import { PageHeader } from "@/components/ui/page-header";
 import { SectionCard } from "@/components/ui/section-card";
 import { StatusBadge } from "@/components/ui/status-badge";
-import { assistantProfiles, departments } from "@/lib/mock-data";
+import { getI18n } from "@/lib/i18n/locale.server";
+import { prototypeContent } from "@/lib/i18n/prototype-content";
+import { prototypeMock } from "@/lib/i18n/prototype-mock";
+import { prototypePages } from "@/lib/i18n/prototype-pages";
 import type { DepartmentStatus, StatusTone } from "@/types/app";
 
 const statusTone: Record<DepartmentStatus, StatusTone> = {
@@ -12,36 +15,46 @@ const statusTone: Record<DepartmentStatus, StatusTone> = {
   future: "locked",
 };
 
-export default function DepartmentsPage() {
+export default async function DepartmentsPage() {
+  const { locale } = await getI18n();
+  const c = prototypePages[locale].departments;
+  const { departments, labels } = prototypeMock[locale];
+  const assistantProfiles = prototypeContent[locale].assistants.profiles;
   return (
     <AppShell>
       <PageHeader
-        description="All ten AI Departments from Product Blueprint v0.2, with assistants, workflows, approval requirements, and later integrations."
-        eyebrow="AI Departments"
-        title="Assistant departments"
+        description={c.description}
+        eyebrow={c.eyebrow}
+        title={c.title}
       />
 
       <div className="mb-6 grid gap-4 md:grid-cols-3">
-        {[
-          ["MVP active", "6 departments visible in the current demo"],
-          ["v0.2 planned", "3 departments planned for the next product layer"],
-          ["future", "1 legal/document department reserved for later"],
-        ].map(([status, detail]) => (
+        {c.summary.map(([status, detail]) => (
           <SectionCard key={status}>
             <StatusBadge tone={statusTone[status as DepartmentStatus]}>
-              {status}
+              {labels.departmentStatus[status as DepartmentStatus]}
             </StatusBadge>
             <p className="mt-3 text-sm leading-6 text-slate-400">{detail}</p>
           </SectionCard>
         ))}
       </div>
 
-      <DepartmentFilterPanel departments={departments} />
+      <DepartmentFilterPanel
+        departments={[...departments]}
+        labels={{
+          filters: c.filters,
+          status: labels.departmentStatus,
+          primaryAssistant: c.primaryAssistant,
+          approvalRequirement: c.approvalRequirement,
+          keyWorkflows: c.keyWorkflows,
+          integrationsLater: c.integrationsLater,
+        }}
+      />
 
       <div className="mt-6">
         <SectionCard
-          description="Assistant profiles are mocked and mapped to departments. Model routing, tools, and permissions remain prototype-only."
-          title="Assistant registry"
+          description={c.registryDescription}
+          title={c.registry}
         >
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             {assistantProfiles.map((assistant) => (
@@ -54,7 +67,7 @@ export default function DepartmentsPage() {
                     {assistant.name}
                   </p>
                   <StatusBadge tone={statusTone[assistant.status]}>
-                    {assistant.status}
+                    {labels.departmentStatus[assistant.status]}
                   </StatusBadge>
                 </div>
                 <p className="mt-2 text-xs text-slate-500">

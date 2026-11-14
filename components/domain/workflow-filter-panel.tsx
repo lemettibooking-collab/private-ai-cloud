@@ -16,6 +16,15 @@ type WorkflowFilter =
 
 type WorkflowFilterPanelProps = {
   groups: WorkflowGroup[];
+  // Localized labels (server dictionary); filter / availability VALUES stay the canonical tokens.
+  labels: Readonly<{
+    filters: Readonly<Record<WorkflowFilter, string>>;
+    availability: Readonly<Record<WorkflowAvailability, string>>;
+    approvalRequired: string;
+    reviewOptional: string;
+    locked: string;
+    runWorkflow: string;
+  }>;
 };
 
 const filters: WorkflowFilter[] = [
@@ -40,7 +49,7 @@ const availabilityLabel: Record<WorkflowAvailability, WorkflowFilter> = {
   future: "future",
 };
 
-export function WorkflowFilterPanel({ groups }: WorkflowFilterPanelProps) {
+export function WorkflowFilterPanel({ groups, labels }: WorkflowFilterPanelProps) {
   const [activeFilter, setActiveFilter] = useState<WorkflowFilter>("All");
 
   const visibleGroups = useMemo(
@@ -80,7 +89,7 @@ export function WorkflowFilterPanel({ groups }: WorkflowFilterPanelProps) {
             onClick={() => setActiveFilter(filter)}
             type="button"
           >
-            {filter}
+            {labels.filters[filter]}
           </button>
         ))}
       </div>
@@ -107,7 +116,7 @@ export function WorkflowFilterPanel({ groups }: WorkflowFilterPanelProps) {
                     </h3>
                   </div>
                   <StatusBadge tone={availabilityTone[workflow.availability]}>
-                    {availabilityLabel[workflow.availability]}
+                    {labels.availability[workflow.availability]}
                   </StatusBadge>
                 </div>
 
@@ -120,20 +129,20 @@ export function WorkflowFilterPanel({ groups }: WorkflowFilterPanelProps) {
                     tone={workflow.approvalRequired ? "warning" : "success"}
                   >
                     {workflow.approvalRequired
-                      ? "approval required"
-                      : "review optional"}
+                      ? labels.approvalRequired
+                      : labels.reviewOptional}
                   </StatusBadge>
                   {workflow.externalActionLocked && (
-                    <StatusBadge tone="locked">locked</StatusBadge>
+                    <StatusBadge tone="locked">{labels.locked}</StatusBadge>
                   )}
                 </div>
 
                 <div className="mt-5">
                   {workflow.availability === "active" && workflow.href ? (
-                    <ActionButton href={workflow.href}>Run workflow</ActionButton>
+                    <ActionButton href={workflow.href}>{labels.runWorkflow}</ActionButton>
                   ) : (
                     <ActionButton disabled variant="secondary">
-                      {availabilityLabel[workflow.availability]}
+                      {labels.availability[workflow.availability]}
                     </ActionButton>
                   )}
                 </div>

@@ -9,40 +9,94 @@
 
 -- Workspace / identity
 
-insert into workspaces (
-  id,
-  name,
-  slug,
-  type,
-  region,
-  status,
-  plan_code,
-  data_residency,
-  settings
-) values (
-  '00000000-0000-4000-8000-000000000001',
-  'Smart Algorithms Demo',
-  'smart-algorithms-demo',
-  'demo',
-  'RU',
-  'demo',
-  'internal-demo',
-  'RU',
-  '{
-    "external_actions_locked_by_default": true,
-    "approval_first": true,
-    "roadmap_phase": "v0.1",
-    "product": "Smart Algorithms AI Operations Center"
-  }'::jsonb
-)
-on conflict (slug) do update set
-  name = excluded.name,
-  type = excluded.type,
-  region = excluded.region,
-  status = excluded.status,
-  plan_code = excluded.plan_code,
-  data_residency = excluded.data_residency,
-  settings = excluded.settings;
+do $seed_workspace$
+declare
+  has_domain_mapping boolean;
+  identity_conflict boolean;
+begin
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema = current_schema()
+      and table_name = 'workspaces'
+      and column_name = 'domain_workspace_id'
+  ) into has_domain_mapping;
+
+  if has_domain_mapping then
+    execute $sql$
+      select exists (
+        select 1 from workspaces
+        where (domain_workspace_id = 'smart-algorithms-demo'
+            and id <> '00000000-0000-4000-8000-000000000001')
+           or (slug = 'smart-algorithms-demo'
+            and id <> '00000000-0000-4000-8000-000000000001')
+           or (id = '00000000-0000-4000-8000-000000000001'
+            and (slug is distinct from 'smart-algorithms-demo'
+              or domain_workspace_id is distinct from 'smart-algorithms-demo'))
+      )
+    $sql$ into identity_conflict;
+    if identity_conflict then
+      raise exception using
+        errcode = '23514',
+        constraint = 'smart_algorithms_demo_workspace_identity',
+        message = 'Smart Algorithms demo Workspace identity is contradictory.';
+    end if;
+    execute $sql$
+      insert into workspaces (
+        id, domain_workspace_id, name, slug, type, region, status,
+        plan_code, data_residency, settings
+      ) values (
+        '00000000-0000-4000-8000-000000000001',
+        'smart-algorithms-demo',
+        'Smart Algorithms Demo',
+        'smart-algorithms-demo',
+        'demo', 'RU', 'demo', 'internal-demo', 'RU',
+        '{"external_actions_locked_by_default":true,"approval_first":true,"roadmap_phase":"v0.1","product":"Smart Algorithms AI Operations Center"}'::jsonb
+      )
+      on conflict (id) do update set
+        name = excluded.name,
+        type = excluded.type,
+        region = excluded.region,
+        status = excluded.status,
+        plan_code = excluded.plan_code,
+        data_residency = excluded.data_residency,
+        settings = excluded.settings
+    $sql$;
+  else
+    select exists (
+      select 1 from workspaces
+      where (slug = 'smart-algorithms-demo'
+          and id <> '00000000-0000-4000-8000-000000000001')
+         or (id = '00000000-0000-4000-8000-000000000001'
+          and slug is distinct from 'smart-algorithms-demo')
+    ) into identity_conflict;
+    if identity_conflict then
+      raise exception using
+        errcode = '23514',
+        constraint = 'smart_algorithms_demo_workspace_identity',
+        message = 'Smart Algorithms demo Workspace identity is contradictory.';
+    end if;
+    execute $sql$
+      insert into workspaces (
+        id, name, slug, type, region, status, plan_code, data_residency, settings
+      ) values (
+        '00000000-0000-4000-8000-000000000001',
+        'Smart Algorithms Demo',
+        'smart-algorithms-demo',
+        'demo', 'RU', 'demo', 'internal-demo', 'RU',
+        '{"external_actions_locked_by_default":true,"approval_first":true,"roadmap_phase":"v0.1","product":"Smart Algorithms AI Operations Center"}'::jsonb
+      )
+      on conflict (id) do update set
+        name = excluded.name,
+        type = excluded.type,
+        region = excluded.region,
+        status = excluded.status,
+        plan_code = excluded.plan_code,
+        data_residency = excluded.data_residency,
+        settings = excluded.settings
+    $sql$;
+  end if;
+end;
+$seed_workspace$;
 
 insert into users (
   id,

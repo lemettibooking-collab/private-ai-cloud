@@ -2,50 +2,95 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { navigationItems } from "@/lib/navigation";
+import { LockIcon, navIcons } from "@/components/shell/icons";
+import type { Messages } from "@/lib/i18n/messages";
+import { ownerNavigation } from "@/lib/navigation";
+import { projectScopedHref, type ProjectScopedPath } from "@/lib/projects/project-context";
 
-export function Sidebar() {
+type SidebarProps = {
+  // Real, WORKSPACE-GLOBAL pending-approval count from the authenticated read path; null when unavailable.
+  pendingApprovals: number | null;
+  // The page's validated selected project (never parsed from the URL here); null = All Projects.
+  selectedProjectId: string | null;
+  // Localized navigation chrome (server dictionary); hrefs and structure come from lib/navigation.
+  labels: Messages["nav"];
+};
+
+// Project context is preserved on Dashboard / My Attention / Tasks / Runs / Approvals. Projects,
+// Roadmap and Settings are not project-scoped and navigate without a selector.
+export function Sidebar({ pendingApprovals, selectedProjectId, labels }: SidebarProps) {
+  const sectionLabels = labels.sections as Readonly<Record<string, string>>;
+  const itemLabels = labels.items as Readonly<Record<string, string>>;
   const pathname = usePathname();
 
   return (
-    <aside className="flex h-screen w-72 shrink-0 flex-col border-r border-slate-800 bg-slate-950 px-4 py-5">
-      <Link className="block rounded-lg border border-slate-800 bg-slate-900/70 p-4" href="/dashboard">
-        <p className="text-sm font-semibold text-slate-50">Private AI Cloud</p>
-        <p className="mt-1 text-xs text-slate-500">AI Operations Center</p>
-      </Link>
-
-      <nav className="mt-6 flex flex-1 flex-col gap-1">
-        {navigationItems.map((item) => {
-          const isActive =
-            pathname === item.href || pathname.startsWith(`${item.href}/`);
-
-          return (
-            <Link
-              className={`rounded-lg border px-3 py-3 transition ${
-                isActive
-                  ? "border-cyan-400/30 bg-cyan-400/10 text-cyan-100"
-                  : "border-transparent text-slate-300 hover:border-slate-800 hover:bg-slate-900/70"
-              }`}
-              href={item.href}
-              key={item.href}
-            >
-              <span className="block text-sm font-medium">{item.label}</span>
-              <span className="mt-0.5 block text-xs text-slate-500">
-                {item.description}
-              </span>
-            </Link>
-          );
-        })}
+    <aside className="pac-shell sticky top-12 hidden h-[calc(100vh-3rem)] w-56 shrink-0 flex-col border-r border-line md:flex">
+      <nav aria-label={labels.ariaLabel} className="flex flex-1 flex-col gap-4 overflow-y-auto px-2.5 py-4">
+        {ownerNavigation.map((section) => (
+          <div key={section.id}>
+            <p className="pac-label px-2.5 pb-1.5 !text-[9.5px] !text-ink-3/80">{sectionLabels[section.id] ?? section.id}</p>
+            <ul className="space-y-px">
+              {section.items.map((item) => {
+                const Icon = navIcons[item.href];
+                if (!item.available) {
+                  return (
+                    <li key={item.href}>
+                      <div
+                        aria-disabled="true"
+                        className="flex h-8 cursor-default items-center gap-2.5 rounded-[7px] border border-transparent px-2.5 text-[13px] text-ink-3/55"
+                        title={labels.notAvailableYet}
+                      >
+                        {Icon && <Icon className="h-4 w-4 shrink-0" />}
+                        <span className="flex-1">{itemLabels[item.href] ?? item.label}</span>
+                        <span className="text-[10px] uppercase tracking-[0.06em]">{labels.soon}</span>
+                      </div>
+                    </li>
+                  );
+                }
+                const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+                const href = item.projectScoped ? projectScopedHref(item.href as ProjectScopedPath, selectedProjectId) : item.href;
+                return (
+                  <li key={item.href}>
+                    <Link
+                      aria-current={active ? "page" : undefined}
+                      className={`group relative flex h-8 items-center gap-2.5 rounded-[7px] border px-2.5 text-[13px] transition-colors ${
+                        active ? "pac-nav-active font-medium text-ink" : "border-transparent text-ink-2 hover:border-line hover:bg-panel-2 hover:text-ink"
+                      }`}
+                      href={href}
+                    >
+                      {active && <span aria-hidden className="absolute inset-y-1.5 -left-2.5 w-[2px] rounded-r-full bg-accent" />}
+                      {Icon && <Icon className={`h-4 w-4 shrink-0 ${active ? "text-accent" : "text-ink-3 group-hover:text-ink-2"}`} />}
+                      <span className="flex-1 truncate">{itemLabels[item.href] ?? item.label}</span>
+                      {item.attentionCount && pendingApprovals !== null && pendingApprovals > 0 && (
+                        <span
+                          className="rounded-[3px] border border-warn/30 bg-warn/10 px-1.5 font-mono text-[11px] leading-4 text-warn"
+                          title={labels.pendingApprovalsTitle}
+                        >
+                          {pendingApprovals}
+                          <span className="sr-only"> {labels.pendingApprovalsSr}</span>
+                        </span>
+                      )}
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ))}
       </nav>
 
-      <div className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
-        <p className="text-xs font-medium uppercase tracking-[0.2em] text-slate-500">
-          External actions
-        </p>
-        <p className="mt-2 text-sm text-slate-200">Locked by default</p>
-        <p className="mt-1 text-xs leading-5 text-slate-500">
-          Publish, send, run, and integration actions require approval.
-        </p>
+      <div className="pac-inset mx-3 mb-3 px-3 py-2.5">
+        <p className="pac-label truncate !text-[9.5px]">{labels.controlPlane}</p>
+        <dl className="mt-2 space-y-1.5 text-[11.5px]">
+          <div className="flex items-center justify-between gap-2">
+            <dt className="text-ink-3">{labels.externalActions}</dt>
+            <dd className="flex items-center gap-1 text-[11.5px] text-ink-2"><LockIcon className="h-3 w-3" />{labels.locked}</dd>
+          </div>
+          <div className="flex items-center justify-between gap-2">
+            <dt className="text-ink-3">{labels.ownerWrites}</dt>
+            <dd className="text-[11.5px] text-ink-2">{labels.draftIntent}</dd>
+          </div>
+        </dl>
       </div>
     </aside>
   );
