@@ -38,7 +38,7 @@ test("68-record synthetic fixture survives source/revision persistence without F
 });
 test("missing/non-Owner/foreign identities cannot read source or planning state or decide",async()=>{
  const key=await project("planning-denied"),input=await upload(key),saved=await save(input);const i=live.installQueryInterceptor();let privateReads=0;i.observe(sql=>{if(/project-planning:|project-knowledge:/u.test(sql))privateReads++;});
- try{for(const subject of [null,"8102","8103"]){const p=services(subject).planning;for(const r of [await p.preview(input),await p.read(key),await p.sources(key),await p.save(saved.intent),await p.decide(decision(key,saved)),await p.prepareAI(input)])assert.notEqual(r.status,"ok");}assert.equal(privateReads,0);}finally{i.restore();}
+ try{for(const subject of [null,"8102","8103"]){const p=services(subject).planning;for(const r of [await p.preview(input),await p.read(key),await p.sources(key),await p.save(saved.intent),await p.decide(decision(key,saved)),await p.prepareAI(aiInput(input))])assert.notEqual(r.status,"ok");}assert.equal(privateReads,0);}finally{i.restore();}
 });
 test("source SHA/version/project substitution is denied; historical exact versions remain factual",async()=>{
  const key=await project("planning-source"),input=await upload(key),p=await preview(input);await upload(key,markdownProjectPlan({...representativeProjectPlan(),title:"Later source"}),"backlog.md",1);
@@ -83,7 +83,7 @@ test("DB rejects plan/approval provenance edits, forged decisions, and cross-pro
 });
 test("malformed/cyclic documents have preview findings and cannot save; AI prepare performs zero inference",async()=>{
  const key=await project("planning-invalid"),invalid=representativeProjectPlan();invalid.tasks[0].dependencyIds=[invalid.tasks[2].id];const input=await upload(key,markdownProjectPlan(invalid));const p=await preview(input);assert.equal(p.validation.plan,null);assert.equal((await s.planning.save({...input,previewFingerprint:p.previewFingerprint,expectedRevision:0})).status,"conflict");
- const ai=await s.planning.prepareAI(input);assert(ai.status==="ok");assert.equal(ai.value.capability.status,"blocked");assert(!JSON.stringify(ai).includes("Backlog task"));assert.equal(await count("project_tasks",key),0);
+ const ai=await s.planning.prepareAI(aiInput(input));assert(ai.status==="ok");assert.equal(ai.value.capability.status,"blocked");assert(!JSON.stringify(ai).includes("Backlog task"));assert.equal(await count("project_tasks",key),0);
 });
 test.after(async()=>{globalThis.fetch=originalFetch;assert.equal(fetches,0);await database.close();});
 test("new approval guards leave unrelated existing approval CRUD unchanged",async()=>{
@@ -228,4 +228,53 @@ test("C1: historical replay/read require matching task creation audit evidence",
   try{const result=operation==="read"?await s.planning.read(f.key):operation==="save"?await s.planning.save(f.saved.intent):await s.planning.decide(decision(f.key,f.saved));assert.deepEqual(result,{status:"unavailable"});}finally{i.restore();}
  }
  assert.deepEqual(await planningFacts(f.key),before);
+});
+
+// 03A: these tests run only through the separately authorized disposable-PG harness.
+const aiInput=(input:Awaited<ReturnType<typeof upload>>)=>({projectId:input.projectId,sources:[{filename:input.filename,version:input.version,sha256:input.sourceSha256}]});
+async function intakeState(){
+ const result:Record<string,unknown>={};
+ for(const table of ["project_planning_drafts","approval_requests","approval_decisions","project_tasks","workflow_runs","audit_events","workflow_model_budget_windows","workflow_model_budget_reservations","executor_exposure_budgets","executor_attempt_exposures","openai_api_daily_budgets"]){
+  result[table]=(await db.admin.query(`select count(*)::int n,md5(coalesce(string_agg(to_jsonb(t)::text,'' order by to_jsonb(t)::text),'')) digest from ${table} t where workspace_id=$1`,[A.id])).rows[0];
+ }
+ return result;
+}
+test("03A four source intake is canonical, project-scoped, exact historical and makes zero durable state changes",async()=>{
+ const key=await project("intake-four"),inputs=[];for(let n=0;n<4;n++)inputs.push(await upload(key,`Sensitive project requirement ${n}`,`context-${n}.md`));
+ const sources=inputs.map(i=>aiInput(i).sources[0]),before=await intakeState();const first=await s.planning.prepareAI({projectId:key,sources:[...sources].reverse()});assert(first.status==="ok");assert.equal(first.value.capability.status,"blocked");assert.equal(first.value.capability.runtimeDispatchAllowed,false);assert.deepEqual(first.value.sources,sources);assert.equal((await s.planning.prepareAI({projectId:key,sources})).status,"ok");
+ assert(!JSON.stringify(first).includes("Sensitive project requirement"));assert(!JSON.stringify(first).includes(A.id));assert(!JSON.stringify(first).includes(owner));assert.deepEqual(await intakeState(),before);
+ await upload(key,"new immutable source","context-0.md",1);const afterUpload=await intakeState();assert.deepEqual(await s.planning.prepareAI({projectId:key,sources}),first);assert.deepEqual(await intakeState(),afterUpload);
+ assert.equal((await s.planning.prepareAI({projectId:key,sources:[sources[0]]})).status,"ok");
+ for(const bad of [{...sources[0],version:50},{...sources[0],sha256:"a".repeat(64)}])assert.notEqual((await s.planning.prepareAI({projectId:key,sources:[bad]})).status,"ok");
+ const otherKey=await project("intake-other");await upload(otherKey,"different exact content","context-0.md");assert.notEqual((await s.planning.prepareAI({projectId:otherKey,sources})).status,"ok");assert.equal(fetches,0);
+});
+test("03A authorization precedes private source reads and retains paused/archived access rules",async()=>{
+ const key=await project("intake-auth"),input=aiInput(await upload(key,"private intake"));const i=live.installQueryInterceptor();let privateReads=0;i.observe(sql=>{if(/project-knowledge:|project-planning:source/u.test(sql))privateReads++;});
+ try{for(const subject of [null,"8102","8103"]){assert.notEqual((await services(subject).planning.prepareAI(input)).status,"ok");}assert.equal(privateReads,0);}finally{i.restore();}
+ await db.admin.query("update projects set status='paused' where workspace_id=$1 and project_key=$2",[A.id,key]);assert.equal((await s.planning.prepareAI(input)).status,"ok","existing read access permits paused projects");
+ await db.admin.query("update projects set status='archived' where workspace_id=$1 and project_key=$2",[A.id,key]);assert.deepEqual(await s.planning.prepareAI(input),{status:"unavailable"});
+});
+test("03A original identity, membership and Owner-role revocation before transaction deny intake",async()=>{
+ for(const mode of ["identity","member","role"] as const){const key=await project(`intake-revoke-${mode}`),input=aiInput(await upload(key,"private original identity content"));const pause=latch(),resume=latch(),i=live.installQueryInterceptor();let privateReads=0;i.observe(sql=>{if(/project-knowledge:/u.test(sql))privateReads++;});
+ i.rules.push(live.rule("before intake transaction",live.sqlTag("task-mutation:begin"),async(_c,sql,v,original)=>{pause.release();await bounded(resume.promise);return original(sql,v);}));const pending=s.planning.prepareAI(input);
+ try{await bounded(pause.promise);if(mode==="identity")await db.admin.query("update auth_identities set status='disabled' where provider_subject='8101'");else if(mode==="member")await db.admin.query("update workspace_members set status='disabled' where id=$1",[ownerMember]);else await db.admin.query("delete from member_role_assignments where member_id=$1 and role_id=$2",[ownerMember,ownerRole]);resume.release();assert.deepEqual(await bounded(pending),{status:"unavailable"});assert.equal(privateReads,0);
+ }finally{resume.release();await pending.catch(()=>undefined);i.restore();if(mode==="identity")await db.admin.query("update auth_identities set status='active' where provider_subject='8101'");else if(mode==="member")await db.admin.query("update workspace_members set status='active' where id=$1",[ownerMember]);else await db.admin.query("insert into member_role_assignments(member_id,role_id)values($1,$2)",[ownerMember,ownerRole]);}
+ assert.equal((await s.planning.prepareAI(input)).status,"ok");
+ }
+});
+test("03A project lock holds a coherent source pack while a new upload waits",async()=>{
+ const key=await project("intake-upload-race"),first=await upload(key,"original version","a.md"),second=await upload(key,"original second","b.md"),input={projectId:key,sources:[aiInput(first).sources[0],aiInput(second).sources[0]]};
+ const pause=latch(),resume=latch(),i=live.installQueryInterceptor();const uploadReachedLock=latch();
+ i.rules.push(live.rule("hold intake history",live.sqlTag("project-knowledge:history"),async(_c,sql,v,original)=>{pause.release();await bounded(resume.promise);return original(sql,v);}));
+ const preparing=s.planning.prepareAI(input);let uploading:ReturnType<typeof upload>|undefined;
+ try{await bounded(pause.promise);i.rules.push(live.rule("upload project lock",live.sqlTag("project-resources:project-lock"),async(_c,sql,v,original)=>{uploadReachedLock.release();return original(sql,v);}));
+ uploading=upload(key,"next exact version","a.md",1);await bounded(uploadReachedLock.promise);let waiting=false;for(let n=0;n<500&&!waiting;n++){waiting=(await db.admin.query("select exists(select 1 from pg_stat_activity where datname=current_database() and wait_event_type='Lock' and query like '%project-resources:project-lock%') waiting")).rows[0].waiting;if(!waiting)await new Promise(r=>setTimeout(r,2));}assert(waiting,"writer must wait on the project SHARE lock before source pack completes");resume.release();const result=await bounded(preparing);assert(result.status==="ok");assert.deepEqual(result.value.sources,input.sources);await bounded(uploading);
+ }finally{resume.release();await preparing.catch(()=>undefined);await uploading?.catch(()=>undefined);i.restore();}
+ assert.equal((await s.planning.prepareAI(input)).status,"ok");
+});
+test("03A oversize planning sources deny without truncation, writes or provider calls",async()=>{
+ const key=await project("intake-bounds");for(const [name,content]of [["long.md","x".repeat(16385)],["wide.md","界".repeat(12000)],["a.md","x".repeat(16384)],["b.md","x".repeat(16384)]] as const)await upload(key,content,name);
+ const list=await s.planning.sources(key);assert(list.status==="ok");const before=await intakeState();
+ for(const sources of [[list.value.find(s=>s.filename==="long.md")!],[list.value.find(s=>s.filename==="wide.md")!],list.value.filter(s=>s.filename==="a.md"||s.filename==="b.md")]){assert.deepEqual(await s.planning.prepareAI({projectId:key,sources}),{status:"invalid_input"});}
+ assert.deepEqual(await intakeState(),before);assert.equal(fetches,0);
 });

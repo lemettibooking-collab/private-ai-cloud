@@ -79,3 +79,100 @@ test("task field limits/types/control characters and nested accessors deny witho
  for(const change of cases){const p=representativeProjectPlan();change(p.tasks[0]);assert.equal(c.validateProjectPlan(p).plan,null);}
  let reads=0;const p=representativeProjectPlan();Object.defineProperty(p.tasks[0],"title",{get(){reads++;throw Error("secret");}});assert.equal(c.validateProjectPlan(p).plan,null);assert.equal(reads,0);
 });
+
+// PAC-PLAN-03A: fake SQL exercises the actual authorized-version reader, never a DB connection.
+const intakeSha=(content:string)=>createHash("sha256").update(content).digest("hex");
+const intakeDocs=()=>Array.from({length:4},(_,i)=>({filename:`context-${i}.md`,versions:[`Private source ${i}: do not return this body`]}));
+function intakeFixture(docs=intakeDocs(),workspaceId="workspace-private") {
+ const queries:string[]=[];let transactions=0;
+ const client={query:async(sql:string,values:unknown[])=>{
+  queries.push(sql);assert.match(sql,/^\s*(?:\/\*[^]*?\*\/\s*)?select\b/iu,"preparation SQL must be read-only");assert.equal(values[0],workspaceId);
+  const doc=docs.find(d=>d.filename===values[2]);assert(doc,"unexpected private read");
+  if(sql.includes("project-knowledge:history")){const rows=doc.versions.map((content,i)=>({id:`${doc.filename}-${i+1}`,version:i+1,sha256:intakeSha(content),created_at:new Date("2026-11-14T00:00:00Z"),current_version_id:`${doc.filename}-${doc.versions.length}`})).reverse();return{rowCount:rows.length,rows};}
+  if(sql.includes("project-knowledge:content")){const n=Number(String(values[3]).split("-").at(-1));return{rowCount:1,rows:[{content:Buffer.from(doc.versions[n-1])}]};}
+  assert(sql.includes("project-planning:source"));return{rowCount:1,rows:[{id:`private-id-${doc.filename}`}]};
+ }};
+ const access={run:async(projectId:string,write:boolean,work:(client:unknown,context:unknown)=>Promise<unknown>)=>{transactions++;assert.equal(write,false);try{return{status:"ok",value:await work(client,{workspaceId,userId:"private-owner",project:{project_key:projectId}})};}catch{return{status:"unavailable"};}}};
+ const planning=service.createProjectPlanning(access as unknown as Parameters<typeof service.createProjectPlanning>[0]);
+ const sources=docs.map(d=>({filename:d.filename,version:1,sha256:intakeSha(d.versions[0])}));
+ return{planning,access,docs,sources,queries,transactions:()=>transactions};
+}
+function intakeForm(sources:unknown,projectId="project-a"){const f=new FormData();f.set("projectId",projectId);f.set("sources",typeof sources==="string"?sources:JSON.stringify(sources));return f;}
+
+test("03A RED/GREEN actual prepare action → composition → form → version reader accepts four sources but remains blocked",async()=>{
+ const {createRequire}=await import("node:module");const require=createRequire(import.meta.url),ts=require("typescript"),f=intakeFixture();let auths=0,closes=0,providerCalls=0;
+ const database={close:async()=>{closes++;}};
+ const load=(path:string,modules:Record<string,unknown>)=>{const js=ts.transpileModule(readFileSync(new URL(`../${path}`,import.meta.url),"utf8"),{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText;const m:{exports:Record<string,(...args:unknown[])=>Promise<unknown>>}={exports:{}};new Function("require","module","exports",js)((name:string)=>{if(!Object.hasOwn(modules,name)){providerCalls++;assert.fail(`Unexpected dependency ${name}`);}return modules[name];},m,m.exports);return m.exports;};
+ const composition=load("lib/composition/owner-project-planning.server.ts",{"server-only":{},"next/server":{connection:async()=>undefined},"../auth/next-auth.server":{auth:async()=>{auths++;return{pacIdentity:{provider:"github",providerSubject:"synthetic"}};}},"../db/postgres":{createWorkflowRuntimePostgresDatabase:()=>database},"../projects/project-owner-access":{createProjectOwnerAccess:()=>f.access},"../projects/repository-binding":{createRepositoryBinding:()=>({})},"../planning/project-planning":service,"../planning/project-planning-form":transport});
+ const actions=load("app/projects/[projectId]/planning/actions.ts",{"next/cache":{revalidatePath:()=>assert.fail("prepare invalidated state")},"@/lib/composition/owner-project-planning.server":composition});
+ const r=await actions.prepareProjectAIPlanAction(null,intakeForm([...f.sources].reverse())) as {status:string;prepared:{sources:unknown[];sourceBytes:number;requestFingerprint:string;capability:{runtimeDispatchAllowed:boolean}}};
+ assert.equal(r.status,"blocked");assert.equal(auths,1);assert.equal(closes,1);assert.equal(providerCalls,0);assert.equal(f.transactions(),1);assert.equal(r.prepared.capability.runtimeDispatchAllowed,false);assert.deepEqual(r.prepared.sources,f.sources);assert.equal(f.queries.length,12);
+ const publicBytes=JSON.stringify(r);for(const secret of ["Private source","private-owner","workspace-private","private-id-","messages","content"]){assert(!publicBytes.includes(secret),secret);}
+});
+test("03A one/four source projection is exact, frozen, canonical and tenant/project-bound",async()=>{
+ const f=intakeFixture();const invoke=(sources:unknown,projectId="project-a")=>f.planning.prepareAI({projectId,sources});
+ const a=await invoke(f.sources) as {status:string;value:{sources:unknown[];sourceBytes:number;requestFingerprint:string;capability:unknown}};assert.equal(a.status,"ok");assert.deepEqual(Object.keys(a.value).sort(),["capability","requestFingerprint","sourceBytes","sources"]);assert.deepEqual(a.value.sources,f.sources);assert(Object.isFrozen(a.value.sources));
+ const data=f.docs.map((d,i)=>({...f.sources[i],content:d.versions[0]}));assert.equal(a.value.sourceBytes,Buffer.byteLength(JSON.stringify(data)));
+ const b=await invoke([...f.sources].reverse()) as typeof a;assert.equal(a.value.requestFingerprint,b.value.requestFingerprint);assert.equal((await invoke([f.sources[0]])).status,"ok");
+ assert.notEqual((await invoke(f.sources,"project-b") as typeof a).value.requestFingerprint,a.value.requestFingerprint);
+ assert.notEqual((await intakeFixture(intakeDocs(),"other-private-tenant").planning.prepareAI({projectId:"project-a",sources:f.sources}) as typeof a).value.requestFingerprint,a.value.requestFingerprint);
+ const expected=c.planDigest(["pac.project-ai-intake.v1","workspace-private","project-a",f.sources,c.prepareProjectAIPlanning(data).fingerprint]);assert.equal(a.value.requestFingerprint,expected);
+});
+test("03A form rejects malformed/duplicate/oversized selectors and forged authority; manual transport unchanged",()=>{
+ const f=intakeFixture();assert.deepEqual(transport.projectPlanningForm(intakeForm(f.sources),"prepareAI"),{projectId:"project-a",sources:f.sources});
+ const invalid:unknown[]=[[],[...f.sources,f.sources[0]],[f.sources[0],{...f.sources[0],version:2}],[{...f.sources[0],content:"forged"}],[{...f.sources[0],version:"1"}],[{...f.sources[0],filename:"../secret.md"}],[{...f.sources[0],sha256:"X".repeat(64)}],"[",'[ {"filename":"a.md","filename":"b.md","version":1,"sha256":"'+"a".repeat(64)+'"} ]'," ".repeat(2049),JSON.stringify(f.sources)+" ".repeat(2048)," ".repeat(1025)+"é".repeat(512)];
+ for(const value of invalid)assert.equal(transport.projectPlanningForm(intakeForm(value),"prepareAI"),null,JSON.stringify(value).slice(0,80));
+ for(const key of ["source","workspaceId","userId","content","prompt","model","budget","authority"]){const form=intakeForm(f.sources);form.set(key,"forged");assert.equal(transport.projectPlanningForm(form,"prepareAI"),null,key);}
+ const duplicate=intakeForm(f.sources);duplicate.append("sources","[]");assert.equal(transport.projectPlanningForm(duplicate,"prepareAI"),null);
+ const manual=new FormData();manual.set("projectId","project-a");manual.set("source",`${f.sources[0].filename}|1|${f.sources[0].sha256}`);assert.deepEqual(transport.projectPlanningForm(manual,"preview"),{projectId:"project-a",filename:f.sources[0].filename,version:1,sourceSha256:f.sources[0].sha256});assert.equal(transport.projectPlanningForm(manual,"prepareAI"),null);
+});
+test("03A service rejects proxy/accessor/sparse/extra selectors without invoking authority or reading data",async()=>{
+ const f=intakeFixture();let traps=0;const getter={...f.sources[0]};Object.defineProperty(getter,"filename",{get(){traps++;throw Error("private-marker");}});
+ const proxy=new Proxy(f.sources,{get(){traps++;throw Error("private-marker");}}),sparse=new Array(1);const extra=[f.sources[0]];Object.defineProperty(extra,"extra",{value:"forged"});
+ for(const sources of [[],[...f.sources,f.sources[0]],[f.sources[0],f.sources[0]],[getter],proxy,sparse,extra,[{...f.sources[0],workspaceId:"x"}],[{...f.sources[0],version:51}]])assert.deepEqual(await f.planning.prepareAI({projectId:"project-a",sources}),{status:"invalid_input"});
+ assert.deepEqual(await f.planning.prepareAI({projectId:"project-a",sources:f.sources,authority:true}),{status:"invalid_input"});assert.equal(traps,0);assert.equal(f.transactions(),0);assert.equal(f.queries.length,0);
+});
+test("03A immutable historical selection and SHA changes bind preparation; no truncation at existing bounds",async()=>{
+ const f=intakeFixture();const input={projectId:"project-a",sources:[f.sources[0]]};const a=await f.planning.prepareAI(input);assert.equal(a.status,"ok");f.docs[0].versions.push("new private content");assert.deepEqual(await f.planning.prepareAI(input),a);
+ const b=await f.planning.prepareAI({projectId:"project-a",sources:[{...f.sources[0],version:2,sha256:intakeSha("new private content")}]});assert.equal(b.status,"ok");assert.notDeepEqual(a,b);
+ for(const source of [{...f.sources[0],sha256:"a".repeat(64)},{...f.sources[0],version:3}])assert.notEqual((await f.planning.prepareAI({projectId:"project-a",sources:[source]})).status,"ok");
+ for(const docs of [[{filename:"big.md",versions:["x".repeat(16385)]}],[{filename:"a.md",versions:["x".repeat(16384)]},{filename:"b.md",versions:["x".repeat(16384)]}],[{filename:"wide.md",versions:["界".repeat(12000)]}]]){const large=intakeFixture(docs);const r=await large.planning.prepareAI({projectId:"project-a",sources:large.sources});assert.equal(r.status,"invalid_input");assert(!JSON.stringify(r).includes("xxxx"));}
+});
+
+test("03A actual client forms keep manual selection independent and render bounded AI metadata in EN/RU",async()=>{
+ const {createRequire}=await import("node:module");const require=createRequire(import.meta.url),ts=require("typescript"),React=require("react"),{renderToStaticMarkup}=require("react-dom/server");
+ const copy=await import(new URL("../lib/i18n/project-planning-copy.ts",import.meta.url).href);const f=intakeFixture(),keys=f.sources.map(s=>`${s.filename}|${s.version}|${s.sha256}`);
+ const js=ts.transpileModule(readFileSync(new URL("../components/domain/owner-console/project-planning-forms.tsx",import.meta.url),"utf8"),{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText;
+ const ai=async()=>({status:"blocked"});
+ for(const locale of ["en","ru"] as const){const cpy=copy.projectPlanningCopy(locale);const compiled:{exports:Record<string,(props:unknown)=>unknown>}={exports:{}};
+ const fakeReact={...React,useState:(initial:unknown)=>[Array.isArray(initial)?keys:initial,()=>undefined],useActionState:(action:unknown)=>[action===ai?{status:"blocked",prepared:{sources:[{...f.sources[0],filename:"<img src=x onerror=hostile>"},...f.sources.slice(1)],sourceBytes:240,requestFingerprint:"f".repeat(64)}}:{status:"idle"},action,false]};
+ new Function("require","module","exports",js)((name:string)=>name==="react"?fakeReact:require(name),compiled,compiled.exports);
+ const html=renderToStaticMarkup(React.createElement(compiled.exports.PlanningSourceForm,{projectId:"project-a",sources:f.sources,c:cpy,previewAction:async()=>({status:"idle"}),saveAction:async()=>({status:"idle"}),aiAction:ai}));
+ const hidden=[...html.matchAll(/<input[^>]*name="(source|sources)"[^>]*>/gu)].map(x=>x[0]);assert.equal(hidden.filter(x=>x.includes('name="source"')).length,1);assert.equal(hidden.filter(x=>x.includes('name="sources"')).length,1);assert.match(html,/multiple=""/u);assert(html.includes("f".repeat(64)));assert(html.includes("240"));assert(html.includes(cpy.blocked));assert(!html.includes("Private source"));assert(html.includes("&lt;img src=x onerror=hostile&gt;"));assert(!html.includes("<img"));
+ for(const source of f.sources){assert(html.includes(source.filename));assert(html.includes(source.sha256));}
+ }
+});
+
+test("03A exact selector and source-byte boundaries are enforced without changing pure helper limits",async()=>{
+ const f=intakeFixture(),json=JSON.stringify(f.sources);const form=intakeForm(json+" ".repeat(2048-Buffer.byteLength(json)));assert(transport.projectPlanningForm(form,"prepareAI"));form.set("sources",String(form.get("sources"))+" ");assert.equal(transport.projectPlanningForm(form,"prepareAI"),null);
+ const rows=[{filename:"a.md",version:1,sha256:intakeSha(""),content:""},{filename:"b.md",version:1,sha256:intakeSha(""),content:""}];const bytes=32768-Buffer.byteLength(JSON.stringify(rows));
+ const docs=[{filename:"a.md",versions:["x".repeat(Math.floor(bytes/2))]},{filename:"b.md",versions:["x".repeat(bytes-Math.floor(bytes/2))]}];const boundary=intakeFixture(docs);const r=await boundary.planning.prepareAI({projectId:"project-a",sources:boundary.sources});assert(r.status==="ok");assert.equal(r.value.sourceBytes,32768);
+ docs[1].versions[0]+="x";const overflow=intakeFixture(docs);assert.deepEqual(await overflow.planning.prepareAI({projectId:"project-a",sources:overflow.sources}),{status:"invalid_input"});
+ const maxString=intakeFixture([{filename:"a.md",versions:["x".repeat(16384)]}]);assert.equal((await maxString.planning.prepareAI({projectId:"project-a",sources:maxString.sources})).status,"ok");
+});
+test("03A actual selector events keep manual import separate; invalid AI selections disable only preparation",async()=>{
+ const {createRequire}=await import("node:module");const require=createRequire(import.meta.url),ts=require("typescript");const copy=await import(new URL("../lib/i18n/project-planning-copy.ts",import.meta.url).href);
+ const fixture=intakeFixture([...intakeDocs(),{filename:"extra.md",versions:["fifth"]}]);const sources=[...fixture.sources,{...fixture.sources[0],version:2}];const keys=sources.map(s=>`${s.filename}|${s.version}|${s.sha256}`);let manual=keys[0],selected:string[]=[];
+ const hook={useState:(initial:unknown)=>Array.isArray(initial)?[selected,(next:string[])=>{selected=next;}]:[manual,(next:string)=>{manual=next;}],useActionState:(action:unknown)=>[{status:"idle"},action,false]};
+ const js=ts.transpileModule(readFileSync(new URL("../components/domain/owner-console/project-planning-forms.tsx",import.meta.url),"utf8"),{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText;
+ const compiled:{exports:Record<string,(props:unknown)=>unknown>}={exports:{}};new Function("require","module","exports",js)((name:string)=>name==="react"?hook:require(name),compiled,compiled.exports);
+ type Element={type:unknown;props:Record<string,unknown>};
+ const action=async()=>({status:"idle"});const render=()=>{const elements:Element[]=[];function walk(node:unknown):void{if(Array.isArray(node)){node.forEach(walk);return;}if(!node||typeof node!=="object")return;const e=node as Element;if(typeof e.type==="function"){walk(e.type(e.props));return;}if(e.props){elements.push(e);walk(e.props.children);}}
+ walk(compiled.exports.PlanningSourceForm({projectId:"project-a",sources,c:copy.projectPlanningCopy("en"),previewAction:action,saveAction:action,aiAction:action}));return elements;};
+ const select=(values:string[])=>{const e=render().find(e=>e.type==="select"&&e.props.multiple)!;(e.props.onChange as (event:unknown)=>void)({currentTarget:{selectedOptions:values.map(value=>({value}))}});};
+ const disabled=()=>render().find(e=>e.type==="button"&&e.props.children===copy.projectPlanningCopy("en").prepareAI)!.props.disabled;
+ assert.equal(disabled(),true);select(keys.slice(0,4));assert.equal(disabled(),false);assert.equal(manual,keys[0]);
+ const ai=render().find(e=>e.type==="input"&&e.props.name==="sources")!;assert.deepEqual(JSON.parse(ai.props.value as string),sources.slice(0,4));
+ const single=render().find(e=>e.type==="select"&&!e.props.multiple)!;(single.props.onChange as(event:unknown)=>void)({target:{value:keys[1]}});assert.equal(manual,keys[1]);assert.deepEqual(selected,keys.slice(0,4));
+ for(const invalid of [[],keys.slice(0,5),[keys[0],keys[5]],["forged"]]){select(invalid);assert.equal(disabled(),true);}
+});

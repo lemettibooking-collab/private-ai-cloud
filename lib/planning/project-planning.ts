@@ -12,6 +12,9 @@ import { isDocumentFilename, readProjectKnowledgeVersion } from "../projects/pro
 // @ts-expect-error Direct Node TypeScript execution requires the extension.
 import { planDigest, planningTaskKey, parseProjectPlanningDocument, validateProjectPlan, prepareProjectAIPlanning, projectAIPlanningCapability } from "./project-planning-contract.ts";
 
+// @ts-expect-error Direct Node TypeScript execution requires the extension.
+import { projectAIPlanningInput } from "./project-planning-form.ts";
+
 type Access = ReturnType<typeof createProjectOwnerAccess>;
 type Row = Record<string,unknown>;
 const hash = (v:unknown):v is string => typeof v==="string" && v.length===64 && /^[a-f0-9]{64}$/u.test(v);
@@ -131,13 +134,24 @@ export function createProjectPlanning(access:Access) {
         await audit(client,context,row,`project.plan_${f.decision}`);return {outcome:f.decision as "approved"|"rejected",revision:row.revision as number};
       });
     },
-    prepareAI(raw:unknown){
-      const f=selector(raw,["projectId","filename","version","sourceSha256"]);if(!f)return Promise.resolve({status:"invalid_input" as const});
-      return access.run(f.projectId,false,async(client,context)=>{
-        const s=await source(client,context,f.projectId as string,f.filename as string,f.version as number,f.sourceSha256 as string);
-        const prepared=prepareProjectAIPlanning([{filename:s.filename,version:s.version,sha256:s.sha256,content:s.content}]);
-        return Object.freeze({capability:projectAIPlanningCapability,source:Object.freeze({filename:s.filename,version:s.version,sha256:s.sha256}),requestFingerprint:prepared.fingerprint});
+    async prepareAI(raw:unknown){
+      const f=projectAIPlanningInput(raw);if(!f)return Object.freeze({status:"invalid_input" as const});
+      const result=await access.run(f.projectId,false,async(client,context)=>{
+        const data=[];
+        for(const selected of f.sources){
+          const s=await source(client,context,f.projectId,selected.filename,selected.version,selected.sha256);
+          data.push(Object.freeze({filename:s.filename,version:s.version,sha256:s.sha256,content:s.content}));
+        }
+        // Only pure preparation failures become bounded input errors; DB/authority errors
+        // retain the existing opaque access boundary. Never truncate Knowledge content.
+        let prepared;
+        try{prepared=prepareProjectAIPlanning(data);}catch{return null;}
+        return Object.freeze({capability:projectAIPlanningCapability,sources:f.sources,
+          sourceBytes:Buffer.byteLength(JSON.stringify(data),"utf8"),
+          requestFingerprint:planDigest(["pac.project-ai-intake.v1",context.workspaceId,f.projectId,f.sources,prepared.fingerprint])});
       });
+      if(result.status!=="ok")return result;
+      return result.value===null?Object.freeze({status:"invalid_input" as const}):Object.freeze({status:"ok" as const,value:result.value});
     },
   });
 }
