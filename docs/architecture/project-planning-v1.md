@@ -237,3 +237,58 @@ prepare/authorization/read subtrees also include project and exact selected mani
 in their keys, so a project transition or changed selection cannot retain a previous
 offer, consent, submission state or displayed proposal. Durable operation links keep
 their original project path; retrieving them still requires server authorization.
+
+## PAC-PLAN-03B.3 — local OpenAI adapter integration (candidate)
+
+The trusted generation composition now accepts a version-2 offer only in explicit
+`fake_sdk_only` mode. It uses the existing OpenAI ModelProvider with a mandatory
+injected SDK client, protected credential-store generation/limit checks and the
+existing runtime. Production Server Actions remain unbound. No environment switch,
+real SDK default, subscription fallback, task creation or executor dispatch is added.
+`runtimeDispatchAllowed=false`.
+
+The v2 fingerprint includes credential generation, complete normalized limits,
+full fresh pricing evidence and a positive bounded preflight allowance. Sources,
+purpose, exact dated model/version and official destination remain pinned. The
+credential lock spans the operation. Count and create both enforce context-byte
+bounds; native count remains authoritative. Create pins the default service tier
+and rejects missing/changed response tier as ambiguous. Model discovery is denied.
+
+Additive migrations 0026/0027 introduce a planner reservation referencing the exact
+workspace/project/generation and the existing workspace/day budget serialization.
+Both planner and API executor aggregate settled exposure plus unresolved full holds
+from both purposes. Reserve precedes native count. No estimated token count grants
+permission. A factual successful generation accounts separately rounded uncached
+input/output usage plus the conservative preflight allowance; that allowance is
+consumed at its full bound, not claimed as actual provider preflight billing. Count
+failure, start denial and ambiguity retain the full reservation. Invalid proposal
+text still accounts for factual generation usage. SQL fences protect immutable
+identity, cost evidence and same-transaction financial audit.
+
+An OpenAI project-planning start requires a DB-only extension inside the existing
+provider-start transaction. It rechecks original GitHub identity, Owner membership,
+active project, durable consent/provenance, runtime fingerprint, current reviewed
+policy, reserved UTC day, expiry and financial exposure. Checks use the current
+client and branded tenant, never a second connection or network/file await. The
+financial start update checks consent and pricing expiry after lock waits. Existing
+lease/revision/pause/identity/runtime budget checks remain mandatory, including a
+lease recheck after extension locks. Missing extension fails closed.
+
+This is local integration evidence, not a live-provider binding or a billing
+certification. Before any live activation, separately review and authorize protected
+current pricing/config revision authority (including concurrent replacement), exact
+native-count charging evidence, bounded provider transport and response tier/usage,
+real credential/access and complete staging recovery/financial gates. A positive
+fake preflight allowance is not evidence of a live endpoint's billing maximum.
+ChatGPT subscription access does not provide API financial or document-egress
+permission. Paid inference and autonomous end-to-end smoke remain deferred to the
+separately approved VPS staging phase. Generated proposal approval/save and downstream
+Development Workflow integrations require their subsequent scoped tasks and gates.
+
+### Corrective 02: UTC financial admission
+
+Reservation admission uses PostgreSQL `clock_timestamp()` after the shared workspace/day lock, with day equality also in the INSERT. Provider-start repeats the day check after financial locks and includes UTC day equality in the atomic started UPDATE alongside consent/pricing expiry. Rollover denies and rolls back; reservations never migrate to another day.
+
+The injected fake SDK count wrapper requires a final admission callback. It reuses request admission, current Owner/identity/project authority and the reviewed policy, locks the exact durable generation/reservation, then checks current database UTC day, original request/policy/Owner/project bindings and expiry after those locks. The transaction commits before SDK count; no network or SDK await occurs inside it. Existing unresolved exposure remains on denial; replay does not replace reservations or dispatch again.
+
+Authoritative financial admission time is the current PostgreSQL clock evaluated by the final reservation INSERT, count-admission SELECT after locks, or provider-start UPDATE respectively. It is neither transaction start time nor physical network transmission time. No deliberate asynchronous work is inserted between completion of count admission and the injected count invocation. Commit, promise scheduling, process suspension and eventual network transmission cannot be made physically atomic by this check; future live activation must separately assess these timing limits. Production remains unbound and `runtimeDispatchAllowed=false`.

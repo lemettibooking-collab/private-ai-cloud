@@ -1,3 +1,12 @@
+// @ts-expect-error Direct Node execution requires extension.
+import { admitPlanningApiCount } from '../db/project-planning-api-reservations.ts';
+// @ts-expect-error Direct Node execution requires extension.
+import { exactOwnData } from '../db/executor-start-transaction.ts';
+import type { PlanningOpenAIFakeBinding } from './project-planning-openai-binding';
+// @ts-expect-error Direct Node execution requires extension.
+import { createPlanningOpenAIFakeProvider,samePlanningCredentialLimits } from './project-planning-openai-binding.ts';
+// @ts-expect-error Direct Node execution requires extension.
+import { lockProjectOwner } from '../projects/project-owner-access.ts';
 import type { ModelInvocationDataHandlingEvidenceResolver } from '../contracts/model-invocation-execution';
 import type { ModelProvider, ModelProviderIdentity } from '../contracts/model-provider-adapter';
 import type { WorkflowRuntimeDatabase } from '../db/workflow-runtime-store';
@@ -47,14 +56,36 @@ export function projectGenerationEgress(input:EgressInput):ModelInvocationDataHa
 }
 
 /** Trusted test/server composition only; no route, environment credential lookup or production binding. */
-export function createProjectPlanningGeneration(config:Readonly<{database:WorkflowRuntimeDatabase;domainWorkspaceId:string;session:unknown;policy:()=>unknown;provider:ModelProvider}>){
+export function createProjectPlanningGeneration(config:Readonly<{database:WorkflowRuntimeDatabase;domainWorkspaceId:string;session:unknown;policy:()=>unknown;provider:ModelProvider;openAIFake?:PlanningOpenAIFakeBinding}>){
  const session=snapshotProjectSession(config.session);
  const access=createProjectOwnerAccess({database:config.database,domainWorkspaceId:config.domainWorkspaceId,session});
  const requests=createProjectGenerationRequests({access,domainWorkspaceId:config.domainWorkspaceId,identityFingerprint:planDigest(session?.pacIdentity??null),policy:config.policy});
- async function generate(raw:unknown){
-  // Never accepts a real provider, even if an injected configuration is accidentally broadened.
+ async function generate(raw:unknown){try{return await generateAuthorized(raw);}catch{return{status:'recovery_required'};}}
+ async function generateAuthorized(raw:unknown){
   const p=projectGenerationPolicy(config.policy());
-  if(!p||config.provider.identity.providerKind!=='mock'||!sameIdentity(config.provider.identity,p.identity))return{status:'provider_unavailable'};
+  if(!p?.api)return generateWithProvider(raw,config.provider);
+  if(!config.openAIFake||!session)return{status:'provider_unavailable'};
+  // Resolve Owner authority before touching even the isolated test credential store.
+  const r=exactOwnData(raw,['projectId','sources','offerFingerprint','operationKey','consent']);if(!r)return{status:'invalid_input'};
+  const owner=await access.run(r.projectId,false,async(_client,c)=>c.userId);if(owner.status!=='ok')return{status:'authorization_denied'};
+  try{return await config.openAIFake.credentials.withKey({ownerUserId:owner.value,domainWorkspaceId:config.domainWorkspaceId},p.api.credentialGeneration,async(key,limits)=>{
+   if(!samePlanningCredentialLimits(p,limits)||planDigest(projectGenerationPolicy(config.policy()))!==planDigest(p))return{status:'authorization_denied'};
+   const provider=createPlanningOpenAIFakeProvider(p,key,config.openAIFake!,async()=>{
+    const admitted=await requests.admit(r.projectId as string,r.operationKey as string);
+    if(admitted.status!=='ok'||planDigest(admitted.value.policy)!==planDigest(p))throw Error('planning_count_denied');
+    const checked=await access.run(r.projectId,true,async(client,c)=>{
+     if(c.userId!==owner.value||planDigest(projectGenerationPolicy(config.policy()))!==planDigest(p))throw Error('planning_count_denied');
+     await admitPlanningApiCount(client,c,admitted.value.row,p);
+    });
+    if(checked.status!=='ok'||planDigest(projectGenerationPolicy(config.policy()))!==planDigest(p))throw Error('planning_count_denied');
+   });if(!provider)return{status:'provider_unavailable'};
+   return generateWithProvider(raw,provider);
+  });}catch{return{status:'recovery_required'};}
+ }
+ async function generateWithProvider(raw:unknown,provider:ModelProvider){
+  // v1 stays mock-only; OpenAI identity requires the explicit fake-SDK composition.
+  const p=projectGenerationPolicy(config.policy());
+  if(!p||(!p.api&&provider.identity.providerKind!=='mock')||(p.api&&!config.openAIFake)||!sameIdentity(provider.identity,p.identity))return{status:'provider_unavailable'};
   const begun=await requests.begin(raw);if(begun.status!=='ok')return{status:begun.status};
   const row=begun.value.row,projectId=row.project_key as string,key=row.operation_key as string;
   if(begun.value.kind==='replayed')return read(projectId,key);
@@ -64,14 +95,20 @@ export function createProjectPlanningGeneration(config:Readonly<{database:Workfl
    const v=admitted.value,ids=planningRunIds(row.run_id as string);
    const timing=validateProviderClaimLeaseTiming({providerTimeoutMs:120000,claimLeaseDurationMs:300000}).timing;
    if(!timing)return{status:'recovery_required'};
-   const persistence=await createPostgresWorkflowRuntimePersistence({database:config.database,domainWorkspaceId:config.domainWorkspaceId,providerExecutionTiming:timing});
+   const persistence=await createPostgresWorkflowRuntimePersistence({database:config.database,domainWorkspaceId:config.domainWorkspaceId,providerExecutionTiming:timing,...(p.api?{projectPlanningStart:async(client:import('../db/workflow-runtime-store').WorkflowRuntimeSqlClient,tenant:import('../db/workflow-runtime-tenant').ResolvedWorkflowRuntimeTenant,reservation:import('../workflows/agent-step-runtime').AgentStepModelBudgetReservation)=>{
+    if(!session)throw Error('planning_start_denied');
+    await lockProjectOwner(client,tenant,v.ownerUserId,session.pacIdentity);
+    const project=await client.query(`select * from projects where workspace_id=$1 and project_key=$2 and status='active' for share`,[tenant.workspaceDatabaseId,projectId]);
+    if(project.rowCount!==1)throw Error('planning_start_denied');
+    await requests.startInTransaction(client,{workspaceId:tenant.workspaceDatabaseId,userId:v.ownerUserId,project:project.rows[0]},reservation,tenant);
+   }}:{})});
    if(!persistence)return{status:'recovery_required'};
    const state=createProjectGenerationRunState({workspaceId:config.domainWorkspaceId,planningKey:ids.runId,project:{projectId,displayName:v.projectName},createdAt:new Date().toISOString(),policy:v.policy});
    if(!state)return{status:'recovery_required'};
    let expectedFingerprint:string|null=null,attemptStartedAt:string|null=null,expectedRevision:number|null=null;
    const now=()=>new Date().toISOString();
    let egress:ModelInvocationDataHandlingEvidenceResolver|null=null;
-   const service=createWorkflowRuntimeService({store:persistence.stateStore,providers:[config.provider],authorizer:{authorize:command=>command.actorId===v.ownerUserId&&command.runId===ids.runId&&['start','advance'].includes(command.action)},requirementsResolver:planningRequirementsResolver(v.policy),runtimeContext:{now},evidenceResolver:{async resolve(request){
+   const service=createWorkflowRuntimeService({store:persistence.stateStore,providers:[provider],authorizer:{authorize:command=>command.actorId===v.ownerUserId&&command.runId===ids.runId&&['start','advance'].includes(command.action)},requirementsResolver:planningRequirementsResolver(v.policy),runtimeContext:{now},evidenceResolver:{async resolve(request){
     if(!expectedFingerprint||expectedRevision===null)return null;
     // Agent Step Runtime uses the same trusted occurredAt for step_started and evaluation.
     attemptStartedAt??=request.evaluatedAt;

@@ -1,3 +1,11 @@
+// @ts-expect-error Direct Node execution requires extension.
+import { isResolvedWorkflowRuntimeTenant } from '../db/workflow-runtime-tenant.ts';
+// @ts-expect-error Direct Node execution requires extension.
+import { openAIApiUsageCost } from '../integrations/openai-api/openai-api-policy.ts';
+import type { ResolvedWorkflowRuntimeTenant } from '../db/workflow-runtime-tenant';
+import type { AgentStepModelBudgetReservation } from '../workflows/agent-step-runtime';
+// @ts-expect-error Direct Node execution requires extension.
+import { reservePlanningApi,startPlanningApi,settlePlanningApi } from '../db/project-planning-api-reservations.ts';
 import { randomBytes, createHash } from 'node:crypto';
 import type { WorkflowRuntimeSqlClient } from '../db/workflow-runtime-store';
 import type { createProjectOwnerAccess, ProjectOwnerContext } from '../projects/project-owner-access';
@@ -55,7 +63,7 @@ export function createProjectGenerationRequests(input:Readonly<{access:Access;id
   if(!storedManifest||planDigest(manifest)!==planDigest(storedManifest.sources))throw new Unavailable();
   const selected=projectAIPlanningInput({projectId:row.project_key,sources:manifest});if(!selected)throw new Unavailable();
   const prepared=await prepareAuthorizedProjectGeneration(client,c,selected);
-  const storedPolicy=projectGenerationPolicy(row.policy_json);if(!storedPolicy||prepared.preparationFingerprint!==row.preparation_fingerprint||generationOfferFingerprint(prepared.preparationFingerprint,storedPolicy)!==row.offer_fingerprint)throw new Unavailable();
+  const storedPolicy=projectGenerationPolicy(row.policy_json,new Date(row.authorized_at as string).getTime());if(!storedPolicy||prepared.preparationFingerprint!==row.preparation_fingerprint||generationOfferFingerprint(prepared.preparationFingerprint,storedPolicy)!==row.offer_fingerprint)throw new Unavailable();
   const authorizedAt=new Date(row.authorized_at as string).toISOString(),expiresAt=new Date(row.expires_at as string).toISOString();
   const runtimeFp=projectGenerationInvocationFingerprint({workspaceId:input.domainWorkspaceId,planningKey:row.run_id as string,project:{projectId:row.project_key as string,displayName:c.project.display_name as string},createdAt:authorizedAt,policy:storedPolicy},prepared.messages as never);
   if(!runtimeFp||runtimeFp!==row.runtime_request_fingerprint)throw new Unavailable();
@@ -90,6 +98,7 @@ export function createProjectGenerationRequests(input:Readonly<{access:Access;id
     const inserted=await client.query(`/* project-generation:insert */ insert into project_planning_generations(workspace_id,project_key,operation_key,run_id,requested_by,identity_fingerprint,preparation_fingerprint,offer_fingerprint,request_fingerprint,policy_json,manifest_json,authorized_at,expires_at,runtime_request_fingerprint)values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12,$13,$14) returning *`,[c.workspaceId,selected.projectId,f.operationKey,runId,c.userId,identityFingerprint,v.prepared.preparationFingerprint,v.offerFingerprint,fp,JSON.stringify(v.policy),JSON.stringify(selected.sources),authorizedAt,expiresAt,runtimeFp]);
     if(inserted.rowCount!==1)throw new Unavailable();const row=inserted.rows[0];
     for(const [index,doc] of v.prepared.documents.entries())await client.query(`/* project-generation:source-insert */ insert into project_planning_generation_sources(workspace_id,project_key,generation_id,source_index,document_id,filename,version,sha256)values($1,$2,$3,$4,$5,$6,$7,$8)`,[c.workspaceId,selected.projectId,row.id,index,doc.documentId,doc.filename,doc.version,doc.sha256]);
+    if(v.policy.api)await reservePlanningApi(client,c,row,v.policy);
     await audit(client,c,row,'project.planning_generation_authorized');
     return{kind:'started' as const,row};
    });
@@ -102,6 +111,14 @@ export function createProjectGenerationRequests(input:Readonly<{access:Access;id
     return{row,...v,ownerUserId:c.userId,projectName:c.project.display_name as string};
    });
   },
+  async startInTransaction(client:WorkflowRuntimeSqlClient,c:ProjectOwnerContext,reservation:AgentStepModelBudgetReservation,tenant:ResolvedWorkflowRuntimeTenant){
+   if(!isResolvedWorkflowRuntimeTenant(tenant)||tenant.workspaceDatabaseId!==c.workspaceId||tenant.workspaceId!==reservation.workspaceId)throw new Unavailable();
+   const q=await client.query(`select * from project_planning_generations where workspace_id=$1 and project_key=$2 and run_id=$3 for update`,[c.workspaceId,reservation.projectId,reservation.runId]);
+   if(q.rowCount!==1)throw new Unavailable();const row=q.rows[0],v=await evidence(client,c,row);
+   const time=await client.query(`select clock_timestamp() as now`),now=new Date(time.rows[0].now as string).toISOString();
+   if(row.status!=='started'||now<v.authorizedAt||now>=v.expiresAt||row.runtime_request_fingerprint!==reservation.requestFingerprint||generationOfferFingerprint(v.prepared.preparationFingerprint,policy())!==row.offer_fingerprint||!v.policy.api)throw new Unavailable();
+   await startPlanningApi(client,c,row,v.policy,()=>generationOfferFingerprint(v.prepared.preparationFingerprint,policy())===row.offer_fingerprint);
+  },
   async settle(projectId:string,operationKey:string,outcome:GenerationOutcome,text:string|null){
    return run(projectId,true,async(client,c)=>{
     const rows=await client.query(`/* project-generation:settle-lock */ select * from project_planning_generations where workspace_id=$1 and project_key=$2 and operation_key=$3 for update`,[c.workspaceId,projectId,operationKey]);
@@ -111,6 +128,10 @@ export function createProjectGenerationRequests(input:Readonly<{access:Access;id
     const status=text===null?outcome:validated?'proposal_available':'invalid_output';
     if(text===null&&['proposal_available','invalid_output'].includes(status))throw new Unavailable();
     await client.query(`/* project-generation:settle */ update project_planning_generations set status=$4,output_fingerprint=$5,plan_fingerprint=$6,settled_at=now() where workspace_id=$1 and project_key=$2 and operation_key=$3`,[c.workspaceId,projectId,operationKey,status,text===null?null:outputDigest(text),validated?planDigest(validated):null]);
+    if(v.policy.api&&text!==null){
+     const cost=await client.query(`select o.input_tokens::text as input,o.output_tokens::text as output from workflow_model_invocations o join workflow_runs r on r.workspace_id=o.workspace_id and r.id=o.workflow_run_id where r.workspace_id=$1 and r.runtime_id=$2`,[c.workspaceId,row.run_id]);
+     if(cost.rowCount!==1)throw new Unavailable();const actual=openAIApiUsageCost(v.policy.api.pricing,Number(cost.rows[0].input),Number(cost.rows[0].output));if(actual===null)throw new Unavailable();await settlePlanningApi(client,c,row,actual,v.policy);
+    }
     await audit(client,c,row,'project.planning_generation_settled',status);return{status};
    });
   },

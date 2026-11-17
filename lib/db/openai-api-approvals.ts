@@ -1,3 +1,5 @@
+// @ts-expect-error Node direct TypeScript requires runtime extension.
+import { lockOpenAIApiDailyBudget } from './openai-api-daily-budget.ts';
 import { randomUUID } from "node:crypto";
 import type { WorkflowRuntimeDatabase, WorkflowRuntimeSqlClient } from "./workflow-runtime-store";
 import type { ResolvedWorkflowRuntimeTenant } from "./workflow-runtime-tenant";
@@ -117,11 +119,7 @@ export function createOpenAIApiApprovals(input:Readonly<{database:WorkflowRuntim
     });
   }
   async function daily(c:WorkflowRuntimeSqlClient,day:string,limit:number) {
-    await c.query(`insert into openai_api_daily_budgets(workspace_id,budget_day,limit_usd_micros) values($1,$2::date,$3) on conflict(workspace_id,budget_day) do nothing`,[tenant.workspaceDatabaseId,day,limit]);
-    await c.query(`select workspace_id from openai_api_daily_budgets where workspace_id=$1 and budget_day=$2::date for update`,[tenant.workspaceDatabaseId,day]);
-    const used=await c.query(`select coalesce(sum(case when state in ('completed','failed') then actual_cost_usd_micros else reserved_cost_usd_micros end),0)::text as used
-      from ai044_api_approval_bindings where workspace_id=$1 and budget_day=$2::date`,[tenant.workspaceDatabaseId,day]);
-    const n=Number(used.rows[0].used);fact(Number.isSafeInteger(n)&&n>=0);return n;
+    return lockOpenAIApiDailyBudget(c,tenant.workspaceDatabaseId,day,limit);
   }
   async function consume(id:unknown,raw:unknown) {
     const i=normalizeOpenAIApiIntent(raw);if(!uuid(id)||!i||!bound(i))return deny();

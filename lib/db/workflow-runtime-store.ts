@@ -69,6 +69,8 @@ export const postgresWorkflowRuntimeStoreLimits = Object.freeze({
 export type PostgresWorkflowRuntimeStoreOptions = Readonly<{
   database: WorkflowRuntimeDatabase;
   tenant: ResolvedWorkflowRuntimeTenant;
+  // Trusted DB-only extension: receives the current transaction, never another connection.
+  projectPlanningStart?: (client:WorkflowRuntimeSqlClient,tenant:ResolvedWorkflowRuntimeTenant,reservation:AgentStepModelBudgetReservation)=>Promise<void>;
   leaseDurationMs?: number;
   // AI-037.6a: the trusted timing the provider client was built with (from
   // validateProviderClaimLeaseTiming / composeProviderWithinClaimLease). It fixes the claim lease
@@ -913,6 +915,8 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
   readonly #database: WorkflowRuntimeDatabase;
   readonly #workspaceId: string;
   readonly #workspaceDatabaseId: string;
+  readonly #tenant: ResolvedWorkflowRuntimeTenant;
+  readonly #projectPlanningStart: PostgresWorkflowRuntimeStoreOptions["projectPlanningStart"];
   readonly #leaseDurationMs: number;
   readonly #providerExecutionTiming: ProviderClaimLeaseTiming | null;
   readonly #signals: RuntimeOperationalSignalSink | undefined;
@@ -932,6 +936,9 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
       throw persistenceError("Workflow runtime store configuration is invalid.");
     }
     this.#database = options.database;
+    this.#tenant=options.tenant;
+    if(options.projectPlanningStart!==undefined&&typeof options.projectPlanningStart!=="function")throw persistenceError("Planning start configuration invalid.");
+    this.#projectPlanningStart=options.projectPlanningStart;
     this.#workspaceId = options.tenant.workspaceId;
     this.#workspaceDatabaseId = options.tenant.workspaceDatabaseId;
     const providerTiming = options.providerExecutionTiming;
@@ -2082,6 +2089,16 @@ export class PostgresWorkflowRuntimeStateStore implements WorkflowRuntimeStateSt
         if (!timing
           || expiresAt.getTime() - startedAt.getTime() < timing.providerTimeoutMs + timing.safetyMarginMs) {
           return { status: "conflict" as const };
+        }
+      }
+      if(input.providerStart?.workflowId==='pac-project-document-plan-planning'){
+        const policy=await client.query(`/* project-api:required-fence */ select policy_json from project_planning_generations where workspace_id=$1 and run_id=$2`,[this.#workspaceDatabaseId,input.runId]);
+        if(policy.rowCount!==1)throw persistenceError('Planning authority missing.');
+        if(policy.rows[0]?.policy_json && (policy.rows[0].policy_json as {identity?:{providerKind?:string}}).identity?.providerKind==='openai'){
+          if(!this.#projectPlanningStart)throw persistenceError('Planning provider start denied.');
+          await this.#projectPlanningStart(client,this.#tenant,input.providerStart);
+          // Extension lock waits also consume lease time. A failure rolls back its state/audit.
+          if(!this.#providerExecutionTiming||expiresAt.getTime()-this.#trustedNow().getTime()<this.#providerExecutionTiming.providerTimeoutMs+this.#providerExecutionTiming.safetyMarginMs)throw persistenceError('Planning provider start expired.');
         }
       }
       const started = await client.query(

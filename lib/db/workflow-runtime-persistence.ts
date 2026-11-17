@@ -18,6 +18,7 @@ function inputFields(input: unknown): input is Readonly<{
   domainWorkspaceId: string;
   providerExecutionTiming?: unknown;
   signals?: unknown;
+  projectPlanningStart?: import("./workflow-runtime-store").PostgresWorkflowRuntimeStoreOptions["projectPlanningStart"];
 }> {
   if (typeof input !== "object" || input === null || Array.isArray(input)) return false;
   try {
@@ -26,7 +27,7 @@ function inputFields(input: unknown): input is Readonly<{
     // operational signal sink (AI-037.4a). Any other key is rejected.
     const optional = keys.filter((key) => key !== "database" && key !== "domainWorkspaceId");
     if (!keys.includes("database") || !keys.includes("domainWorkspaceId")
-      || optional.some((key) => key !== "providerExecutionTiming" && key !== "signals")) {
+      || optional.some((key) => key !== "providerExecutionTiming" && key !== "signals" && key !== "projectPlanningStart")) {
       return false;
     }
     for (const key of optional) {
@@ -56,6 +57,7 @@ export async function createPostgresWorkflowRuntimePersistence(
       stateStore: new PostgresWorkflowRuntimeStateStore({
         database: input.database,
         tenant,
+        ...(input.projectPlanningStart===undefined?{}:{projectPlanningStart:input.projectPlanningStart}),
         // The store accepts only a trusted timing object and throws otherwise (→ null below).
         ...(input.providerExecutionTiming === undefined
           ? {}
