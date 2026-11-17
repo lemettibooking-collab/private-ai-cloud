@@ -182,3 +182,12 @@ async function validateDecision(client:WorkflowRuntimeSqlClient,context:ProjectO
   }
   return actor;
 }
+
+// Narrow extraction for project generation. Caller must hold project Owner authority on this client.
+export async function prepareAuthorizedProjectGeneration(client:WorkflowRuntimeSqlClient,context:ProjectOwnerContext,input:NonNullable<ReturnType<typeof projectAIPlanningInput>>) {
+ const documents=[];
+ for(const selected of input.sources) documents.push(await source(client,context,input.projectId,selected.filename,selected.version,selected.sha256));
+ const prepared=prepareProjectAIPlanning(documents.map(({filename,version,sha256,content})=>({filename,version,sha256,content})));
+ return Object.freeze({documents:Object.freeze(documents),messages:prepared.messages,
+  preparationFingerprint:planDigest(["pac.project-ai-intake.v1",context.workspaceId,input.projectId,input.sources,prepared.fingerprint])});
+}

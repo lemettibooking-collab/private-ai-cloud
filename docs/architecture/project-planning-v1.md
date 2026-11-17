@@ -154,3 +154,46 @@ Markdown/YAML conversion, approved-plan replacement, execution queue, FeaturePla
 materialization and real-feature proof. N1 legacy `/knowledge/[documentId]` remains
 static prototype-only; removal/guarded deprecation/safe redirect is still mandatory
 before production deployment. No N1 correction is mixed into this candidate.
+
+## PAC-PLAN-03B.1 — deterministic project generation candidate
+
+The server/test-only `createProjectPlanningGeneration` composition provides prepare,
+explicit consent/generate, and authenticated read. It has no UI/HTTP binding and
+accepts only an injected mock ModelProvider. `runtimeDispatchAllowed=false` remains
+unchanged; real inference and generic development dispatch are not authorized.
+
+Preparation reuses exact authorized Knowledge versions and the existing four-source
+bounds. A versioned reviewed offer binds canonical preparation, all six pinned model
+identity fields, destination, policy version, prices/date and per-call/aggregate limits.
+Authorization recomputes that offer under original GitHub identity/Owner/project locks.
+Migration 0025 stores immutable request/consent and ordered source evidence, with
+transactional audit, composite source FKs, guarded settlement and factual result checks.
+It does not change manual import drafts, approval requests or ProjectTasks.
+
+Consent commits before Run creation. Attempt evidence validates that consent against
+current authority/policy and exact canonical invocation fingerprint; its first trusted
+attempt validation timestamp is latched. Its expiry is the original absolute consent
+expiry, never a renewed allowance. Both the original ten-minute lifetime and the shared
+attempt evidence checks remain enforced. Replay/restart only reads an existing result;
+started or ambiguous requests require recovery and never dispatch again.
+
+One project-specific single-step Run uses existing ModelProvider routing, ledger,
+preflight, reservation, provider-start fence and durable usage/result settlement. There
+is no parallel budget or ledger. Aggregate accounting is factually scoped to workspace,
+project, workflow binding and UTC window. Project-document requests share the constant
+`pac-project-document-plan-planning-binding`; the existing FeaturePlan binding has an
+independent window. This is not a workspace-wide cross-purpose financial cap. Changing
+that scope requires a separate shared-runtime design.
+
+Successful provider text is not automatically a proposal: strict duplicate-aware JSON
+parsing and `validateProjectPlan` use the exact immutable canonical source manifest.
+Invalid output remains a charged durable invocation with no persistable proposal.
+Readers recompute raw/normalized fingerprints and verify original source and audit
+provenance. Runtime request fingerprints and pinned provider identity bind results to
+the authorized generation. No generated proposal is saved into manual single-source
+import history. Explicit generated-plan save/approval remains a later additive task.
+
+Current-authority rechecks occur at dispatch admission and evidence issuance. Precise
+project/identity revocation fencing at provider-start is not claimed. A real provider
+binding, metered preflight authorization and smoke require separate acceptance. Server
+policy prices remain configured assertions, not verified external billing guarantees.

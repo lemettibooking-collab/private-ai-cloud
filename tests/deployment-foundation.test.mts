@@ -76,8 +76,10 @@ test("AI-045: historical migrations 0001–0023 remain exact baseline bytes", ()
     "275ef92213b6d7206cb4682421182216769ca2107fad1703584690e1de459fb6"
   ];
   const files = readdirSync(new URL("db/migrations/", root)).filter(f => f.endsWith(".sql")).sort();
-  assert.equal(files.length, 24);
+  assert.equal(files.length, 25);
   assert.equal(files[22], "0023_project_repository_knowledge_versions.sql");
   assert.equal(files[23], "0024_project_planning_drafts.sql");
+  assert.equal(files[24], "0025_project_planning_generation.sql");
+  assert.equal(files.at(-1), "0025_project_planning_generation.sql");
   assert.deepEqual(files.slice(0, 23).map(f => createHash("sha256").update(read(`db/migrations/${f}`)).digest("hex")), hashes);
 });
