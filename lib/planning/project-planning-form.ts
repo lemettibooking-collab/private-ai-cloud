@@ -48,3 +48,31 @@ export function projectPlanningForm(form:unknown,operation:"preview"|"save"|"dec
   const selected={projectId:f.projectId,filename:parts[0],version:integer(parts[1]),sourceSha256:parts[2]};
   return operation==="save"?{...selected,previewFingerprint:f.previewFingerprint,expectedRevision:integer(f.expectedRevision)}:selected;
 }
+
+export type ProjectGenerationOperation="prepare"|"generate"|"read";
+export function projectGenerationForm(form:unknown,operation:ProjectGenerationOperation){
+ try{
+  const names=operation==="read"?["projectId","operationKey"]:operation==="prepare"?["projectId","sources"]:["projectId","sources","operationKey","offerFingerprint","consent"];
+  const f=projectResourceFields(form,names);if(!f)return null;
+  let totalBytes=0;
+  for(const [name,value] of FormData.prototype.entries.call(form as FormData)){
+   if(typeof value!=="string"||Buffer.byteLength(value,"utf8")>16384)return null;
+   totalBytes+=Buffer.byteLength(name,"utf8")+Buffer.byteLength(value,"utf8");if(totalBytes>32768)return null;
+  }
+  if(Object.values(f).some(v=>typeof v!=="string"||Buffer.byteLength(v,"utf8")>2048)||!isProjectKey(f.projectId))return null;
+  const keys=[...FormData.prototype.keys.call(form as FormData)].filter(k=>!k.startsWith("$ACTION_"));
+  if(new Set(keys).size!==keys.length)return null;
+  if(operation!=="prepare"&&(typeof f.operationKey!=="string"||!/^pp-[a-f0-9]{32}$/u.test(f.operationKey)))return null;
+  if(operation==="read")return{projectId:f.projectId,operationKey:f.operationKey as string};
+  const selected=projectAIPlanningInput({projectId:f.projectId,sources:parsePlanningJSON(f.sources as string)});if(!selected)return null;
+  if(operation==="prepare")return selected;
+  if(f.consent!=="true"||typeof f.offerFingerprint!=="string"||!/^[a-f0-9]{64}$/u.test(f.offerFingerprint))return null;
+  return{...selected,operationKey:f.operationKey as string,offerFingerprint:f.offerFingerprint,consent:true as const};
+ }catch{return null;}
+}
+
+import type { ProjectGenerationPolicy } from '../composition/project-planning-generation-config';
+import type { ProjectPlan } from './project-planning-contract';
+export type GenerationSource=Readonly<{filename:string;version:number;sha256:string}>;
+export type GenerationOffer=Readonly<{sources:readonly GenerationSource[];preparationFingerprint:string;offerFingerprint:string;policy:ProjectGenerationPolicy}>;
+export type GenerationView={status:string;operationKey?:string;offer?:GenerationOffer;proposal?:ProjectPlan;sources?:readonly GenerationSource[];runtimeDispatchAllowed?:false};

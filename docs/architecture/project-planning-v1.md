@@ -197,3 +197,43 @@ Current-authority rechecks occur at dispatch admission and evidence issuance. Pr
 project/identity revocation fencing at provider-start is not claimed. A real provider
 binding, metered preflight authorization and smoke require separate acceptance. Server
 policy prices remain configured assertions, not verified external billing guarantees.
+
+## PAC-PLAN-03B.2 — Owner generation transport and review UI
+
+The existing Planning page separates manual import from project generation. A bounded
+exact FormData adapter admits only selectors, reviewed offer fingerprint, explicit
+consent and an operation identifier. Server prepare issues `pp-` plus 32 hex characters;
+this identifier conveys no authority. Owner/session/workspace remain server-resolved.
+The server-only production composition deliberately supplies no generation backend,
+provider or policy; prepare/generate return production_binding_unavailable after
+Owner authorization. There is no environment bypass or public simulation route.
+Only trusted tests inject the accepted deterministic backend.
+
+A successful injected prepare displays canonical filenames/versions/SHA-256, preparation
+and offer fingerprints, pinned model identity, destination and token/cost ceilings.
+Accounting is explicitly simulated and scoped to project/workflow binding/UTC window,
+not a global workspace financial limit. Consent starts unchecked. Source changes remount
+the reviewed offer and consent. After authorization the selection and submit button lock;
+backend idempotency remains authoritative. Pending means submission only.
+
+Before submission the existing operation key is placed in the page URL. The read form
+accepts that identifier after reload and performs only an authorized durable read.
+Read never creates a Run or reconstructs dispatch authority. An uncertain operation
+retains its key and is presented as recovery_required, without a regeneration button.
+The UI does not automatically read or generate on render/reload. A later separate offer
+must not be used to reconcile an earlier uncertain spend.
+
+Validated proposals render escaped text with every task field and exact manifest
+references. They remain review-only and never enter manual save/approval, ProjectTasks,
+FeaturePlans, queues or repository operations. EN/RU state and consent copy is supplied.
+`runtimeDispatchAllowed=false`; production/live provider binding remains unavailable.
+
+### PAC-PLAN-03B.2 Corrective 01
+
+Transport returns immediately when the bounded field helper rejects the form, before
+any additional entries traversal or authorization. The Planning generation instance
+is keyed by project at both the page and generation wrapper boundaries. Reviewed
+prepare/authorization/read subtrees also include project and exact selected manifests
+in their keys, so a project transition or changed selection cannot retain a previous
+offer, consent, submission state or displayed proposal. Durable operation links keep
+their original project path; retrieving them still requires server authorization.

@@ -31,3 +31,23 @@ export async function submitProjectPlanning(operation:"preview"|"save"|"decide"|
     });
   }catch{return{status:"unavailable" as const};}
 }
+
+// Production intentionally supplies no generation backend, policy or provider.
+export async function submitProjectGeneration(operation:import('../planning/project-planning-form').ProjectGenerationOperation,form:FormData){
+ try{
+  const { createProjectGenerationActions }=await import("./owner-project-planning-generation-action");
+  const { createProjectGenerationRequests }=await import("../planning/project-planning-generation");
+  const { snapshotProjectSession }=await import("../projects/project-owner-access");
+  const { planDigest }=await import("../planning/project-planning-contract");
+  const session=await auth();
+  const database=createWorkflowRuntimePostgresDatabase({connectionString:process.env.DATABASE_URL,maxConnections:2});
+  try{
+   const access=createProjectOwnerAccess({database,domainWorkspaceId:process.env.APP_DEMO_WORKSPACE_SLUG??'',session});
+   const requests=createProjectGenerationRequests({access,domainWorkspaceId:process.env.APP_DEMO_WORKSPACE_SLUG??'',identityFingerprint:planDigest(snapshotProjectSession(session)?.pacIdentity??null),policy:()=>null});
+   return await createProjectGenerationActions({
+    authorize:async projectId=>(await access.run(projectId,false,async()=>true)).status,
+    read:async(projectId,key)=>{const r=await requests.read(projectId,key);return r.status==='ok'?r.value:{status:r.status};},
+   })(operation,form);
+  }finally{await database.close().catch(()=>undefined);}
+ }catch{return{status:'recovery_required',runtimeDispatchAllowed:false as const};}
+}
