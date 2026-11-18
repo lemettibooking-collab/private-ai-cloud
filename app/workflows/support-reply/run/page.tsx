@@ -2,35 +2,31 @@ import { WorkflowLifecycle } from "@/components/domain/workflow-lifecycle";
 import { WorkflowRunForm } from "@/components/domain/workflow-run-form";
 import { AppShell } from "@/components/shell/app-shell";
 import { PageHeader } from "@/components/ui/page-header";
-import { workflowPreviews } from "@/lib/workflow-config";
+import { getI18n } from "@/lib/i18n/locale.server";
+import { prototypeMock } from "@/lib/i18n/prototype-mock";
+import { prototypePages } from "@/lib/i18n/prototype-pages";
 
-export default function SupportReplyRunPage() {
+// Which fields are multi-line (presentation shape; the copy is localized).
+const textareaFields = [true, false, true];
+
+export default async function SupportReplyRunPage() {
+  const { locale } = await getI18n();
+  const pages = prototypePages[locale].runPages;
+  const c = pages.support;
   return (
     <AppShell>
       <PageHeader
-        description="Generate a source-grounded support answer with classification, retrieved sources, safety note, and approval requirement."
-        eyebrow="Workflow run"
-        title="Support Reply"
+        description={c.description}
+        eyebrow={pages.eyebrow}
+        title={c.title}
       />
       <WorkflowLifecycle compact />
       <div className="mt-6">
         <WorkflowRunForm
-          description="No real AI is called. Fill the mocked input fields to inspect the intended workflow shape."
-          fields={[
-            {
-              label: "User question",
-              placeholder: "How do I validate Scanner MVP locally?",
-              textarea: true,
-            },
-            { label: "Channel", placeholder: "Website chat" },
-            {
-              label: "Optional user context",
-              placeholder: "Plan, account state, previous support notes",
-              textarea: true,
-            },
-          ]}
-          preview={workflowPreviews["support-reply"]}
-          title="Support request input"
+          description={c.formDescription}
+          fields={c.fields.map(([label, placeholder], index) => ({ label, placeholder, textarea: textareaFields[index] }))}
+          preview={prototypeMock[locale].workflowPreviews["support-reply"]}
+          title={c.formTitle}
         />
       </div>
     </AppShell>

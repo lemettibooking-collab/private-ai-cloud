@@ -1,23 +1,18 @@
+import { toneBadge, toTone, type Tone } from "@/components/ui/tone";
 import type { StatusTone } from "@/types/app";
-
-const toneClassName: Record<StatusTone, string> = {
-  neutral: "border-slate-600/70 bg-slate-800/70 text-slate-200",
-  info: "border-cyan-500/30 bg-cyan-500/10 text-cyan-200",
-  success: "border-emerald-500/30 bg-emerald-500/10 text-emerald-200",
-  warning: "border-amber-500/30 bg-amber-500/10 text-amber-200",
-  danger: "border-rose-500/30 bg-rose-500/10 text-rose-200",
-  locked: "border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-200",
-};
 
 type StatusBadgeProps = {
   children: React.ReactNode;
-  tone?: StatusTone;
+  tone?: Tone | StatusTone;
 };
 
+// The single status badge of the console: a tinted text label (state is never conveyed by color alone —
+// the label always names it). Words use Geist, like the rest of the working area.
 export function StatusBadge({ children, tone = "neutral" }: StatusBadgeProps) {
+  const semantic = toTone(tone);
   return (
     <span
-      className={`inline-flex w-fit items-center rounded-full border px-2.5 py-1 text-xs font-medium ${toneClassName[tone]}`}
+      className={`inline-flex h-5 w-fit items-center whitespace-nowrap rounded-[5px] border px-1.5 text-[11px] font-medium leading-none shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] ${toneBadge[semantic]}`}
     >
       {children}
     </span>

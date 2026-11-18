@@ -1,21 +1,312 @@
 @import "tailwindcss";
 
+/*
+ * PAC Owner Console — Mission Control tokens (AI-038.3, refined in AI-038.5).
+ * Deep graphite / blue-black surfaces, thin lines, restrained cyan control accent.
+ * Status colors encode meaning only (one semantic tone system, see components/ui/tone.ts):
+ *   active    = run  (cyan)    — in progress / neutral activity
+ *   success   = ok   (green)   — completed / healthy
+ *   attention = warn (amber)   — Owner action / waiting
+ *   danger    = bad  (red)     — failed / blocked / critical
+ *   neutral / muted = idle     — draft, cancelled, unknown
+ */
 :root {
-  --background: #020617;
-  --foreground: #e2e8f0;
+  --pac-canvas: #070a10;
+  /* Translucent, cool-toned surfaces and hairlines (they sit on the layered background). */
+  --pac-panel: rgba(17, 24, 36, 0.62);
+  --pac-panel-2: rgba(36, 48, 66, 0.42);
+  --pac-raised: rgba(48, 62, 84, 0.5);
+  --pac-line: rgba(148, 170, 200, 0.1);
+  --pac-line-strong: rgba(148, 170, 200, 0.2);
+  --pac-ink: #e7ecf3;
+  --pac-ink-2: #a8b3c2;
+  --pac-ink-3: #6a7687;
+  --pac-accent: #38bdf8;
+
+  --pac-run: #38bdf8;
+  --pac-ok: #34d399;
+  --pac-warn: #fbbf24;
+  --pac-bad: #f87171;
+  --pac-idle: #7c8797;
+
+  --background: var(--pac-canvas);
+  --foreground: var(--pac-ink);
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+
+  --color-canvas: var(--pac-canvas);
+  --color-panel: var(--pac-panel);
+  --color-panel-2: var(--pac-panel-2);
+  --color-raised: var(--pac-raised);
+  --color-line: var(--pac-line);
+  --color-line-strong: var(--pac-line-strong);
+  --color-ink: var(--pac-ink);
+  --color-ink-2: var(--pac-ink-2);
+  --color-ink-3: var(--pac-ink-3);
+  --color-accent: var(--pac-accent);
+
+  --color-run: var(--pac-run);
+  --color-ok: var(--pac-ok);
+  --color-warn: var(--pac-warn);
+  --color-bad: var(--pac-bad);
+  --color-idle: var(--pac-idle);
+
+  --radius-pac: 8px;
+
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
+html {
+  color-scheme: dark;
+}
+
+/*
+ * Layer 0 — static dark base (AI-038.5 ShaderGradient-inspired corrective).
+ * Very dark blue-black: #02060D → #06111C → #0A1622, with one faint teal lift at the top. No motion
+ * and no data here; the moving masses live in `.pac-ambient` above it.
+ */
 body {
-  background: var(--background);
+  background-color: #02060d;
+  background-image:
+    radial-gradient(1400px 800px at 30% -18%, rgba(14, 116, 144, 0.1), transparent 65%),
+    linear-gradient(165deg, #0a1622 0%, #06111c 42%, #02060d 100%);
+  background-attachment: fixed;
   color: var(--foreground);
   font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+  font-feature-settings: "tnum" 1, "cv11" 1;
+}
+
+/*
+ * Layer 1 — ambient light (AI-038.7). The primary moving layer is a native WebGL fragment shader
+ * (components/shell/ambient-renderer.ts): one broad luminous band that bends, thickens and thins
+ * through the middle-lower viewport, over a deeper ocean / teal field — capped at ~30 FPS, drawn at
+ * 1 device pixel per CSS pixel, paused in hidden tabs. `.pac-ambient-canvas` is transparent until the
+ * renderer has started and sets `data-renderer="shader"` on `.pac-ambient`; then the canvas fades in,
+ * the CSS mesh fades out and its animations are paused (one moving layer, never two).
+ *
+ * Layer 1 fallback — the AI-038.5 CSS mesh: server-rendered, visible before hydration, without
+ * WebGL, after any shader / context failure and under prefers-reduced-motion. A ShaderGradient-like
+ * slow mesh, adapted for PAC: four very large,
+ * low-saturation elliptical gradient masses (deep teal #0E7490, ocean #0B3150, steel navy #123B63,
+ * and a small, rare touch of cyan #38BDF8). Each drifts, turns a few degrees and breathes in scale
+ * on its own 24–40 s cycle, so the masses overlap differently over time — the "shader" feel — without
+ * any shader. Softness comes from multi-stop gradient falloff (no `filter`), and only `transform` /
+ * `opacity` animate, so motion stays on the compositor. Pure CSS, no canvas / WebGL / JS.
+ *
+ * Layer 2 — haze (`.pac-ambient::after`): a static veil that lifts the top slightly and deepens the
+ * edges, keeping text contrast stable wherever the light is; it sits above both the canvas and the
+ * mesh. Panels, shell and tables sit above it.
+ * Under prefers-reduced-motion the shader never starts and the masses freeze in a composed still frame.
+ */
+.pac-ambient {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  contain: strict;
+}
+.pac-ambient-mesh {
+  position: absolute;
+  inset: 0;
+  transition: opacity 1.6s ease, visibility 0s linear 0s;
+}
+.pac-ambient-canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  transition: opacity 1.6s ease;
+}
+.pac-ambient[data-renderer="shader"] .pac-ambient-canvas {
+  opacity: 1;
+}
+.pac-ambient[data-renderer="shader"] .pac-ambient-mesh {
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 1.6s ease, visibility 0s linear 1.6s;
+}
+.pac-ambient[data-renderer="shader"] .pac-ambient-field {
+  animation-play-state: paused;
+  will-change: auto;
+}
+.pac-ambient-field {
+  position: absolute;
+  border-radius: 50%;
+  will-change: transform, opacity;
+  backface-visibility: hidden;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+  animation-direction: alternate;
+}
+/* Deep teal — upper left, the main mass. */
+.pac-ambient-field-a {
+  width: 96vmax;
+  height: 58vmax;
+  left: -26vmax;
+  top: -22vmax;
+  background: radial-gradient(closest-side, rgba(14, 116, 144, 0.34), rgba(14, 116, 144, 0.2) 38%, rgba(14, 116, 144, 0.07) 68%, transparent 100%);
+  animation-name: pac-mass-a;
+  animation-duration: 34s;
+}
+/* Ocean blue — right, broad and slow. */
+.pac-ambient-field-b {
+  width: 104vmax;
+  height: 70vmax;
+  right: -40vmax;
+  top: -8vmax;
+  background: radial-gradient(closest-side, rgba(11, 49, 80, 0.6), rgba(11, 49, 80, 0.34) 40%, rgba(11, 49, 80, 0.1) 70%, transparent 100%);
+  animation-name: pac-mass-b;
+  animation-duration: 40s;
+}
+/* Steel navy — low, the deepest mass. */
+.pac-ambient-field-c {
+  width: 110vmax;
+  height: 62vmax;
+  left: -6vmax;
+  bottom: -36vmax;
+  background: radial-gradient(closest-side, rgba(18, 59, 99, 0.5), rgba(18, 59, 99, 0.28) 42%, rgba(18, 59, 99, 0.08) 72%, transparent 100%);
+  animation-name: pac-mass-c;
+  animation-duration: 28s;
+}
+/* Cyan accent — small and faint, wanders mid-right; the only bright note, used sparingly. */
+.pac-ambient-field-d {
+  width: 46vmax;
+  height: 30vmax;
+  left: 46vw;
+  top: 18vh;
+  background: radial-gradient(closest-side, rgba(56, 189, 248, 0.11), rgba(56, 189, 248, 0.05) 45%, transparent 100%);
+  animation-name: pac-mass-d;
+  animation-duration: 24s;
+}
+.pac-ambient::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(180deg, rgba(10, 22, 34, 0.18) 0%, rgba(2, 6, 13, 0) 30%, rgba(2, 6, 13, 0) 68%, rgba(2, 6, 13, 0.42) 100%),
+    radial-gradient(150% 115% at 50% 38%, transparent 52%, rgba(2, 6, 13, 0.6) 100%);
+}
+
+@keyframes pac-mass-a {
+  0% { transform: translate3d(0, 0, 0) rotate(-6deg) scale(1); opacity: 0.85; }
+  50% { transform: translate3d(6vw, 5vh, 0) rotate(2deg) scale(1.07); opacity: 1; }
+  100% { transform: translate3d(2vw, 9vh, 0) rotate(-2deg) scale(0.97); opacity: 0.9; }
+}
+@keyframes pac-mass-b {
+  0% { transform: translate3d(0, 0, 0) rotate(8deg) scale(1.02); opacity: 0.9; }
+  50% { transform: translate3d(-6vw, 6vh, 0) rotate(0deg) scale(1.08); opacity: 1; }
+  100% { transform: translate3d(-9vw, -2vh, 0) rotate(5deg) scale(0.98); opacity: 0.85; }
+}
+@keyframes pac-mass-c {
+  0% { transform: translate3d(0, 0, 0) rotate(3deg) scale(1); opacity: 0.9; }
+  50% { transform: translate3d(5vw, -4vh, 0) rotate(-4deg) scale(1.05); opacity: 1; }
+  100% { transform: translate3d(-4vw, -6vh, 0) rotate(1deg) scale(1.02); opacity: 0.85; }
+}
+@keyframes pac-mass-d {
+  0% { transform: translate3d(0, 0, 0) rotate(0deg) scale(0.95); opacity: 0.6; }
+  50% { transform: translate3d(-8vw, 7vh, 0) rotate(-10deg) scale(1.08); opacity: 1; }
+  100% { transform: translate3d(-3vw, 14vh, 0) rotate(6deg) scale(1); opacity: 0.7; }
+}
+
+/* Reduced motion: no movement at all — the masses rest in a composed still frame. */
+@media (prefers-reduced-motion: reduce) {
+  .pac-ambient-field {
+    animation: none !important;
+    will-change: auto;
+  }
+  .pac-ambient-field-a { transform: translate3d(3vw, 3vh, 0) rotate(-2deg) scale(1.03); }
+  .pac-ambient-field-b { transform: translate3d(-4vw, 3vh, 0) rotate(4deg) scale(1.04); }
+  .pac-ambient-field-d { transform: translate3d(-4vw, 6vh, 0) scale(1); opacity: 0.8; }
+}
+
+/*
+ * Layered glass surfaces. Depth is built from translucency, blur, a cool hairline border, a faint
+ * top highlight and a soft drop shadow — not from color. Each layer is a step up in all four.
+ *   Layer 1  .pac-shell          sidebar, topbar
+ *   Layer 2  .pac-surface        primary panels: instruments, task / decision panels, tables, details
+ *            .pac-inset          recessed areas inside a panel (form groups, notes, empty states)
+ *   Layer 3  .pac-control        small controls: selectors, buttons, chips, counters
+ *            .pac-popover        floating menus above everything
+ */
+@layer components {
+  .pac-shell {
+    background: linear-gradient(180deg, rgba(14, 20, 30, 0.9), rgba(10, 14, 21, 0.86));
+    backdrop-filter: blur(18px) saturate(140%);
+    -webkit-backdrop-filter: blur(18px) saturate(140%);
+  }
+
+  .pac-surface {
+    position: relative;
+    border-radius: 12px;
+    border: 1px solid rgba(148, 170, 200, 0.13);
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0) 36%),
+      linear-gradient(180deg, rgba(20, 28, 41, 0.66), rgba(13, 19, 29, 0.6));
+    backdrop-filter: blur(10px) saturate(130%);
+    -webkit-backdrop-filter: blur(10px) saturate(130%);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.075),
+      0 1px 2px rgba(0, 0, 0, 0.32),
+      0 18px 40px -16px rgba(0, 0, 0, 0.72);
+  }
+
+  .pac-inset {
+    border-radius: 9px;
+    border: 1px solid rgba(148, 170, 200, 0.08);
+    background: rgba(6, 10, 16, 0.42);
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.35), inset 0 0 0 1px rgba(255, 255, 255, 0.01);
+  }
+
+  .pac-control {
+    border-radius: 8px;
+    border: 1px solid rgba(148, 170, 200, 0.15);
+    background: linear-gradient(180deg, rgba(36, 47, 64, 0.52), rgba(22, 30, 43, 0.5));
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07), 0 1px 2px rgba(0, 0, 0, 0.35);
+    transition: border-color 140ms ease, background-color 140ms ease, box-shadow 140ms ease;
+  }
+  .pac-control:hover {
+    border-color: rgba(148, 170, 200, 0.26);
+    background: linear-gradient(180deg, rgba(44, 57, 77, 0.6), rgba(26, 35, 50, 0.56));
+  }
+
+  /* Accent control (+ New Task, primary submit): restrained cyan glass. */
+  .pac-control-accent {
+    border-radius: 8px;
+    border: 1px solid rgba(56, 189, 248, 0.42);
+    background: linear-gradient(180deg, rgba(56, 189, 248, 0.2), rgba(56, 189, 248, 0.1));
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 1px 2px rgba(0, 0, 0, 0.35), 0 6px 16px -8px rgba(56, 189, 248, 0.35);
+    color: #7dd3fc;
+    transition: border-color 140ms ease, background-color 140ms ease;
+  }
+  .pac-control-accent:hover {
+    border-color: rgba(56, 189, 248, 0.6);
+    background: linear-gradient(180deg, rgba(56, 189, 248, 0.27), rgba(56, 189, 248, 0.14));
+  }
+
+  .pac-popover {
+    border-radius: 12px;
+    border: 1px solid rgba(148, 170, 200, 0.18);
+    background: linear-gradient(180deg, rgba(24, 33, 48, 0.94), rgba(16, 22, 33, 0.94));
+    backdrop-filter: blur(20px) saturate(140%);
+    -webkit-backdrop-filter: blur(20px) saturate(140%);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07), 0 24px 48px -12px rgba(0, 0, 0, 0.75);
+  }
+
+  /* Selected navigation item: a raised glass chip, not a flat fill. */
+  .pac-nav-active {
+    border: 1px solid rgba(148, 170, 200, 0.14);
+    background: linear-gradient(90deg, rgba(56, 189, 248, 0.12), rgba(56, 189, 248, 0.03) 70%), rgba(30, 40, 56, 0.45);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 2px 8px -2px rgba(0, 0, 0, 0.5);
+  }
 }
 
 * {
@@ -23,6 +314,89 @@ body {
 }
 
 ::selection {
-  background: rgba(34, 211, 238, 0.25);
+  background: rgba(56, 189, 248, 0.25);
   color: #f8fafc;
+}
+
+/* Keyboard focus is always visible: one ring for every interactive control. */
+:where(a, button, summary, select, input, textarea, [tabindex]):focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--pac-accent) 75%, transparent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Compact uppercase section label (words → Geist; Geist Mono is reserved for ids, times, numbers). */
+.pac-label {
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--pac-ink-3);
+}
+
+/* Technical identifier (task / run / project ids): mono, quiet. */
+.pac-id {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 10.5px;
+  letter-spacing: 0.01em;
+  color: var(--pac-ink-3);
+}
+
+/* Operational table grammar: quiet mono headers, compact rows, thin separators, clear hover. */
+.pac-table {
+  width: 100%;
+  min-width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 13px;
+}
+.pac-table thead th {
+  position: sticky;
+  top: 0;
+  background: rgba(10, 15, 23, 0.55);
+  border-bottom: 1px solid rgba(148, 170, 200, 0.1);
+  padding: 7px 12px;
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--pac-ink-3);
+  white-space: nowrap;
+}
+.pac-table tbody td {
+  padding: 8px 12px;
+  vertical-align: middle;
+  border-top: 1px solid rgba(148, 170, 200, 0.07);
+}
+.pac-table tbody tr:first-child td {
+  border-top: 0;
+}
+.pac-table th:first-child,
+.pac-table td:first-child {
+  padding-left: 16px;
+}
+.pac-table th:last-child,
+.pac-table td:last-child {
+  padding-right: 16px;
+}
+.pac-table tbody tr {
+  transition: background-color 120ms ease;
+}
+.pac-table tbody tr:hover {
+  background: linear-gradient(90deg, rgba(56, 189, 248, 0.05), rgba(148, 170, 200, 0.035));
+}
+
+summary::-webkit-details-marker {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0ms !important;
+    animation-duration: 0ms !important;
+  }
 }
