@@ -139,10 +139,11 @@ test("B2 provider constraint remains exact in the current full chain with unchan
   assert.equal(db.migrations[22], "0023_project_repository_knowledge_versions.sql");
   assert.equal(db.migrations[23], "0024_project_planning_drafts.sql");
   assert.equal(db.migrations[24], "0025_project_planning_generation.sql");
-  assert.equal(db.migrations.length, 27);
+  assert.equal(db.migrations.length, 29);
   assert.equal(db.migrations[25], "0026_project_planning_api_reservations.sql");
   assert.equal(db.migrations[26], "0027_project_planning_api_cost_evidence.sql");
-  assert.equal(db.migrations.at(-1), "0027_project_planning_api_cost_evidence.sql");
+  assert.equal(db.migrations[27], "0028_project_planning_generated_drafts.sql");
+  assert.equal(db.migrations.at(-1), "0029_project_planning_numeric_normalization.sql");
   assert.deepEqual(await providerChecks(db.admin), [{ name: "executor_exposure_provider_check", expression: "(provider_id = ANY (ARRAY['openai'::text, 'anthropic'::text]))", valid: true }]);
   const column = (await db.admin.query("select attnotnull from pg_attribute where attrelid='executor_attempt_exposures'::regclass and attname='provider_id'")).rows[0]; assert.equal(column.attnotnull, true);
   const version = (await db.admin.query("select current_setting('server_version_num')::int as version,current_setting('server_encoding') as encoding")).rows[0];

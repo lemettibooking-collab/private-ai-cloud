@@ -292,3 +292,75 @@ Reservation admission uses PostgreSQL `clock_timestamp()` after the shared works
 The injected fake SDK count wrapper requires a final admission callback. It reuses request admission, current Owner/identity/project authority and the reviewed policy, locks the exact durable generation/reservation, then checks current database UTC day, original request/policy/Owner/project bindings and expiry after those locks. The transaction commits before SDK count; no network or SDK await occurs inside it. Existing unresolved exposure remains on denial; replay does not replace reservations or dispatch again.
 
 Authoritative financial admission time is the current PostgreSQL clock evaluated by the final reservation INSERT, count-admission SELECT after locks, or provider-start UPDATE respectively. It is neither transaction start time nor physical network transmission time. No deliberate asynchronous work is inserted between completion of count admission and the injected count invocation. Commit, promise scheduling, process suspension and eventual network transmission cannot be made physically atomic by this check; future live activation must separately assess these timing limits. Production remains unbound and `runtimeDispatchAllowed=false`.
+
+## PAC-PLAN-04 — explicit generated draft approval
+
+A validated durable `proposal_available` operation may be explicitly saved as an
+`ai_generated` planning draft. Generation itself remains review-only and production
+model binding remains unavailable (`runtimeDispatchAllowed=false`). Saving is a
+separate Owner action; approval is another separate Owner action.
+
+Migration 0028 adds mutually exclusive `manual_import` / `ai_generated` provenance.
+Existing rows retain manual provenance. Generated drafts reference the exact
+workspace/project generation and its immutable source rows; they never fabricate a
+single uploaded planning document. Request, output and normalized plan fingerprints,
+canonical source manifest, validation version and original save revision are pinned.
+SQL guards recheck factual result/hash, source manifest and normalized stored output;
+immutable lifecycle, ordinary approval integrity, unique active plan and task links
+remain shared with manual imports. Generated save/decision audits are commit-bound.
+
+Save accepts only project ID, operation key, reviewed plan fingerprint and expected
+revision. A transaction-local extraction of existing historical generation evidence
+checks original Owner identity, exact Knowledge versions/hashes, request evidence,
+factual succeeded invocation, raw output hash and complete normalized plan. This
+uses the existing authorized project transaction, without credentials, new consent,
+provider calls, nested transactions or another pool connection. Historical policy is
+validated at original authorization time. Invalid/unknown/recovery outcomes cannot
+be saved. Identical save parameters replay factual state; changed parameters conflict.
+Durable reads preserve the original expected revision for exact save replay.
+
+Both origins share project-locked revision allocation and the existing decision
+lifecycle. Only the latest pending revision can be approved; historical pending
+rejection remains supported. Approval atomically creates ordinary draft ProjectTasks,
+links, decision and audits. Collision or audit/transaction failure rolls everything
+back. Approved immutable plan JSON retains descriptions, criteria, scope, dependency
+IDs and multi-source references. Links expose exact source-task ID to ProjectTask ID
+mapping. Dependencies are preserved proposal data: they are not execution enforcement
+and do not populate the independent Roadmap journal. No queue/executor/FeaturePlan or
+repository mutation is authorized.
+
+The existing Planning page supports explicit save from immediate and durable proposal
+views, separate forms, origin/provenance, revisions/fingerprints, ordinary decision
+controls and links after materialization. EN/RU content is escaped. Simulated origin
+is explicit; this stage establishes no live-provider or physical dispatch guarantee.
+
+### PAC-PLAN-04 Corrective 01: numeric normalization
+
+Migration 0029 preserves migrations 0001–0028 and replaces only generated-output comparison in the draft guard. Source references are parsed through PostgreSQL `json` to retain numeric lexemes before conversion to JSONB. A narrow normalizer recognizes the exact binary64 rounding cells of indices 0–3, including ties to even, signed zero and underflow. Decimal constants describe exact cell endpoints; no float cast, epsilon or arbitrary integer rounding is used.
+
+Exponent magnitude is classified before decimal expansion. After decimal-order classification, 2000 significant digits plus a sticky digit preserve the side of every finite cell endpoint (all require at most 1075 fractional places). Numeric work therefore stays bounded even for huge exponents or long mantissas within the existing 262144-byte proposal limit. References outside the source count, duplicates after normalization and nonnumeric values are rejected; canonical sorting and comparison of the complete proposal remain mandatory. This helper is not a second general proposal validator. Exact output bytes/hash, normalized plan fingerprint and historical generation evidence remain unchanged; save and approval invoke no provider.
+
+### PAC-PLAN-04 Corrective 02: Unicode persistence eligibility
+
+Current validation rejects unpaired UTF-16 surrogates in the root proposal title,
+using the same lossless UTF-8 round-trip criterion already applied to free-text
+ task fields. It preserves the exact text, valid surrogate pairs, supplementary
+characters and multilingual titles; no replacement or Unicode normalization occurs.
+Identifier and enum fields already have closed ASCII domains. Existing title
+length, trimming and control-character rules remain unchanged.
+
+New unsupported output settles as `invalid_output`, with bounded findings. Raw
+invocation output and its output fingerprint remain exact; factual incurred cost
+still settles through the existing financial path. No regeneration is attempted.
+
+Historical `proposal_available` evidence is verified using its original v1 plan
+fingerprint before current persistence eligibility is applied. The narrowly scoped
+compatibility helper returns only a fingerprint, never a legacy-valid proposal or
+save capability. Verified historical output with unsupported title encoding is
+projected as `proposal_encoding_unsupported`, with `storedStatus: proposal_available`
+and no proposal. Stored generation status, output, fingerprints, audit and financial
+evidence remain immutable. Tampered evidence fails closed, rather than receiving
+that projection. Generated save requires a current-valid proposal before creating
+an approval or draft. EN/RU read views explain the limitation and offer no save;
+a new generation would require separate explicit Owner authorization. Production
+remains unbound and `runtimeDispatchAllowed=false`.

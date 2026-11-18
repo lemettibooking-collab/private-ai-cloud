@@ -18,18 +18,29 @@ export type PlanningTask = Readonly<{ id: string; title: string; goal: string; d
 export type ProjectPlan = Readonly<{ schemaVersion: typeof projectPlanningSchema; title: string; tasks: readonly PlanningTask[] }>;
 export type PlanningFinding = Readonly<{ code: "unsupported_schema" | "invalid_record" | "duplicate_id" | "missing_dependency" | "dependency_cycle"; path: string }>;
 export type PlanningValidation = Readonly<{ plan: ProjectPlan | null; tasks: readonly PlanningTask[]; findings: readonly PlanningFinding[]; accepted: number; rejected: number; pending: number; warnings: readonly string[] }>;
-const text = (v: unknown, max: number) => typeof v === "string" && v.length <= max && v === v.trim() && Buffer.from(v,"utf8").toString("utf8")===v && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(v);
+const persistableUnicode = (v: string) => Buffer.from(v,"utf8").toString("utf8")===v;
+const text = (v: unknown, max: number) => typeof v === "string" && v.length <= max && v === v.trim() && persistableUnicode(v) && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(v);
 const strings = (v: unknown, max: number, nonempty: boolean): v is string[] => Array.isArray(v) && v.length <= max && (!nonempty || v.length > 0) && v.every(x => text(x,400) && x.length > 0) && new Set(v).size === v.length;
 const taskFields = ["id","title","goal","description","type","priority","dependencyIds","acceptanceCriteria","scope","sourceReferences"];
 
 export function validateProjectPlan(raw: unknown, sourceCount = 1): PlanningValidation {
+  return validatePlan(raw,sourceCount,true);
+}
+// Internal evidence compatibility only: never returns a proposal or admission capability.
+// Historical v1 accepted lone surrogates in the root title. Preserve its digest,
+// then independently require current validation before exposing any saveable plan.
+export function historicalProjectPlanV1Fingerprint(raw: unknown, sourceCount: number): string | null {
+  const plan=validatePlan(raw,sourceCount,false).plan;
+  return plan?planDigest(plan):null;
+}
+function validatePlan(raw: unknown, sourceCount: number, requirePersistableTitle: boolean): PlanningValidation {
   const findings: PlanningFinding[] = [], tasks: PlanningTask[] = [];
   const sourceIndices: number[] = [];
   const result = (plan: ProjectPlan | null, rejected: number, pending: number): PlanningValidation => Object.freeze({ plan, tasks: Object.freeze(tasks), findings: Object.freeze(findings.map(f=>Object.freeze(f))), accepted: tasks.length - rejected - pending, rejected, pending, warnings: Object.freeze(["untrusted_source", "technical_scope_review_required", "execution_not_authorized"]) });
   let captured: unknown;
   try { captured = captureRoadmapData(raw); if(Buffer.byteLength(JSON.stringify(captured))>262144)throw new Error("Invalid plan data."); } catch { findings.push({code:"unsupported_schema",path:"plan"}); return result(null,0,0); }
   const root = exactOwnData(captured,["schemaVersion","title","tasks"]);
-  if (!root || root.schemaVersion !== projectPlanningSchema || !isTaskTitle(root.title) || !Array.isArray(root.tasks) || root.tasks.length < 1 || root.tasks.length > 128 || !Number.isInteger(sourceCount) || sourceCount < 1 || sourceCount > 4) {
+  if (!root || root.schemaVersion !== projectPlanningSchema || !isTaskTitle(root.title) || (requirePersistableTitle && !persistableUnicode(root.title)) || !Array.isArray(root.tasks) || root.tasks.length < 1 || root.tasks.length > 128 || !Number.isInteger(sourceCount) || sourceCount < 1 || sourceCount > 4) {
     findings.push({code:"unsupported_schema",path:"plan"});return result(null,0,0);
   }
   let invalid = 0;

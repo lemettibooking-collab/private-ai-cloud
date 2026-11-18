@@ -32,17 +32,17 @@ async function directory(t: TestContext, files: Record<string, string>) {
 const tableCount = async (admin: ReturnType<typeof live.adminClient>, name: string) =>
   (await admin.query("select count(*)::int as n from pg_tables where schemaname='public' and tablename=$1", [name])).rows[0].n;
 
-test("migration PG: full real 0001–0027 applied once, no seed, checksummed replay and readiness", async t => {
+test("migration PG: full real 0001–0029 applied once, no seed, checksummed replay and readiness", async t => {
   const { db, admin } = await fixture(t);
-  assert.deepEqual(await m.applyDeploymentMigrations(db, inventory), { applied: 27, total: 27 });
+  assert.deepEqual(await m.applyDeploymentMigrations(db, inventory), { applied: 29, total: 29 });
   const rows = (await admin.query("select name,checksum from pac_schema_migrations order by name")).rows;
-  assert.equal(rows.length, 27);
+  assert.equal(rows.length, 29);
   assert.equal(rows[24].name, "0025_project_planning_generation.sql");
   assert.equal(rows[25].name, "0026_project_planning_api_reservations.sql");
   assert.equal(rows[26].name, "0027_project_planning_api_cost_evidence.sql");
   assert.deepEqual(rows, (await m.readDeploymentMigrations(inventory)).map(({ name, checksum }) => ({ name, checksum })));
   assert.equal((await admin.query("select count(*)::int as n from workspaces")).rows[0].n, 0);
-  assert.deepEqual(await m.applyDeploymentMigrations(db, inventory), { applied: 0, total: 27 });
+  assert.deepEqual(await m.applyDeploymentMigrations(db, inventory), { applied: 0, total: 29 });
   assert.equal(await health.databaseIsReady(db), true);
 });
 test("migration PG: checksum drift blocks before later SQL, original history retained", async t => {
@@ -127,7 +127,7 @@ test("migration PG: CLI runs only explicit apply, returns fixed safe output and 
     let out = "", error = ""; child.stdout.on("data", b => { out += b; }); child.stderr.on("data", b => { error += b; });
     const code = await new Promise(resolve => child.on("close", resolve)); return { code, out, error };
   }
-  assert.deepEqual(await run(["apply"]), { code: 0, out: "migration_gate_ok applied=27 total=27\n", error: "" });
-  assert.deepEqual(await run(["apply"]), { code: 0, out: "migration_gate_ok applied=0 total=27\n", error: "" });
+  assert.deepEqual(await run(["apply"]), { code: 0, out: "migration_gate_ok applied=29 total=29\n", error: "" });
+  assert.deepEqual(await run(["apply"]), { code: 0, out: "migration_gate_ok applied=0 total=29\n", error: "" });
   const denied = await run([]); assert.equal(denied.code, 1); assert.equal(denied.out, ""); assert.ok(!denied.error.includes(url));
 });

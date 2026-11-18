@@ -1,15 +1,17 @@
 // Server transport seam. Only server composition or a trusted test harness injects services.
 import type { ProjectPlan } from '../planning/project-planning-contract';
+// @ts-expect-error Direct Node execution requires extension.
+import { planDigest } from '../planning/project-planning-contract.ts';
 import { randomBytes } from 'node:crypto';
 // @ts-expect-error Direct Node execution requires extension.
 import { projectGenerationForm } from '../planning/project-planning-form.ts';
 import type { GenerationSource,GenerationView,GenerationOffer,ProjectGenerationOperation } from '../planning/project-planning-form';
 type Backend={prepare:(raw:unknown)=>Promise<unknown>;generate:(raw:unknown)=>Promise<unknown>};
 type Dependencies={authorize:(projectId:string)=>Promise<string>;read:(projectId:string,key:string)=>Promise<unknown>;backend?:Backend};
-const statuses=new Set(['invalid_input','unauthenticated','authorization_denied','conflict','provider_unavailable','budget_denied','invalid_output','recovery_required','production_binding_unavailable']);
+const statuses=new Set(['invalid_input','unauthenticated','authorization_denied','conflict','provider_unavailable','budget_denied','invalid_output','recovery_required','production_binding_unavailable','proposal_encoding_unsupported']);
 function projectResult(raw:unknown,key:string):GenerationView{
- const r=raw as {status?:string;proposal?:ProjectPlan|null;sources?:readonly GenerationSource[]};
- if(r?.status==='proposal_available'&&r.proposal&&r.sources)return{status:r.status,operationKey:key,proposal:r.proposal,sources:r.sources,runtimeDispatchAllowed:false};
+ const r=raw as {status?:string;proposal?:ProjectPlan|null;sources?:readonly GenerationSource[];expectedRevision?:number};
+ if(r?.status==='proposal_available'&&r.proposal&&r.sources)return{status:r.status,operationKey:key,proposal:r.proposal,sources:r.sources,planFingerprint:planDigest(r.proposal),expectedRevision:r.expectedRevision,runtimeDispatchAllowed:false};
  return{status:statuses.has(r?.status??'')?r.status!:'recovery_required',operationKey:key,runtimeDispatchAllowed:false};
 }
 export function createProjectGenerationActions(deps:Dependencies){

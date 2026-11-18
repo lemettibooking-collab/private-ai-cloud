@@ -34,9 +34,14 @@ export function projectAIPlanningInput(raw:unknown) {
   }catch{return null;}
 }
 const integer=(value:unknown)=>typeof value==="string"&&/^(0|[1-9][0-9]?)$/u.test(value)?Number(value):NaN;
-export function projectPlanningForm(form:unknown,operation:"preview"|"save"|"decide"|"prepareAI") {
-  const names=operation==="prepareAI"?["projectId","sources"]:operation==="decide"?["projectId","revision","planFingerprint","decision"]:operation==="save"?["projectId","source","previewFingerprint","expectedRevision"]:["projectId","source"];
+export function projectPlanningForm(form:unknown,operation:"preview"|"save"|"decide"|"prepareAI"|"saveGenerated") {
+  const names=operation==="saveGenerated"?["projectId","operationKey","planFingerprint","expectedRevision"]:operation==="prepareAI"?["projectId","sources"]:operation==="decide"?["projectId","revision","planFingerprint","decision"]:operation==="save"?["projectId","source","previewFingerprint","expectedRevision"]:["projectId","source"];
   const f=projectResourceFields(form,names);if(!f||Object.values(f).some(v=>typeof v!=="string"))return null;
+  if(operation==='saveGenerated'){
+    const keys=[...FormData.prototype.keys.call(form as FormData)].filter(k=>!k.startsWith('$ACTION_'));
+    if(new Set(keys).size!==keys.length)return null;
+    return {projectId:f.projectId,operationKey:f.operationKey,planFingerprint:f.planFingerprint,expectedRevision:integer(f.expectedRevision)};
+  }
   if(operation==="prepareAI"){
     if(typeof f.sources!=="string"||Buffer.byteLength(f.sources,"utf8")>2048)return null;
     const keys=[...FormData.prototype.keys.call(form as FormData)];if(new Set(keys).size!==keys.length)return null;
@@ -75,4 +80,4 @@ import type { ProjectGenerationPolicy } from '../composition/project-planning-ge
 import type { ProjectPlan } from './project-planning-contract';
 export type GenerationSource=Readonly<{filename:string;version:number;sha256:string}>;
 export type GenerationOffer=Readonly<{sources:readonly GenerationSource[];preparationFingerprint:string;offerFingerprint:string;policy:ProjectGenerationPolicy}>;
-export type GenerationView={status:string;operationKey?:string;offer?:GenerationOffer;proposal?:ProjectPlan;sources?:readonly GenerationSource[];runtimeDispatchAllowed?:false};
+export type GenerationView={status:string;operationKey?:string;offer?:GenerationOffer;proposal?:ProjectPlan;sources?:readonly GenerationSource[];planFingerprint?:string;expectedRevision?:number;runtimeDispatchAllowed?:false};

@@ -1,3 +1,7 @@
+// @ts-expect-error Direct Node execution requires extension.
+import { snapshotProjectSession } from '../projects/project-owner-access.ts';
+// @ts-expect-error Direct Node execution requires extension.
+import { readAuthorizedGenerationEvidence,readAuthorizedGenerationProposal } from './project-planning-generation.ts';
 import type { WorkflowRuntimeSqlClient } from "../db/workflow-runtime-store";
 import type { ProjectOwnerContext, createProjectOwnerAccess } from "../projects/project-owner-access";
 import type { ProjectPlan } from "./project-planning-contract";
@@ -44,7 +48,29 @@ async function audit(client:WorkflowRuntimeSqlClient,context:ProjectOwnerContext
   const inserted=await client.query(`/* project-planning:audit */ insert into audit_events(workspace_id,actor_user_id,event_type,entity_type,entity_id,metadata) values($1,$2,$3,'project_planning_draft',$4::uuid,$5::jsonb) returning id`,[context.workspaceId,context.userId,event,row.id,JSON.stringify(payload(row.project_key as string,row.revision as number,row.plan_fingerprint as string,row.source_fingerprint as string))]);
   if(inserted.rowCount!==1)throw new Unavailable();
 }
-async function validateStored(client:WorkflowRuntimeSqlClient,context:ProjectOwnerContext,row:Row) {
+type GenerationAuthority=Readonly<{domainWorkspaceId:string;identityFingerprint:string}>;
+export function projectPlanningGenerationAuthority(session:unknown,domainWorkspaceId:string):GenerationAuthority{
+ return Object.freeze({domainWorkspaceId,identityFingerprint:planDigest(snapshotProjectSession(session)?.pacIdentity??null)});
+}
+async function generatedEvidence(client:WorkflowRuntimeSqlClient,context:ProjectOwnerContext,projectId:unknown,operationKey:unknown,authority?:GenerationAuthority){
+ if(!authority)throw new Unavailable();
+ const identity=authority;
+ const q=await client.query(`/* project-planning:generated-evidence */ select * from project_planning_generations where workspace_id=$1 and project_key=$2 and operation_key=$3 for share`,[context.workspaceId,projectId,operationKey]);
+ if(q.rowCount!==1||q.rows[0].status!=='proposal_available')throw new Unavailable();
+ const row=q.rows[0],v=await readAuthorizedGenerationEvidence(client,context,row,identity.identityFingerprint,identity.domainWorkspaceId);
+ const result=await readAuthorizedGenerationProposal(client,context,row,v);
+ if(!result.proposal||row.validation_version!=='pac-project-plan/v1')throw new Unavailable();
+ return {row,plan:result.proposal,sources:result.sources,sourceFingerprint:planDigest(['pac.generated-draft.v1',row.request_fingerprint,row.output_fingerprint,row.plan_fingerprint,result.sources,row.validation_version])};
+}
+async function validateStored(client:WorkflowRuntimeSqlClient,context:ProjectOwnerContext,row:Row,authority?:GenerationAuthority) {
+ if(row.origin==='ai_generated'){
+  const q=await client.query(`select operation_key from project_planning_generations where workspace_id=$1 and project_key=$2 and id=$3`,[context.workspaceId,row.project_key,row.generation_id]);
+  if(q.rowCount!==1)throw new Unavailable();
+  const v=await generatedEvidence(client,context,row.project_key,q.rows[0].operation_key,authority);
+  if(v.row.id!==row.generation_id||v.row.request_fingerprint!==row.generation_request_fingerprint||v.row.output_fingerprint!==row.generation_output_fingerprint||v.row.plan_fingerprint!==row.plan_fingerprint||row.validation_version!==v.row.validation_version||planDigest(v.sources)!==planDigest(projectAIPlanningInput({projectId:row.project_key,sources:row.generation_manifest})?.sources)||v.sourceFingerprint!==row.source_fingerprint||planDigest(validateProjectPlan(row.plan_json,v.sources.length).plan)!==row.plan_fingerprint||row.created_by!==v.row.requested_by)throw new Unavailable();
+  if(await evidence(client,context,row,'project.plan_draft_saved')!==row.created_by)throw new Unavailable();
+  return v.plan;
+ }
   const original=await source(client,context,row.project_key as string,row.source_filename as string,row.source_version as number,row.source_sha256 as string);
   const parsed=parseProjectPlanningDocument(original.content,original.filename);
   if(original.documentId!==row.source_document_id||!parsed.plan||planDigest(parsed.plan)!==row.plan_fingerprint||planDigest(validateProjectPlan(row.plan_json).plan)!==row.plan_fingerprint
@@ -64,7 +90,7 @@ async function requestEvidence(client:WorkflowRuntimeSqlClient,context:ProjectOw
   if(!pending&&!approved&&!rejected)throw new Unavailable();
   return a;
 }
-export function createProjectPlanning(access:Access) {
+export function createProjectPlanning(access:Access,authority?:GenerationAuthority) {
   return Object.freeze({
     sources(projectId:unknown){return access.run(projectId,false,async(client,context)=>{
       const rows=await client.query(`/* project-planning:sources */ select d.filename,v.version,v.sha256 from knowledge_documents d join knowledge_document_versions v on v.workspace_id=d.workspace_id and v.document_id=d.id where d.workspace_id=$1 and d.project_key=$2 and d.status='active' order by d.filename,v.version desc limit 5001`,[context.workspaceId,projectId]);
@@ -89,13 +115,29 @@ export function createProjectPlanning(access:Access) {
         if(!parsed.plan||planDigest([sf,parsed.plan])!==f.previewFingerprint)throw new Conflict();
         const pf=planDigest(parsed.plan);
         const replay=await client.query(`/* project-planning:save-replay */ select * from project_planning_drafts where workspace_id=$1 and project_key=$2 and source_fingerprint=$3`,[context.workspaceId,f.projectId,sf]);
-        if(replay.rowCount){const row=replay.rows[0],stored=await validateStored(client,context,row);await validateDecision(client,context,row,stored,true);if(row.plan_fingerprint!==pf||row.created_by!==context.userId)throw new Conflict();return {outcome:"replayed" as const,revision:row.revision as number};}
+        if(replay.rowCount){const row=replay.rows[0],stored=await validateStored(client,context,row,authority);await validateDecision(client,context,row,stored,true);if(row.plan_fingerprint!==pf||row.created_by!==context.userId)throw new Conflict();return {outcome:"replayed" as const,revision:row.revision as number};}
         const current=await latestRevision(client,context,f.projectId as string);if(current!==f.expectedRevision||current>=20)throw new Conflict();
         const revision=current+1;
         const request=await client.query(`/* project-planning:approval-create */ insert into approval_requests(workspace_id,action_type,status,risk_level,requested_by,allowed_approver_role_codes,original_payload) values($1,'project_plan_activation','pending','medium',$2,array['owner'],$3::jsonb) returning id::text`,[context.workspaceId,context.userId,JSON.stringify(payload(f.projectId as string,revision,pf,sf))]);
         if(request.rowCount!==1)throw new Unavailable();
         const inserted=await client.query(`/* project-planning:save */ insert into project_planning_drafts(workspace_id,project_key,revision,source_document_id,source_filename,source_version,source_sha256,source_fingerprint,plan_json,plan_fingerprint,approval_request_id,created_by) values($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12) returning *`,[context.workspaceId,f.projectId,revision,s.documentId,s.filename,s.version,s.sha256,sf,JSON.stringify(parsed.plan),pf,request.rows[0].id,context.userId]);
         if(inserted.rowCount!==1)throw new Unavailable();await audit(client,context,inserted.rows[0],"project.plan_draft_saved");return {outcome:"saved" as const,revision};
+      });
+    },
+    saveGenerated(raw:unknown){
+      const f=exactOwnData(raw,['projectId','operationKey','planFingerprint','expectedRevision']);
+      if(!f||!isProjectKey(f.projectId)||typeof f.operationKey!=='string'||!/^pp-[a-f0-9]{32}$/u.test(f.operationKey)||!hash(f.planFingerprint)||!Number.isInteger(f.expectedRevision)||(f.expectedRevision as number)<0||(f.expectedRevision as number)>19)return Promise.resolve({status:'invalid_input' as const});
+      return access.run(f.projectId,true,async(client,context)=>{
+        const v=await generatedEvidence(client,context,f.projectId,f.operationKey,authority);
+        if(v.row.plan_fingerprint!==f.planFingerprint)throw new Conflict();
+        const replay=await client.query(`select * from project_planning_drafts where workspace_id=$1 and project_key=$2 and generation_id=$3`,[context.workspaceId,f.projectId,v.row.id]);
+        if(replay.rowCount){const row=replay.rows[0],plan=await validateStored(client,context,row,authority);await validateDecision(client,context,row,plan,true);if(row.save_expected_revision!==f.expectedRevision||row.created_by!==context.userId)throw new Conflict();return{outcome:'replayed' as const,revision:row.revision as number};}
+        const current=await latestRevision(client,context,f.projectId as string);if(current!==f.expectedRevision||current>=20)throw new Conflict();
+        const revision=current+1,pf=v.row.plan_fingerprint as string,sf=v.sourceFingerprint;
+        const a=await client.query(`insert into approval_requests(workspace_id,action_type,status,risk_level,requested_by,allowed_approver_role_codes,original_payload)values($1,'project_plan_activation','pending','medium',$2,array['owner'],$3::jsonb)returning id`,[context.workspaceId,context.userId,JSON.stringify(payload(f.projectId as string,revision,pf,sf))]);
+        if(a.rowCount!==1)throw new Unavailable();
+        const inserted=await client.query(`/* project-planning:generated-save */ insert into project_planning_drafts(workspace_id,project_key,revision,source_fingerprint,plan_json,plan_fingerprint,approval_request_id,created_by,origin,generation_id,generation_request_fingerprint,generation_output_fingerprint,generation_manifest,validation_version,save_expected_revision)values($1,$2,$3,$4,$5::jsonb,$6,$7,$8,'ai_generated',$9,$10,$11,$12::jsonb,$13,$14)returning *`,[context.workspaceId,f.projectId,revision,sf,JSON.stringify(v.plan),pf,a.rows[0].id,context.userId,v.row.id,v.row.request_fingerprint,v.row.output_fingerprint,JSON.stringify(v.sources),v.row.validation_version,f.expectedRevision]);
+        if(inserted.rowCount!==1)throw new Unavailable();await audit(client,context,inserted.rows[0],'project.plan_draft_saved');return{outcome:'saved' as const,revision};
       });
     },
     read(projectId:unknown,revision?:unknown){
@@ -105,10 +147,10 @@ export function createProjectPlanning(access:Access) {
         if(rows.rowCount>20)throw new Unavailable();
         const row=rows.rows.find(r=>r.revision===(revision??rows.rows[0]?.revision));
         if(!row&&revision!==undefined)throw new Unavailable();
-        const plan=row?await validateStored(client,context,row):null;
+        const plan=row?await validateStored(client,context,row,authority):null;
         if(row&&plan)await validateDecision(client,context,row,plan,false);
-        return Object.freeze({history:Object.freeze(rows.rows.map(r=>Object.freeze({revision:r.revision as number,status:r.status as string}))),latestRevision:rows.rows[0]?.revision as number??0,
-          selected:row&&plan?Object.freeze({revision:row.revision as number,status:row.status as "draft"|"approved"|"rejected",plan,planFingerprint:row.plan_fingerprint as string,sourceFingerprint:row.source_fingerprint as string,source:Object.freeze({filename:row.source_filename as string,version:row.source_version as number,sha256:row.source_sha256 as string}),tasks:Object.freeze(plan.tasks.map(t=>({sourceId:t.id,taskId:planningTaskKey(projectId as string,t.id)})))}):null});
+        return Object.freeze({history:Object.freeze(rows.rows.map(r=>Object.freeze({revision:r.revision as number,status:r.status as string,origin:(r.origin??'manual_import') as string}))),latestRevision:rows.rows[0]?.revision as number??0,
+          selected:row&&plan?Object.freeze({origin:(row.origin??"manual_import") as "manual_import"|"ai_generated",sources:row.origin==="ai_generated"?row.generation_manifest as readonly {filename:string;version:number;sha256:string}[]:[{filename:row.source_filename as string,version:row.source_version as number,sha256:row.source_sha256 as string}],revision:row.revision as number,status:row.status as "draft"|"approved"|"rejected",plan,planFingerprint:row.plan_fingerprint as string,sourceFingerprint:row.source_fingerprint as string,source:row.origin==="ai_generated"?null:Object.freeze({filename:row.source_filename as string,version:row.source_version as number,sha256:row.source_sha256 as string}),tasks:Object.freeze(plan.tasks.map(t=>({sourceId:t.id,taskId:planningTaskKey(projectId as string,t.id)})))}):null});
       });
     },
     decide(raw:unknown){
@@ -116,7 +158,7 @@ export function createProjectPlanning(access:Access) {
       if(!f||!isProjectKey(f.projectId)||!Number.isInteger(f.revision)||(f.revision as number)<1||(f.revision as number)>20||!hash(f.planFingerprint)||!["approved","rejected"].includes(f.decision as string))return Promise.resolve({status:"invalid_input" as const});
       return access.run(f.projectId,true,async(client,context)=>{
         const selected=await client.query(`/* project-planning:decision-lock */ select * from project_planning_drafts where workspace_id=$1 and project_key=$2 and revision=$3 for update`,[context.workspaceId,f.projectId,f.revision]);
-        if(selected.rowCount!==1)throw new Unavailable();const row=selected.rows[0];const plan=await validateStored(client,context,row);
+        if(selected.rowCount!==1)throw new Unavailable();const row=selected.rows[0];const plan=await validateStored(client,context,row,authority);
         if(row.plan_fingerprint!==f.planFingerprint)throw new Conflict();const request=await requestEvidence(client,context,row);
         const actor=await validateDecision(client,context,row,plan,true);
         if(row.status!=="draft"){

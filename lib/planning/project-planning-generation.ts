@@ -16,7 +16,7 @@ import { projectAIPlanningInput } from './project-planning-form.ts';
 // @ts-expect-error Direct Node TypeScript execution requires extension.
 import { prepareAuthorizedProjectGeneration } from './project-planning.ts';
 // @ts-expect-error Direct Node TypeScript execution requires extension.
-import { planDigest, parsePlanningJSON, validateProjectPlan } from './project-planning-contract.ts';
+import { planDigest, parsePlanningJSON, validateProjectPlan, historicalProjectPlanV1Fingerprint } from './project-planning-contract.ts';
 // @ts-expect-error Direct Node TypeScript execution requires extension.
 import { projectGenerationPolicy, generationOfferFingerprint } from '../composition/project-planning-generation-config.ts';
 // @ts-expect-error Direct Node TypeScript execution requires extension.
@@ -55,25 +55,7 @@ export function createProjectGenerationRequests(input:Readonly<{access:Access;id
   const prepared=await prepareAuthorizedProjectGeneration(client,c,selected),p=policy();
   return {prepared,policy:p,offerFingerprint:generationOfferFingerprint(prepared.preparationFingerprint,p)};
  }
- async function evidence(client:WorkflowRuntimeSqlClient,c:ProjectOwnerContext,row:Row){
-  if(row.requested_by!==c.userId||row.identity_fingerprint!==identityFingerprint)throw new Unavailable();
-  const sources=await client.query(`/* project-generation:sources */ select source_index,filename,version,sha256 from project_planning_generation_sources where workspace_id=$1 and project_key=$2 and generation_id=$3 order by source_index`,[c.workspaceId,row.project_key,row.id]);
-  const manifest=sources.rows.map((s,i)=>{if(s.source_index!==i)throw new Unavailable();return{filename:s.filename,version:s.version,sha256:s.sha256};});
-  const storedManifest=projectAIPlanningInput({projectId:row.project_key,sources:row.manifest_json});
-  if(!storedManifest||planDigest(manifest)!==planDigest(storedManifest.sources))throw new Unavailable();
-  const selected=projectAIPlanningInput({projectId:row.project_key,sources:manifest});if(!selected)throw new Unavailable();
-  const prepared=await prepareAuthorizedProjectGeneration(client,c,selected);
-  const storedPolicy=projectGenerationPolicy(row.policy_json,new Date(row.authorized_at as string).getTime());if(!storedPolicy||prepared.preparationFingerprint!==row.preparation_fingerprint||generationOfferFingerprint(prepared.preparationFingerprint,storedPolicy)!==row.offer_fingerprint)throw new Unavailable();
-  const authorizedAt=new Date(row.authorized_at as string).toISOString(),expiresAt=new Date(row.expires_at as string).toISOString();
-  const runtimeFp=projectGenerationInvocationFingerprint({workspaceId:input.domainWorkspaceId,planningKey:row.run_id as string,project:{projectId:row.project_key as string,displayName:c.project.display_name as string},createdAt:authorizedAt,policy:storedPolicy},prepared.messages as never);
-  if(!runtimeFp||runtimeFp!==row.runtime_request_fingerprint)throw new Unavailable();
-  const fp=planDigest(['pac.project-generation-request.v1',runtimeFp,c.workspaceId,row.project_key,row.operation_key,row.run_id,c.userId,identityFingerprint,row.offer_fingerprint,authorizedAt,expiresAt]);
-  if(fp!==row.request_fingerprint)throw new Unavailable();
-  const events=await client.query(`/* project-generation:evidence */ select event_type,actor_user_id::text,metadata from audit_events where workspace_id=$1 and entity_type='project_planning_generation' and entity_id=$2 order by event_type`,[c.workspaceId,row.id]);
-  const start=events.rows.filter(e=>e.event_type==='project.planning_generation_authorized'),end=events.rows.filter(e=>e.event_type==='project.planning_generation_settled');
-  if(start.length!==1||start[0].actor_user_id!==c.userId||planDigest(start[0].metadata)!==planDigest({requestFingerprint:fp})||end.length!==(row.status==='started'?0:1)||end.some(e=>e.actor_user_id!==c.userId||!exactOwnData(e.metadata,['requestFingerprint','status'])||(e.metadata as Record<string,unknown>).requestFingerprint!==fp||(e.metadata as Record<string,unknown>).status!==row.status))throw new Unavailable();
-  return {prepared,policy:storedPolicy,selected,authorizedAt,expiresAt};
- }
+
  return Object.freeze({
   async prepare(raw:unknown){
    const selected=projectAIPlanningInput(raw);if(!selected)return{status:'invalid_input' as const};
@@ -89,7 +71,7 @@ export function createProjectGenerationRequests(input:Readonly<{access:Access;id
    return run(selected.projectId,true,async(client,c)=>{
     const v=await capture(client,c,selected);if(v.offerFingerprint!==f.offerFingerprint)throw new Conflict();
     const existing=await client.query(`/* project-generation:replay */ select * from project_planning_generations where workspace_id=$1 and operation_key=$2`,[c.workspaceId,f.operationKey]);
-    if(existing.rowCount){const row=existing.rows[0];if(row.project_key!==selected.projectId||row.offer_fingerprint!==f.offerFingerprint)throw new Conflict();await evidence(client,c,row);return{kind:'replayed' as const,row};}
+    if(existing.rowCount){const row=existing.rows[0];if(row.project_key!==selected.projectId||row.offer_fingerprint!==f.offerFingerprint)throw new Conflict();await readAuthorizedGenerationEvidence(client,c,row,identityFingerprint,input.domainWorkspaceId);return{kind:'replayed' as const,row};}
     const time=await client.query(`/* project-generation:clock */ select to_char(transaction_timestamp() at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as now`);
     const authorizedAt=canonicalUtc(time.rows[0]?.now);if(!authorizedAt)throw new Unavailable();
     const expiresAt=new Date(Date.parse(authorizedAt)+600000).toISOString(),runId='ppg-'+randomBytes(10).toString('hex');
@@ -106,7 +88,7 @@ export function createProjectGenerationRequests(input:Readonly<{access:Access;id
   async admit(projectId:string,operationKey:string){
    return run(projectId,true,async(client,c)=>{
     const result=await client.query(`/* project-generation:admit */ select * from project_planning_generations where workspace_id=$1 and project_key=$2 and operation_key=$3 for update`,[c.workspaceId,projectId,operationKey]);
-    if(result.rowCount!==1)throw new Unavailable();const row=result.rows[0],v=await evidence(client,c,row);
+    if(result.rowCount!==1)throw new Unavailable();const row=result.rows[0],v=await readAuthorizedGenerationEvidence(client,c,row,identityFingerprint,input.domainWorkspaceId);
     const now=new Date().toISOString();if(row.status!=='started'||now<v.authorizedAt||now>=v.expiresAt||generationOfferFingerprint(v.prepared.preparationFingerprint,policy())!==row.offer_fingerprint)throw new Unavailable();
     return{row,...v,ownerUserId:c.userId,projectName:c.project.display_name as string};
    });
@@ -114,7 +96,7 @@ export function createProjectGenerationRequests(input:Readonly<{access:Access;id
   async startInTransaction(client:WorkflowRuntimeSqlClient,c:ProjectOwnerContext,reservation:AgentStepModelBudgetReservation,tenant:ResolvedWorkflowRuntimeTenant){
    if(!isResolvedWorkflowRuntimeTenant(tenant)||tenant.workspaceDatabaseId!==c.workspaceId||tenant.workspaceId!==reservation.workspaceId)throw new Unavailable();
    const q=await client.query(`select * from project_planning_generations where workspace_id=$1 and project_key=$2 and run_id=$3 for update`,[c.workspaceId,reservation.projectId,reservation.runId]);
-   if(q.rowCount!==1)throw new Unavailable();const row=q.rows[0],v=await evidence(client,c,row);
+   if(q.rowCount!==1)throw new Unavailable();const row=q.rows[0],v=await readAuthorizedGenerationEvidence(client,c,row,identityFingerprint,input.domainWorkspaceId);
    const time=await client.query(`select clock_timestamp() as now`),now=new Date(time.rows[0].now as string).toISOString();
    if(row.status!=='started'||now<v.authorizedAt||now>=v.expiresAt||row.runtime_request_fingerprint!==reservation.requestFingerprint||generationOfferFingerprint(v.prepared.preparationFingerprint,policy())!==row.offer_fingerprint||!v.policy.api)throw new Unavailable();
    await startPlanningApi(client,c,row,v.policy,()=>generationOfferFingerprint(v.prepared.preparationFingerprint,policy())===row.offer_fingerprint);
@@ -122,7 +104,7 @@ export function createProjectGenerationRequests(input:Readonly<{access:Access;id
   async settle(projectId:string,operationKey:string,outcome:GenerationOutcome,text:string|null){
    return run(projectId,true,async(client,c)=>{
     const rows=await client.query(`/* project-generation:settle-lock */ select * from project_planning_generations where workspace_id=$1 and project_key=$2 and operation_key=$3 for update`,[c.workspaceId,projectId,operationKey]);
-    if(rows.rowCount!==1)throw new Unavailable();const row=rows.rows[0],v=await evidence(client,c,row);
+    if(rows.rowCount!==1)throw new Unavailable();const row=rows.rows[0],v=await readAuthorizedGenerationEvidence(client,c,row,identityFingerprint,input.domainWorkspaceId);
     if(row.status!=='started')throw new Conflict();
     const validated=text===null?null:validateGeneratedProposal(text,v.selected.sources.length).plan;
     const status=text===null?outcome:validated?'proposal_available':'invalid_output';
@@ -139,14 +121,59 @@ export function createProjectGenerationRequests(input:Readonly<{access:Access;id
    if(!operation(operationKey))return{status:'invalid_input' as const};
    return run(projectId,false,async(client,c)=>{
     const rows=await client.query(`/* project-generation:read */ select * from project_planning_generations where workspace_id=$1 and project_key=$2 and operation_key=$3`,[c.workspaceId,projectId,operationKey]);
-    if(rows.rowCount!==1)throw new Unavailable();const row=rows.rows[0],v=await evidence(client,c,row);
+    if(rows.rowCount!==1)throw new Unavailable();const row=rows.rows[0],v=await readAuthorizedGenerationEvidence(client,c,row,identityFingerprint,input.domainWorkspaceId);
     if(!['proposal_available','invalid_output'].includes(row.status as string))return{status:row.status==='started'?'recovery_required':row.status as string};
-    const results=await client.query(`/* project-generation:result */ select o.output_text,o.output_fingerprint from workflow_runs r join workflow_model_invocations i on i.workspace_id=r.workspace_id and i.workflow_run_id=r.id join workflow_model_invocation_results o on o.workspace_id=i.workspace_id and o.workflow_run_id=r.id and o.model_invocation_id=i.id where r.workspace_id=$1 and r.project_id=$2 and r.runtime_id=$3 and i.invocation_id=$4 and i.status='succeeded' and i.outcome='succeeded' and i.request_fingerprint=$5`,[c.workspaceId,projectId,row.run_id,row.run_id+'-invocation',row.runtime_request_fingerprint]);
-    const result=results.rows[0];if(results.rowCount!==1||typeof result.output_text!=='string'||result.output_fingerprint!==row.output_fingerprint||outputDigest(result.output_text)!==row.output_fingerprint)throw new Unavailable();
-    const validated=validateGeneratedProposal(result.output_text,v.selected.sources.length);
-    if((validated.plan?planDigest(validated.plan):null)!==row.plan_fingerprint)throw new Unavailable();
-    return{status:row.status as string,proposal:validated.plan,findings:validated.findings,sources:v.selected.sources,runtimeDispatchAllowed:false as const};
+    const proposal=await readAuthorizedGenerationProposal(client,c,row,v);
+    const revision=await client.query(`/* project-generation:draft-revision */ select coalesce(max(save_expected_revision) filter(where generation_id=$3),max(revision),0)::int expected_revision from project_planning_drafts where workspace_id=$1 and project_key=$2`,[c.workspaceId,row.project_key,row.id]);
+    const expectedRevision=revision.rows[0]?.expected_revision;
+    if(!Number.isInteger(expectedRevision)||(expectedRevision as number)<0||(expectedRevision as number)>20)throw new Unavailable();
+    return {...proposal,expectedRevision:expectedRevision as number};
+
    });
   },
  });
+}
+
+export async function readAuthorizedGenerationEvidence(client:WorkflowRuntimeSqlClient,c:ProjectOwnerContext,row:Row,identityFingerprint:string,domainWorkspaceId:string){
+  if(row.requested_by!==c.userId||row.identity_fingerprint!==identityFingerprint)throw new Unavailable();
+  const sources=await client.query(`/* project-generation:sources */ select source_index,filename,version,sha256 from project_planning_generation_sources where workspace_id=$1 and project_key=$2 and generation_id=$3 order by source_index`,[c.workspaceId,row.project_key,row.id]);
+  const manifest=sources.rows.map((s,i)=>{if(s.source_index!==i)throw new Unavailable();return{filename:s.filename,version:s.version,sha256:s.sha256};});
+  const storedManifest=projectAIPlanningInput({projectId:row.project_key,sources:row.manifest_json});
+  if(!storedManifest||planDigest(manifest)!==planDigest(storedManifest.sources))throw new Unavailable();
+  const selected=projectAIPlanningInput({projectId:row.project_key,sources:manifest});if(!selected)throw new Unavailable();
+  const prepared=await prepareAuthorizedProjectGeneration(client,c,selected);
+  const storedPolicy=projectGenerationPolicy(row.policy_json,new Date(row.authorized_at as string).getTime());if(!storedPolicy||prepared.preparationFingerprint!==row.preparation_fingerprint||generationOfferFingerprint(prepared.preparationFingerprint,storedPolicy)!==row.offer_fingerprint)throw new Unavailable();
+  const authorizedAt=new Date(row.authorized_at as string).toISOString(),expiresAt=new Date(row.expires_at as string).toISOString();
+  const runtimeFp=projectGenerationInvocationFingerprint({workspaceId:domainWorkspaceId,planningKey:row.run_id as string,project:{projectId:row.project_key as string,displayName:c.project.display_name as string},createdAt:authorizedAt,policy:storedPolicy},prepared.messages as never);
+  if(!runtimeFp||runtimeFp!==row.runtime_request_fingerprint)throw new Unavailable();
+  const fp=planDigest(['pac.project-generation-request.v1',runtimeFp,c.workspaceId,row.project_key,row.operation_key,row.run_id,c.userId,identityFingerprint,row.offer_fingerprint,authorizedAt,expiresAt]);
+  if(fp!==row.request_fingerprint)throw new Unavailable();
+  const events=await client.query(`/* project-generation:evidence */ select event_type,actor_user_id::text,metadata from audit_events where workspace_id=$1 and entity_type='project_planning_generation' and entity_id=$2 order by event_type`,[c.workspaceId,row.id]);
+  const start=events.rows.filter(e=>e.event_type==='project.planning_generation_authorized'),end=events.rows.filter(e=>e.event_type==='project.planning_generation_settled');
+  if(start.length!==1||start[0].actor_user_id!==c.userId||planDigest(start[0].metadata)!==planDigest({requestFingerprint:fp})||end.length!==(row.status==='started'?0:1)||end.some(e=>e.actor_user_id!==c.userId||!exactOwnData(e.metadata,['requestFingerprint','status'])||(e.metadata as Record<string,unknown>).requestFingerprint!==fp||(e.metadata as Record<string,unknown>).status!==row.status))throw new Unavailable();
+  return {prepared,policy:storedPolicy,selected,authorizedAt,expiresAt};
+ }
+
+/** Historical evidence only: caller holds Owner/project authority on this same client. */
+export async function readAuthorizedGenerationProposal(client:WorkflowRuntimeSqlClient,c:ProjectOwnerContext,row:Row,v:Awaited<ReturnType<typeof readAuthorizedGenerationEvidence>>){
+ const results=await client.query(`/* project-generation:result */ select o.output_text,o.output_fingerprint from workflow_runs r join workflow_model_invocations i on i.workspace_id=r.workspace_id and i.workflow_run_id=r.id join workflow_model_invocation_results o on o.workspace_id=i.workspace_id and o.workflow_run_id=r.id and o.model_invocation_id=i.id where r.workspace_id=$1 and r.project_id=$2 and r.runtime_id=$3 and i.invocation_id=$4 and i.status='succeeded' and i.outcome='succeeded' and i.request_fingerprint=$5`,[c.workspaceId,row.project_key,row.run_id,row.run_id+'-invocation',row.runtime_request_fingerprint]);
+    const result=results.rows[0];if(results.rowCount!==1||typeof result.output_text!=='string'||result.output_fingerprint!==row.output_fingerprint||outputDigest(result.output_text)!==row.output_fingerprint)throw new Unavailable();
+    // Verify the immutable original v1 fingerprint before interpreting current eligibility.
+    // No caller mode can select the historical validator for settlement or persistence.
+    let originalFingerprint:string|null;
+    try{originalFingerprint=row.status==='proposal_available'
+      ?historicalProjectPlanV1Fingerprint(parsePlanningJSON(result.output_text),v.selected.sources.length)
+      :currentOutputPlanFingerprint(result.output_text,v.selected.sources.length);}catch{throw new Unavailable();}
+    if(originalFingerprint!==row.plan_fingerprint)throw new Unavailable();
+    const validated=validateGeneratedProposal(result.output_text,v.selected.sources.length);
+    if(row.status==='proposal_available'&&!validated.plan){
+      if(!originalFingerprint)throw new Unavailable();
+      return{status:'proposal_encoding_unsupported',storedStatus:'proposal_available',proposal:null,findings:validated.findings,sources:v.selected.sources,runtimeDispatchAllowed:false as const};
+    }
+    return{status:row.status as string,proposal:validated.plan,findings:validated.findings,sources:v.selected.sources,runtimeDispatchAllowed:false as const};
+}
+
+function currentOutputPlanFingerprint(text:string,count:number){
+ const plan=validateGeneratedProposal(text,count).plan;
+ return plan?planDigest(plan):null;
 }

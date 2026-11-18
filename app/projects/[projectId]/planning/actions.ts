@@ -13,3 +13,9 @@ export async function decideProjectPlanAction(_previous:unknown,form:FormData){
 export async function prepareProjectGenerationAction(_previous:unknown,form:FormData){return submitProjectGeneration("prepare",form);}
 export async function generateProjectProposalAction(_previous:unknown,form:FormData){return submitProjectGeneration("generate",form);}
 export async function readProjectProposalAction(_previous:unknown,form:FormData){return submitProjectGeneration("read",form);}
+
+export async function saveGeneratedProjectPlanAction(_previous:unknown,form:FormData){
+ const r=await submitProjectPlanning('saveGenerated',form);
+ if(r.status==='saved'||r.status==='replayed'){revalidatePath('/projects/[projectId]/planning','page');revalidatePath('/tasks');revalidatePath('/approvals');}
+ return{status:r.status};
+}

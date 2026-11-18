@@ -295,10 +295,11 @@ test("PG populated 0015 → 0016 preserves terminal results, journals, exposures
     assert.equal(migrations[22], "0023_project_repository_knowledge_versions.sql");
   assert.equal(migrations[23], "0024_project_planning_drafts.sql");
   assert.equal(migrations[24], "0025_project_planning_generation.sql");
-  assert.equal(migrations.length, 27);
+  assert.equal(migrations.length, 29);
   assert.equal(migrations[25], "0026_project_planning_api_reservations.sql");
   assert.equal(migrations[26], "0027_project_planning_api_cost_evidence.sql");
-  assert.equal(migrations.at(-1), "0027_project_planning_api_cost_evidence.sql");
+  assert.equal(migrations[27], "0028_project_planning_generated_drafts.sql");
+  assert.equal(migrations.at(-1), "0029_project_planning_numeric_normalization.sql");
     for (const path of migrations.slice(0, 15)) await admin.query(readFileSync(new URL(`../../db/migrations/${path}`, import.meta.url), "utf8"));
     await live.insertWorkspace(admin, live.primaryWorkspace);
     await admin.query("insert into projects(workspace_id,project_key,display_name) values($1,'project-a','Legacy terminal')", [live.primaryWorkspace.id]);
