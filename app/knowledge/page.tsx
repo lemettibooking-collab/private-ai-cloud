@@ -1,192 +1,43 @@
-import { DocumentCard } from "@/components/domain/document-card";
+import Link from "next/link";
 import { AppShell } from "@/components/shell/app-shell";
-import { ActionButton } from "@/components/ui/action-button";
 import { PageHeader } from "@/components/ui/page-header";
 import { SectionCard } from "@/components/ui/section-card";
-import { StatusBadge } from "@/components/ui/status-badge";
-import {
-  documentIntelligenceCapabilities,
-  documents,
-  knowledgeOpsBlocks,
-} from "@/lib/mock-data";
-import type { StatusTone } from "@/types/app";
+import { OwnerDataUnavailable, SignInRequired } from "@/components/domain/owner-console/owner-state";
+import { KnowledgeUploadForm } from "@/components/domain/owner-console/project-resource-forms";
+import { loadOwnerProjects } from "@/lib/composition/owner-console-read.server";
+import { loadProjectKnowledge, projectResourceRequestKey } from "@/lib/composition/owner-project-resources.server";
+import { getI18n } from "@/lib/i18n/locale.server";
+import { projectResourcesCopy } from "@/lib/i18n/project-resources-copy";
+import { uploadKnowledgeAction } from "./actions";
 
-const collections = [
-  "All",
-  "Product",
-  "Support",
-  "Content",
-  "Engineering",
-  "Policies",
-  "QA",
-];
-
-const tags = ["roadmap", "faq", "telegram", "codex", "review", "source-gap"];
-
-const knowledgeStatusLabel = {
-  info: "MVP active",
-  success: "MVP active",
-  warning: "planned / partial",
-  danger: "needs review",
-  locked: "locked",
-  neutral: "v0.2 planned",
-} satisfies Record<StatusTone, string>;
-
-export default function KnowledgePage() {
-  return (
-    <AppShell>
-      <PageHeader
-        action={<ActionButton disabled>Upload disabled in prototype</ActionButton>}
-        description="Manage internal documents, collections, source previews, and indexing status for RAG-backed workflows."
-        eyebrow="Knowledge Base"
-        title="Documents and indexing"
-      />
-
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,0.75fr)_minmax(0,1.25fr)]">
-        <div className="space-y-6">
-          <SectionCard
-            description="Mock upload surface. No file is stored in this frontend-only prototype."
-            title="Upload document"
-          >
-            <div className="rounded-xl border border-dashed border-cyan-400/30 bg-cyan-400/5 p-6 text-center">
-              <p className="text-sm font-medium text-cyan-100">
-                Drop PDF, Markdown, or text source here
-              </p>
-              <p className="mt-2 text-xs leading-5 text-slate-500">
-                Upload, parsing, and indexing are mocked. Backend storage is out
-                of scope.
-              </p>
-            </div>
-          </SectionCard>
-
-          <SectionCard title="Collection filter">
-            <div className="flex flex-wrap gap-2">
-              {collections.map((collection, index) => (
-                <StatusBadge key={collection} tone={index === 0 ? "info" : "neutral"}>
-                  {collection}
-                </StatusBadge>
-              ))}
-            </div>
-          </SectionCard>
-
-          <SectionCard title="Search and tags">
-            <div className="rounded-lg border border-slate-800 bg-slate-900/60 px-3 py-2 text-sm text-slate-500">
-              Search indexed documents, citations, and source previews
-            </div>
-            <div className="mt-3 flex flex-wrap gap-2">
-              {tags.map((tag) => (
-                <StatusBadge key={tag} tone="neutral">
-                  #{tag}
-                </StatusBadge>
-              ))}
-            </div>
-          </SectionCard>
-
-          <SectionCard title="Collection permissions">
-            <div className="space-y-3">
-              {[
-                ["Owner", "All collections"],
-                ["Support Operator", "Support + Product read"],
-                ["Marketing Operator", "Content + Product read"],
-                ["Demo Viewer", "Curated Smart Algorithms demo only"],
-              ].map(([role, scope]) => (
-                <div
-                  className="flex items-center justify-between rounded-lg border border-slate-800 bg-slate-900/50 p-3"
-                  key={role}
-                >
-                  <span className="text-sm text-slate-300">{role}</span>
-                  <StatusBadge tone="locked">{scope}</StatusBadge>
-                </div>
-              ))}
-            </div>
-          </SectionCard>
-        </div>
-
-        <SectionCard
-          description="Mock documents required by the blueprint."
-          title="Document list"
-        >
-          <div className="space-y-4">
-            {documents.map((document) => (
-              <DocumentCard document={document} key={document.id} />
-            ))}
-          </div>
-        </SectionCard>
-      </div>
-
-      <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        {knowledgeOpsBlocks.map((block) => (
-          <SectionCard key={block.title}>
-            <div className="flex items-start justify-between gap-3">
-              <h2 className="text-base font-semibold text-slate-50">
-                {block.title}
-              </h2>
-              <StatusBadge tone={block.tone}>
-                {knowledgeStatusLabel[block.tone]}
-              </StatusBadge>
-            </div>
-            <p className="mt-3 text-sm leading-6 text-slate-400">
-              {block.detail}
-            </p>
-          </SectionCard>
-        ))}
-      </div>
-
-      <div className="mt-6">
-        <SectionCard
-          action={<StatusBadge tone="warning">planned / partial</StatusBadge>}
-          description="Document Intelligence turns uploaded files into reviewable summaries, risks, checklists, and owner tasks. Current prototype is mocked only."
-          title="Document Intelligence"
-        >
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {documentIntelligenceCapabilities.map((capability) => (
-              <div
-                className="rounded-lg border border-slate-800 bg-slate-900/50 p-4"
-                key={capability.title}
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <h3 className="text-sm font-semibold text-slate-100">
-                    {capability.title}
-                  </h3>
-                  <StatusBadge
-                    tone={
-                      capability.status === "planned / partial"
-                        ? "warning"
-                        : "neutral"
-                    }
-                  >
-                    {capability.status}
-                  </StatusBadge>
-                </div>
-                <p className="mt-2 text-sm leading-6 text-slate-400">
-                  {capability.description}
-                </p>
-              </div>
-            ))}
-          </div>
-        </SectionCard>
-      </div>
-
-      <div className="mt-6 grid gap-6 xl:grid-cols-3">
-        <SectionCard title="Document versions">
-          <p className="text-sm leading-6 text-slate-400">
-            Version history, compare, and rollback are planned. Current cards
-            show latest mocked source state only.
-          </p>
-        </SectionCard>
-        <SectionCard title="Knowledge base update">
-          <p className="text-sm leading-6 text-slate-400">
-            Updating a source should trigger parsing, indexing, audit, and RAG
-            readiness checks before it appears in citations.
-          </p>
-        </SectionCard>
-        <SectionCard title="GitHub / Drive / Yandex / S3">
-          <p className="text-sm leading-6 text-slate-400">
-            Connectors are represented as later integrations. No external source
-            sync is implemented in this frontend prototype.
-          </p>
-        </SectionCard>
-      </div>
-    </AppShell>
-  );
+type Props = { searchParams: Promise<Record<string, string | string[] | undefined>> };
+export default async function KnowledgePage({ searchParams }: Props) {
+  const params = await searchParams, { locale } = await getI18n(), c = projectResourcesCopy(locale);
+  const href = (project: string, filename?: string, version?: number) => `/knowledge?project=${encodeURIComponent(project)}${filename ? `&document=${encodeURIComponent(filename)}` : ""}${version ? `&version=${version}` : ""}`;
+  if (params.project === undefined) {
+    const projects = await loadOwnerProjects();
+    return <AppShell><PageHeader description={c.knowledgeDescription} eyebrow={c.owner} title={c.knowledge} />
+      {projects.state === "unauthenticated" ? <SignInRequired /> : projects.state !== "available" ? (<OwnerDataUnavailable />) : (<SectionCard title={c.choose}>
+        <ul className="space-y-2">{projects.projects.map(p => <li key={p.projectId}><Link className="text-sm text-accent" href={href(p.projectId)}>{p.displayName}</Link></li>)}</ul>
+      </SectionCard>)}
+    </AppShell>;
+  }
+  const view = await loadProjectKnowledge(params.project, params.document, params.version);
+  const selected = view.status === "available" ? view.binding.project : null;
+  return <AppShell selectedProject={selected}><PageHeader description={c.knowledgeDescription} eyebrow={c.owner} title={selected ? `${c.knowledge} · ${selected.displayName}` : c.knowledge} />
+    {view.status === "unauthenticated" ? <SignInRequired /> : view.status !== "available" ? (<OwnerDataUnavailable />) : (<div className="space-y-4">
+      <nav className="flex gap-4 text-sm text-accent"><Link href="/projects">{c.projects}</Link><Link href={`/projects/${encodeURIComponent(view.binding.projectId)}`}>{c.repository}</Link><Link href={`/dashboard?project=${encodeURIComponent(view.binding.projectId)}`}>{c.dashboard}</Link></nav>
+      {view.binding.projectStatus === "active" && <SectionCard title={c.upload}><KnowledgeUploadForm action={uploadKnowledgeAction} copy={c} documents={view.documents} key={view.binding.projectId} projectId={view.binding.projectId} requestId={projectResourceRequestKey()} /></SectionCard>}
+      <SectionCard title={c.knowledge}>
+        {!view.documents.length ? <p className="text-sm text-ink-2">{c.empty}</p> : <div className="overflow-x-auto"><table className="pac-table"><thead><tr>{[c.filename,c.version,c.uploaded,c.status,c.hash].map(label=><th key={label} scope="col">{label}</th>)}</tr></thead><tbody>
+          {view.documents.map(d => <tr key={d.filename}><td><Link className="text-accent" href={href(view.binding.projectId,d.filename,d.version)}>{d.filename}</Link></td><td>{d.version}</td><td>{d.uploadedAt}</td><td>{c.uploaded_unverified}</td><td className="font-mono text-xs">{d.sha256}</td></tr>)}
+        </tbody></table></div>}
+      </SectionCard>
+      {view.selected && <SectionCard title={`${view.selected.document.filename} · ${c.version} ${view.selected.document.version}`}>
+        <p className="mb-3 break-all font-mono text-xs text-ink-3">{c.hash}: {view.selected.document.sha256}</p>
+        <nav aria-label={c.history} className="mb-4 flex flex-wrap gap-3 text-sm text-accent">{view.selected.versions.map(v => <Link href={href(view.binding.projectId,v.filename,v.version)} key={v.version}>{c.version} {v.version}</Link>)}</nav>
+        <pre className="max-h-[65vh] overflow-auto whitespace-pre-wrap break-words rounded border border-line p-4 text-sm text-ink-2">{view.selected.content}</pre>
+      </SectionCard>}
+    </div>)}
+  </AppShell>;
 }

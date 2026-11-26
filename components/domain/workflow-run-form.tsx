@@ -3,6 +3,9 @@ import { SectionCard } from "@/components/ui/section-card";
 import { StatusBadge } from "@/components/ui/status-badge";
 import type { WorkflowPreview } from "@/types/workflow";
 import { SourceCitationCard } from "@/components/domain/source-citation-card";
+import { getI18n } from "@/lib/i18n/locale.server";
+import { prototypeMock } from "@/lib/i18n/prototype-mock";
+import { prototypePages } from "@/lib/i18n/prototype-pages";
 
 type WorkflowRunFormProps = {
   title: string;
@@ -15,12 +18,15 @@ type WorkflowRunFormProps = {
   preview: WorkflowPreview;
 };
 
-export function WorkflowRunForm({
+export async function WorkflowRunForm({
   title,
   description,
   fields,
   preview,
 }: WorkflowRunFormProps) {
+  const { locale } = await getI18n();
+  const c = prototypePages[locale].runForm;
+  const { labels } = prototypeMock[locale];
   return (
     <div className="grid gap-6 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
       <SectionCard title={title} description={description}>
@@ -44,22 +50,21 @@ export function WorkflowRunForm({
             </label>
           ))}
           <div className="flex flex-wrap gap-2 pt-2">
-            <ActionButton>Generate static output</ActionButton>
+            <ActionButton>{c.generate}</ActionButton>
             <ActionButton disabled variant="secondary">
-              Send to approval
+              {c.sendToApproval}
             </ActionButton>
           </div>
           <p className="text-xs text-slate-500">
-            Static prototype only. No backend, LLM, RAG, or external action is
-            executed.
+            {c.staticNote}
           </p>
         </div>
       </SectionCard>
 
       <SectionCard
-        action={<StatusBadge tone="warning">approval path visible</StatusBadge>}
+        action={<StatusBadge tone="warning">{c.approvalVisible}</StatusBadge>}
         title={preview.title}
-        description="Mocked generated output based on the workflow blueprint."
+        description={c.previewDescription}
       >
         <div className="space-y-4">
           {preview.sections.map((section) => (
@@ -72,7 +77,7 @@ export function WorkflowRunForm({
                   {section.title}
                 </h3>
                 {section.tone && (
-                  <StatusBadge tone={section.tone}>{section.tone}</StatusBadge>
+                  <StatusBadge tone={section.tone}>{labels.tone[section.tone]}</StatusBadge>
                 )}
               </div>
               <p className="mt-2 text-sm leading-6 text-slate-300">
@@ -83,7 +88,7 @@ export function WorkflowRunForm({
           {preview.sources && (
             <div className="space-y-3">
               {preview.sources.map((source) => (
-                <SourceCitationCard citation={source} key={source.id} />
+                <SourceCitationCard citation={source} confidenceLabel={labels.confidence[source.confidence]} key={source.id} />
               ))}
             </div>
           )}

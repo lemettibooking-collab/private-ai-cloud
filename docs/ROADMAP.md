@@ -1,0 +1,2174 @@
+# Private AI Cloud — Development Roadmap
+
+## Current Owner-approved sequencing — PAC-ROADMAP-UPDATE-02 (2026-11-14)
+
+**Working Project Onboarding → AI Project Planning → Owner Approval → Managed
+Development Workflow → QA/Security/Corrective Loop → Verified PR → PAC
+Self-Development → Remaining Production Release Gates → Production Release.**
+The current decision is §1.5 and the critical path is §18. It supersedes only the
+production-first implementation priority of PAC-ROADMAP-UPDATE-01, preserved in
+§1.4. The v1.4 architecture, v1.5 private-execution boundaries and every applicable
+database, recovery, financial, security and release gate remain mandatory before
+the operations they protect. This is a development-priority change, with no live
+executor, spending, migration, Git publication or deployment authorization.
+Production release remains **BLOCKED**; `runtimeDispatchAllowed=false` and
+production/live executor dispatch remain BLOCKED. Existing VPS infrastructure is
+preserved; no fresh deployment is requested.
+
+## Owner-approved onboarding sequence — PAC-ONB-01 (2026-11-09)
+
+This capability order is the entry to the workflow-first implementation priority
+in §1.5. Reuse the existing foundations; their historical implementation/review
+labels are retained. This documentation change neither accepts their gates nor
+declares them DONE. Applicable safety prerequisites still precede every operation.
+
+This incremental sequence is approved for the existing control plane; it does not
+enable execution, change AI-044 approvals/invocation semantics or close the real
+production proof. `runtimeDispatchAllowed=false`; generic production/live dispatch
+remains BLOCKED. AI-044 remains IN PROGRESS.
+
+1. **Project Onboarding — PAC-ONB-01, IN REVIEW:** persistent Owner creation of
+   registry identity (stable Project ID, display name, server-fixed active status),
+   atomic audit, tenant isolation and safe identical retries. No description/type/
+   credentials or repository configuration is introduced. Bounded discovery keeps
+   its 100-project page; authenticated exact lookup opens scoped projects beyond it.
+2. **GitHub Binding — PAC-ONB-02-KB-01 IN REVIEW:** Owner-only unverified GitHub
+   metadata configuration with revision fencing and audit. Trusted repository
+   verification/access remains PLANNED; login is not repository authority.
+3. **Knowledge Ingestion — PAC-ONB-02-KB-01 IN REVIEW:** project-scoped UTF-8
+   Markdown/YAML uploads, immutable exact-byte versions and protected text reads.
+   ZIP/PDF/DOCX, embeddings, semantic parsing and vector search remain PLANNED.
+4. **Manual Planning — PAC-PLAN-01-02 IN REVIEW:** strict project Knowledge import,
+   immutable backlog drafts and explicit Owner activation into ordinary draft
+   ProjectTasks. Task FeaturePlans and dependency-aware queue remain separate.
+5. **AI Planning — PAC-PLAN-01-02 safe preparation IN REVIEW / generation BLOCKED:**
+   shared structured proposal validation and source-bound bounded request only.
+   A project-document provider/egress/budget/provenance binding remains PLANNED;
+   existing task-interview planning is not that authority.
+6. **Dependency-Aware Task Queue — PLANNED:** project tasks ordered by factual
+   dependencies and current admission, never implicit provider dispatch.
+7. **Verified Development Workflow — PLANNED production proof:** preserve explicit
+   Owner approval, QA/Security, recovery and Verified PR acceptance. Existing
+   factory foundations are not evidence that this end-to-end flow is complete.
+
+Project creation is the explicit Owner-authorized control-plane write only. It
+does not connect GitHub/OAuth, ingest knowledge, create tasks, invoke a model or
+executor, modify an external repository, apply migrations or deploy.
+
+PAC-ONB-01 C1 strengthens only this mutation's transaction boundary: the original
+server-session provider/subject and its resolved PAC user must still have an active
+mapping held with SHARE through commit. Another identity of the same user cannot
+substitute. Existing shared auth/read contracts remain request-scoped and unchanged.
+Identical creation retries remain intentionally strict about the current project:
+future GitHub Binding, rename or pause/archive causes conflict, never removal or
+overwrite of later state. Any broader historical replay semantics requires a
+separate justified lifecycle change in the binding task.
+
+PAC-ONB-02-KB-01 extends the approved local onboarding foundation; it performs no
+GitHub/provider call, automatic migration, repository action or execution. See
+[repository and knowledge v1](architecture/project-repository-knowledge-v1.md) for
+the additive 0023 migration, quotas, retry/rollback semantics and unverified states.
+
+PAC-PLAN-01-02 [project planning v1](architecture/project-planning-v1.md) records
+the strict source schema, additive 0024 draft/approval provenance migration and
+manual/AI capability split. No model/executor/queue invocation is introduced.
+
+**Version:** v1.6\
+**Date:** 2026-11-14\
+**Status:** AUTHORITATIVE / CURRENT\
+**Revision:** PAC-ROADMAP-UPDATE-02 — Owner-approved development workflow first (not an architecture rebase)\
+**Historical execution-status checkpoint:** 2026-10-27 (B3/Phase L integrated; Phase S candidate; paid financial gate blocked)\
+**Preserved B3 integrated checkpoint:** `4f64f5b5b519da855498d5d56131b94ee8601a26`\
+**Documentation baseline:** `ade8741ddc8121d107b6b0e62a452a09ce8dcb84`\
+**Canonical source:** `docs/ROADMAP.md`
+
+**Historical Owner-approved infrastructure exception (2026-11-07):** AI-045.0
+[VPS container foundation](operations/vps-container-foundation.md) was brought
+forward before the AI-044 real feature proof. The recorded implementation
+checkpoint was IN REVIEW, with acceptance starting AI-045 IN PROGRESS for hosting
+only. PAC-ROADMAP-UPDATE-01 subsequently prioritized gated infrastructure release;
+PAC-ROADMAP-UPDATE-02 now supersedes that priority with workflow-first development.
+Both dated decisions remain historical evidence. Preserve the existing VPS and
+infrastructure; no fresh deployment, reprovisioning or AI-045 gate closure is
+requested. Its database/security/recovery and release gates remain mandatory.
+AI-044 remains IN PROGRESS, not DONE. AI-052 remains PLANNED / BLOCKED
+after AI-051. VPS hosting grants no VPS/private coding execution. Public web exposure,
+reverse proxy/domain/TLS stay in later AI-045.1 work. `runtimeDispatchAllowed=false`;
+generic production/live executor dispatch remains BLOCKED.
+
+**Recorded AI-044 implementation checkpoint (historical, not live acceptance):** AI-044.1 subscription foundation is integrated at
+`c5658002aaf67a835e480e42f4ca0d1003b76af7`. AI-044.2 [local Owner production-proof
+runner](operations/ai-044-owner-production-proof.md) was recorded as an IN REVIEW candidate at that checkpoint:
+explicit separate prepare/approval/invoke actions, existing durable attempt/queue/fence,
+no generic dispatch enablement. AI-044 remains IN PROGRESS; real production proof NOT
+YET EXECUTED. `runtimeDispatchAllowed=false`; generic production/live dispatch BLOCKED;
+paid/hosted Phase L remains DENY-ONLY. No Liquidity Intelligence implementation in this task.
+
+> This Markdown file is the source of truth for the Private AI Cloud development roadmap. PDF versions are generated snapshots for reading, sharing, and review. If a PDF or an older roadmap conflicts with `docs/ROADMAP.md`, this file takes precedence until the Owner approves a newer roadmap version.
+
+## 1. Purpose and roadmap governance
+
+**Private AI Cloud is a vendor-neutral AI Engineering Control Plane.** PAC owns the engineering process; executors own the internal agent execution mechanism. PAC is not a wrapper around OpenAI, Anthropic, Dots or any other vendor, and it does not become a universal proprietary agent runtime, a Codex/Claude Code/Dots clone, a generic think/tool/observe harness, or a universal cloud sandbox provider (see §1.2 and `docs/architecture/control-plane-architecture-v1.0.md`).
+
+Private AI Cloud is an AI Operations / Development Control Plane for Lemetti projects. Its goal is to evolve into an AI Development Operating System that can move through an approved product roadmap autonomously and stop only at predefined Owner approval gates, hard stops, or budget/risk limits.
+
+The Owner defines product strategy and retains approval of the roadmap and its changes. AI may propose changes and improvements but cannot authorize them. Private AI Cloud plans and executes work within the approved scope, selects models/executors through replaceable contracts, performs QA/security verification, attempts bounded self-fix where policy allows, and escalates only when an Owner decision is required.
+
+Roadmap changes are versioned. A strategic change must be represented as a Roadmap Change Request and requires Owner approval.
+
+Important external actions remain separate approvals: result approval, commit, push, merge and deployment are distinct decisions; none implies permission for another action. Autonomous execution remains limited to explicit approved policies, with independent QA/Security mandatory.
+
+The development pipeline must not depend on one specific model, executor, or payment mechanism. API credits, officially supported subscription access and future self-hosted routes are implementation choices behind stable provider/backend contracts, subject to the v1.5 sequencing and hard execution rule (§1.3).
+
+`ModelProvider` and `ExecutorAdapter` are separate integration layers. `ModelProvider` serves direct, bounded model calls (classification, structured transformation, analysis, planning, review). `ExecutorAdapter` serves managed engineering/agent execution (repository work, coding, tool execution, managed agent sessions, patch production). They are not collapsed into one interface even when one vendor offers both. Executors may use API credentials, provider credits, provider-supported subscription sessions, or self-hosted routes behind the same `ExecutorAdapter` contract. Changing executor, authentication or payment mode must not change FeaturePlan, QA, approval, audit, artifact, or recovery semantics. (v1.3 called the executor layer `ExecutionBackend`; v1.4 renames it to `ExecutorAdapter`. AI-041.0 defines the validation-only foundation; AI-041.1's managed transport and durable start/authority/outcome/identity/reconciliation foundation are DONE. Production/live executor dispatch remains BLOCKED.)
+
+Security, tenant isolation, budgets, idempotency, audit, and recovery remain system invariants.
+
+Development is milestone-driven. We do not close technical debt merely because it exists; debt is pulled forward when it blocks the next real product capability.
+
+### 1.1 Source-of-truth rule
+
+- `docs/ROADMAP.md` is the canonical roadmap.
+- PDF is a generated snapshot, not the authoritative editable source.
+- Execution status should be updated in the Markdown roadmap when a roadmap item is completed, activated, blocked, or materially re-scoped.
+- A code/task commit should update roadmap status when the task changes the actual execution state of a roadmap item.
+- Later, when the executable-roadmap subsystem exists, machine-readable roadmap state may be added alongside this document, but this Markdown remains the human-readable strategic source until the Owner approves a replacement governance model.
+- `docs/README.md` classifies every document as current, supporting, historical or QA evidence. Older strategic documents (v0.3 / v0.4 / v0.5, ADR-001 copy) are historical; where they conflict with this roadmap, this roadmap wins.
+- The preserved v1.4 architecture decision record is `docs/ROADMAP_REBASE_V1.4.md`. The latest Owner-approved sequencing decision is PAC-ROADMAP-UPDATE-02 within v1.6 (§1.5 / §18); §1.4 preserves decision 01 and its mandatory release checkpoints. It supersedes older release-order assumptions while retaining v1.5 private-execution sequencing (§1.3 / AI-052) and all security/readiness gates. Approved revisions and decisions remain versioned and auditable; machine-generated proposals never activate themselves.
+
+### 1.2 PAC-owned vs provider-owned (v1.4)
+
+Target pipeline:
+
+`Product Intent → FeaturePlan → Admission Policy → Task Graph → Executor Router → ExecutorAdapter (OpenAI / Anthropic / other) → Normalized Artifacts → Quality Gate → Security Gate → Corrective Loop → Human Approval → GitHub / PR → Production`
+
+| PAC-owned (strategic, kept and strengthened) | Provider/executor-owned (not rebuilt by PAC) |
+|---|---|
+| Product Intent, FeaturePlan, Task Graph / waves | model inference and internal reasoning |
+| Admission Policy (ALLOW / REQUIRE_APPROVAL / DENY) | agent tool loop (think → tool → observe) |
+| Executor Router, Model Router | provider-native context management and compaction |
+| Quality Gate, Security Policy, Security Gate | provider-native subagents |
+| Corrective Controller (bounded corrective loop) | hosted sandbox implementation |
+| Human Approval (result ≠ commit ≠ push ≠ deploy) | computer/browser execution |
+| Audit / Evidence, cost/usage normalization | provider-native trace internals |
+| Observability normalization | provider-specific retry/session mechanics |
+| Project Knowledge, GitHub governance | specialized managed security research internals |
+| Tenant / RBAC, secrets policy, budgets, idempotency, recovery | |
+
+Shared boundary: `ExecutorAdapter`, normalized events, artifacts, usage, evidence, capabilities, execution-environment reference. Provider-specific SDK types never cross above the adapter boundary.
+
+Removed from future PAC-owned scope in v1.4 (see §11, "Removed from PAC-owned scope"): generic agent loop, generic context compaction, mandatory own cloud sandbox / coding worker, generic browser/computer-use runtime, generic subagent runtime, proprietary replacement for managed security research.
+
+### 1.3 Owner-approved private execution sequencing (v1.5)
+
+PAC first develops through factually supported, policy-compliant **managed
+Codex/OpenAI and Claude execution**. This is the intended path, not a claim that
+every named provider interface/access mode is currently available or enabled.
+Official capability/access research and the relevant authorization/security/live
+gates still apply; Claude remains conditional in AI-041.2.
+
+The first production-capable PAC-owned coding container / private or self-hosted
+execution runtime is **AI-052**, after AI-045 VPS and the Telegram Owner Control
+chain through AI-051. v1.5 is an Owner-approved strategic sequencing change,
+**not an architecture rebase**: it preserves the vendor-neutral control plane,
+managed-first execution, separate ModelProvider/ExecutorAdapter abstractions,
+provider-owned internal agent loops and conditional first-class self-hosted capability.
+
+Until AI-052 passes its own security/readiness gates:
+
+| Coding execution environment | Rule |
+|---|---|
+| provider_hosted / managed executor | May be permitted only by factual capability, policy and the applicable gates; not blanket dispatch approval |
+| local coding executor | BLOCKED |
+| vps_self_hosted coding executor | BLOCKED |
+| own/private AI coding execution | BLOCKED |
+
+Current production/live dispatch remains **BLOCKED**, and
+`runtimeDispatchAllowed=false`. AI-042.2's local Git isolation is a foundation,
+not sufficient authorization for a local coding process. Do not launch unmanaged
+local Claude/Codex processes on the PAC VPS as a substitute for a managed route.
+Ordinary local verification and disposable Git fixtures are not coding-executor
+dispatch and gain no new authority from this decision.
+
+No factual privacy, infrastructure, availability or cost requirement silently
+bypasses this ordering. Earlier self-hosted execution implementation requires a
+**new explicit Owner roadmap-change approval**, not merely a per-run approval or
+an inferred operational need. Such approval does not waive security/readiness
+gates or itself grant dispatch authority. AI-045 infrastructure containers are
+distinct from the AI-052 trusted coding sandbox (§15 / AI-052).
+
+### 1.4 Preserved production-readiness gates / historical decision 01 (v1.6)
+
+Historical decision record: **PAC-ROADMAP-UPDATE-01**, approved by the Owner on
+2026-11-14. **Its production-first priority is superseded by decision 02 (§1.5).**
+The release checkpoints below remain mandatory; Series A/B identify workstreams,
+not the current chronological implementation order. This was a scheduling change,
+not an architecture rebase or an operational permit.
+It preserves all historical DONE / IN REVIEW / BLOCKED facts and the v1.5
+managed-first/private-execution boundary. No operational task becomes DONE merely
+because this version is written.
+
+The historical decision 01 delivery order was **Series A — Database Finalization → Comprehensive Security
+Audit → Production Release → Series B — Complete Autonomous AI Development
+Pipeline → Smart Algorithms Real Pilot**. Series A releases the bounded PAC
+control-plane/infrastructure scope; it does not claim that the autonomous
+engineering product or a live executor is already proven. M6/M7 milestone IDs are
+retained as stable identifiers, not an instruction to finish M6 before M7.
+
+#### Series A — Production Readiness
+
+**A.1 — Outstanding Release Gates — OPEN.** Close or explicitly disposition all
+required gates for the exact proposed release SHA and artifact:
+
+- Remaining production and development/build dependency vulnerabilities and
+  supply-chain findings; no broad update or implicit risk acceptance.
+- Supported Node.js/npm verification, clean installation, lint/typecheck/full unit
+  and build evidence. Existing CI applies only to its recorded SHA, not later
+  candidates, production dependency closure, native runtime or database checks.
+- PostgreSQL integration tests, concurrency/authorization regressions and
+  production-like populated migration rehearsal.
+- HTTP and authentication/Owner/tenant authorization smoke, including the retired
+  Knowledge route; Linux/native/optional packages, production dependency closure
+  and startup evidence where required by the deployed profile.
+- **OP-1 migration uncertainty handling:** the reviewed recovery documentation is
+  not implemented session correlation. Before real migration, separately review
+  and prove exact original target/backend PID + backend_start correlation,
+  transaction-completion/lock-release evidence and a fresh read-only ledger/catalog
+  snapshot. Missing/contradictory evidence or timeout stays UNKNOWN/STOP; a ledger
+  count or disconnected client does not establish rollback. Preserve the writer
+  fence; no automatic replay, old-image restart, downgrade or destructive restore.
+- Fresh backup/restore validation, retention and recovery readiness. Historical
+  restore PASS or old test counts do not grant a future migration/deployment.
+
+Release-blocking findings require remediation or explicit evidence-based Owner
+risk disposition **under the approved release policy**. If that policy or required
+evidence is absent, remain BLOCKED. Risk disposition never waives non-negotiable
+tenant, authorization, secret, financial or ambiguity/recovery invariants.
+
+**A.2 — PAC-DB-FINAL — REQUIRED / NOT YET ACCEPTED.** Mandatory database acceptance
+on a controlled production-like database before release, with independent DB
+security review and evidence covering:
+
+- Schema and exact migration/ledger checksum integrity; schema drift and retained
+  data/audit/provenance consistency.
+- RLS inventory/policies/bypass behavior and tenant isolation, including existing
+  application/composite-FK boundaries. Do not assume RLS is implemented/enforced
+  where it is absent; identify and review the actual isolation/privilege model.
+- Database roles, ownership, effective privileges and least-privilege boundaries.
+- SQL injection and unsafe query boundaries, trusted parameters and sanitized errors.
+- Transactions, race conditions, concurrent/replayed mutations and ambiguous COMMIT.
+- Constraints, foreign keys, indexes and resource/performance implications.
+- Connection pool/session safety, timeouts and resource limits.
+- Backup/restore, rollback/recovery procedures and independently reviewed evidence.
+
+The controlled pre-release assessment does not replace **post-deployment database
+verification on the actual deployed environment**. That second acceptance checks
+the actual target, migration history/schema, role/tenant configuration and
+application-read consistency. PAC-DB-FINAL is not DONE until both required phases
+and their evidence/gates exist; this document executes neither phase.
+
+**A.3 — PAC Security Final Audit — REQUIRED / NOT YET ACCEPTED.** Comprehensive
+independently reviewed security assessment before production release, covering:
+
+- Trivy filesystem/repository scanning; dependency and supply-chain vulnerabilities.
+- Container image scanning, Docker and infrastructure configuration.
+- Secret exposure scanning and SAST, including CodeQL or an approved equivalent.
+- API/Server Action authorization and authentication, IDOR and tenant isolation.
+- SSRF, injection, unsafe file access and request validation.
+- Rate limiting and abuse prevention.
+- Race conditions and idempotency on state-changing operations.
+- GitHub Actions and supply-chain permissions.
+- Independent review of findings, remediation/retest evidence and policy-bound
+  Owner risk disposition for release-blocking findings.
+
+**Trivy alone does not establish complete application security.** Scan output,
+mock tests, successful image build or Owner approval alone cannot substitute for
+missing application/security evidence. The audit remains open until its required
+scope and findings are independently accepted.
+
+**A.4 — Production Release — BLOCKED until mandatory gates pass.** After required
+pre-release gates and approved risk dispositions, obtain a separate Owner
+**deployment approval** for the exact Git SHA and build artifact. Verify
+infrastructure configuration, protected secrets, fresh backups, restore/recovery
+readiness and the applicable schema/app compatibility. Only then execute the
+separately authorized migrations and deploy PAC to VPS. Complete post-deploy
+HTTP/database/security smoke, logs/monitoring checks, rollback/recovery readiness
+and final release evidence, including the actual-environment PAC-DB-FINAL phase.
+
+This remains the required internal gate sequence for any future infrastructure
+release; its former priority over workflow implementation is superseded by §1.5.
+It does not remove prerequisites for **actual live executor authorization**.
+Keep `runtimeDispatchAllowed=false` and generic production/live dispatch BLOCKED
+until their own independently approved enablement gates are satisfied. Hosting
+PAC does not itself authorize provider calls, coding execution or autonomous work.
+
+#### Series B — Autonomous AI Development Platform
+
+Series B **continues the existing foundations**, rather than rebuilding them.
+Its completion/operational work is PLANNED; foundation implementation and existing
+independent acceptance statuses remain as recorded in their task evidence.
+
+Target workflow:
+
+**Project Creation → GitHub Repository Binding → Knowledge Base → AI Project
+Planning → Interactive Clarifications & Roadmap Improvements → Owner Approval →
+Autonomous Development → QA / Security / Corrective Loop → Verified GitHub PR →
+Owner Final Approval.**
+
+**B.1 — Project Onboarding and Knowledge.** Reuse Project Registry, persistent
+project creation, repository binding, immutable versioned Knowledge and existing
+Owner/tenant authorization. A configured GitHub locator is **unverified metadata**,
+not verified repository access; GitHub login is not repository authority. Exact
+source access/materialization and egress still need their own trusted evidence.
+
+**B.2 — AI Project Planning — end-to-end completion PLANNED / current generation
+BLOCKED.** Analyze uploaded requirements, architecture and roadmap; identify gaps
+and conflicts; propose backlog/dependencies, priorities, milestones and technically
+justified improvements; ask Owner clarifications and create reviewable, versioned
+roadmap revisions. Require explicit Owner approval before activation; never
+silently overwrite approved requirements. Source versions/hashes and approved
+revision history stay auditable.
+
+Existing strict **manual structured-plan import** creates draft ProjectTasks only
+after explicit approval; it does not enroll a runnable queue. Existing AI-039.1
+**task-level FeaturePlan planning** is not project-document AI planning. The latter
+still needs reviewed provider/egress/budget/provenance and durable approval/result
+binding. Credentials, uploaded text or a synthetic proposal are not that authority.
+Unsupported real-source schemas require a separate conversion/acceptance gate.
+
+**B.3 — Autonomous Development Orchestration — operational completion PLANNED.**
+Reuse AI-041/042/043: approved task graph and dependency-aware queue; trusted task
+classification, routing/admission and managed ExecutorAdapter invocation; durable
+task/Run/attempt state; budget, risk and authority fences; independent QA/Security;
+bounded corrective loop; recovery/audit and controlled continuation between tasks.
+No parallel provider-specific store, new generic agent loop or substitute financial
+lifecycle is implied. AI-043's accepted deterministic/fake-live-blocked foundation
+is not live-execution proof. Unknown/ambiguous outcomes keep holds/recovery and
+never authorize redispatch. Ordinary continuation is allowed only inside policy;
+Owner gates and hard stops remain stronger.
+
+**B.4 — AI-044 Real Engineering Proof / Smart Algorithms Real Pilot — IN PROGRESS,
+NOT DONE.** After the operational pipeline and live prerequisites are separately
+accepted, develop one real Smart Algorithms feature through PAC, from an approved
+FeaturePlan to a verified GitHub PR and final Owner acceptance. Preserve the
+existing Liquidity Intelligence Drawer v0.1 target (§14); this task implements none
+of it. Evidence must bind exact repository baseline, readContextPaths and separate
+allowedWritePaths, one real authorized executor operation, isolated allowed source
+changes, successful verification, independent review, bounded corrective-loop
+evidence when needed and the verified PR. Merge and deployment remain separate
+Owner decisions. No live proof or external provider capability is invented here.
+
+**B.5 — Remote Control and Future Execution.** Preserve AI-045 infrastructure and
+the actual canonical chain: AI-046 Owner Control Contract → AI-047 Secure Telegram
+Bot → AI-048 Remote Roadmap / Run Control → AI-048.1 Durable Owner Notifications →
+AI-049 Telegram Approvals → AI-050 Commit / Push Approvals → AI-051 Telegram
+Hardening → AI-052 Private Execution Environment. Existing task scopes and statuses
+remain unchanged. AI-052 remains after AI-051 and its other predecessor/readiness
+gates, including the working managed pipeline; it is **not a prerequisite for the
+managed-executor MVP**. Local/VPS/private coding stays BLOCKED until AI-052's own
+gates; infrastructure release is not self-hosted execution or automatic self-deploy.
+
+### 1.5 Current decision — PAC-ROADMAP-UPDATE-02: development workflow first
+
+**Owner-approved 2026-11-14; revision 02 within roadmap v1.6.** This supersedes
+only decision 01's production-first implementation priority. Preserve its complete
+release checkpoints (§1.4), historical task states, the accepted Project Registry,
+Knowledge, AI-039, AI-041/042/043 and AI-044 foundations, and the v1.4/v1.5
+architecture and execution restrictions. This is no implementation gate or live
+readiness acceptance.
+
+**Working Project Onboarding → AI Project Planning → Owner Approval → Managed
+Development Workflow → QA/Security/Corrective Loop → Verified PR → PAC
+Self-Development → Remaining Production Release Gates → Production Release.**
+
+1. Complete the Owner data flow using existing persistent project creation,
+   unverified repository binding and immutable Knowledge versions. Repository
+   metadata does not establish access or exact-SHA repository provenance.
+2. Complete project-document AI Planning and interactive clarification, review and
+   versioned Owner approval. Today manual structured-plan import/approval creates
+   only draft ProjectTasks; AI-039 task-level FeaturePlan planning is separate.
+   Project-document generation remains BLOCKED; bounded request preparation is
+   not generation, clarification or durable model-result provenance.
+3. Connect approved work to the common managed development workflow, dependency
+   readiness, task FeaturePlans and admission, routing, budgets and durable
+   executor authority. Retain independent QA/Security, bounded corrective loops,
+   ambiguity/recovery holds and explicit Owner gates. Existing fake adapters and
+   deterministic AI-043 tests do not prove autonomous development or live inference.
+4. Use **Smart Algorithms as the first real end-to-end pilot**, under separate
+   exact-context/read/write, access, financial and one-shot invocation approvals.
+   Require Verified PR evidence and final Owner acceptance; commit, push, merge
+   and deploy are separate controlled operations, never automatic consequences.
+5. After that managed workflow is sufficiently proven by its independently
+   accepted end-to-end evidence, use it for PAC self-development through the same
+   boundaries. This does not require or enable private coding, a PAC-owned agent
+   runtime or automatic self-deployment. Remaining production release work follows
+   in implementation priority; release acceptance is still a separate decision.
+
+**Dependency security checkpoint.** F1 (PAC-A1-SEC-02 compatible transitive
+corrective) is completed at `ade8741ddc8121d107b6b0e62a452a09ce8dcb84`, with
+successful GitHub Quality Gates **#163 and #164**, as reported by the Owner for
+this decision. These CI facts are scoped evidence, not residual-risk acceptance.
+The remaining npm package findings are **9: 8 moderate and 1 high**; they remain
+**unresolved and unaccepted**. This is a finding count, not a distinct-CVE count.
+Defer **F2 Tailwind/PostCSS** and **F3 TypeScript-ESLint/minimatch** implementation
+until the managed workflow is sufficiently proven. F2's earlier bounded discovery
+stopped without a candidate at a transitive-major scope boundary; deferral does
+not authorize that scope expansion. This priority change grants no risk exception
+and no dependency update; findings still require explicit corrective/review work
+or a separately permitted, policy-compliant disposition before affected release.
+
+**Gate applicability remains stronger than priority.** Implement and verify
+initial UI/data-flow connections with local/fake, zero-egress evidence. A proposed
+live, database, repository or deployment operation must first meet every gate
+applicable to that operation, even while later release work is deferred. If a
+prerequisite is missing, BLOCK/STOP; do not reinterpret the new order as a waiver.
+PAC-DB-FINAL, OP-1's original-target/session completion barrier and fresh-snapshot
+recovery checks, migration/data-preservation proof, backup/restore, comprehensive
+security audit and release gates stay mandatory for their protected operations.
+The pre-release and separate actual post-deployment DB acceptance are both kept.
+
+Preserve the existing VPS/infrastructure; this decision requests no fresh deploy.
+AI-044 remains IN PROGRESS / NOT DONE, AI-042 overall remains PARTIAL, and no live
+or autonomous engineering capability is newly accepted. AI-052 stays PLANNED /
+BLOCKED after the approved managed-executor readiness and Telegram chain through
+AI-051 (§1.3 / §16); local/VPS/private coding is unavailable before its own gates.
+`runtimeDispatchAllowed=false`; production/live dispatch remains BLOCKED. No
+implicit model invocation, Owner spending approval, commit, push, merge or deploy.
+
+## 2. Target product model
+
+Private AI Cloud is not a CRM and not merely a chat interface. It is a control plane for projects, AI capabilities, development workflows, approvals, budgets, audit, infrastructure, and later business-operation departments.
+
+| Level | Entity | Purpose |
+|---|---|---|
+| 1 | Workspace | Organizational and tenant boundary |
+| 2 | Project | Product/system, e.g. Smart Algorithms, Private Exchange |
+| 3 | Department | Pluggable project capability module |
+| 4 | Function / Workflow | Repeatable managed process |
+| 5 | Agent | Role/executor with policies, tools, and permissions |
+| 6 | Model | Model selected by routing/policy |
+| 7 | Run | Concrete execution with cost, QA, approval, and audit lifecycle |
+
+Global registries include Agent Registry, Model Registry, Provider Registry, Policies, Infrastructure, and Security.
+
+### 2.1 Departments are extensible capability boundaries
+
+Departments are not agents and are not required to become top-level navigation items. They are capability modules enabled per Project.
+
+Core/early departments may include:
+
+- Development
+- Product
+- QA
+
+Future business departments may include:
+
+- Marketing
+- Sales
+- Support
+- Legal / Compliance
+- Finance
+- Operations
+- other project-specific modules
+
+Different Projects may enable different Departments. Smart Algorithms may need Development, Product, QA, Marketing, Sales, and Support; Private Exchange may additionally require Compliance/Legal and Operations.
+
+This preserves the long-term company-operations vision without turning the first product version into an ERP/CRM-style interface.
+
+## 3. Development entry modes
+
+Private AI Cloud supports three equal entry modes into one development pipeline:
+
+| Mode | When used | Result |
+|---|---|---|
+| Develop Feature | Owner requests a specific feature | A FeaturePlan enters the shared execution/QA/approval pipeline |
+| Continue Roadmap | Project develops continuously from approved roadmap | Roadmap Planner selects the next ready work until a gate |
+| Fix / Investigate | Bug, security issue, technical debt, incident, corrective work | Bounded corrective/investigation plan with the same verification rules |
+
+Manual Feature, Fix/Investigate, Roadmap Planner, and future Telegram requests converge into one pipeline:
+
+`Request → FeaturePlan → Admission Policy & Budget → Executor Router → ExecutorAdapter → Quality & Security Gates → Corrective Loop → Owner Approval`
+
+FeaturePlan remains the execution-planning unit even when it is not directly shown in the simplified Owner UX.
+
+## 4. Current development point
+
+Current implementation priority is the workflow-first decision 02 in §1.5 / §18.
+The task history below preserves implementation/gate facts; its numeric order is
+not the delivery sequence. Mandatory operation-specific gates in §1.4 still apply.
+This roadmap update closes no implementation, live-proof or operational gate.
+
+### Completed foundation
+
+**AI-001…AI-036.7 — DONE**
+
+- PostgreSQL foundation, migrations, tenant-aware persistence
+- Workflow Runtime command lifecycle, claims, executions, approvals, invocation ledger
+- ModelProvider abstraction and OpenAI adapter
+- provider-start fencing
+- model identity pinning
+- token preflight
+- aggregate and pre-spend budgets
+- ambiguous provider outcome → `outcome_unknown` / recovery semantics
+- authorization-safe read boundary
+- tenant mapping and cross-workspace DB integrity
+- audit collision protection
+- one-snapshot Owner reads
+- PostgreSQL pool/session hardening and adversarial re-gate
+
+**AI-037 Technical Debt Census — DONE**
+
+The census recorded the current hardening debt and moved development to milestone-driven prioritization. The nearest product objective is safe use of a real paid provider.
+
+### Current AI-037 sequence
+
+- **AI-037.0 Live PostgreSQL Regression Suite — DONE**
+- **AI-037.1 HD-12 duplicate paid dispatch fail-safe — DONE**
+- **AI-037.1.1 Minimal Owner Recovery — DONE**
+- **AI-037.6a Provider timeout ≤ claim lease — DONE**
+- **AI-037.4a Pool release guard + minimum metrics — DONE**
+- **AI-037.1.2 Paid definitive failure fail-safe — DONE**
+- **M1 Roadmap Review Gate — DONE**
+- **Real Provider Gate — IN REVIEW** (M2.0 DONE, M2.1 DONE; M2.2 DEFERRED BY OWNER; M2 not done — see §7)
+- **AI-037.7 Tenant-bound facade + pre-auth limits — DONE** (commit `50aeffb`; see §9)
+- **AI-038.0 Owner Read Backend Bundle — DONE** (commit `ff6eac0`; see §9)
+- **AI-038.1 Identity/Auth Boundary — DONE** (commit `a9f2435`; see §9)
+- **AI-038.2a Auth.js GitHub Session Adapter — DONE** (commit `4e76afd`; see §9)
+- **AI-038.2b Real GitHub OAuth Smoke — DONE** (commit `12212ad`; passed independent re-gate; **AI-038.2 DONE**; see §9)
+- **AI-038.3 Owner Console Real Read Wiring + Mission Control UI Foundation — DONE** (commit `70f4039`; passed independent re-gate; see §9)
+- **AI-038.3.1 Trusted Project Registry + Run Discovery Foundation — DONE** (commit `d7d1ca0`; passed independent re-gate; see §9)
+- **AI-038.3.2 Trusted Project Context Routing + All Projects + Real Project Switcher — DONE** (commit `50cfed1`; passed independent re-gate; see §9)
+- **AI-038.4 Owner Tasks — DONE**: **AI-038.4a Project Task Foundation + Read Surfaces — DONE** (`4a55f5b`); **AI-038.4b Quick Create + audited Task Mutation Binding — DONE** (`60b563b`) (see §9)
+- **AI-038.5 Mission Control Visual Refinement — DONE** (`c7d9b26`)
+- **AI-038.6 RU/EN Owner Console Localization — DONE** (`5af9f50`)
+- **AI-038.7 Dynamic Ambient Shader Background — DONE** (`4cb0dc0`)
+- **AI-039 Development Workflow Browser — DONE** (`b0e0bb8`)
+- **AI-039.1 Ledger-backed AI FeaturePlan Planning — DONE** (see §9). Direct API-key live smoke deferred by Owner until API billing is available; no real paid call has been made, and M2.2 remains DEFERRED BY OWNER.
+- **AI-039.2 ChatGPT Plan Access — Phase A implemented/committed** (`c3e3db4`; live entitlement gate deferred by an external supported-network blocker; Phase B blocked; no inference proof; see §9)
+- **AI-040a Local Developer Handoff — IN REVIEW** (local/CLI human-operated handoff and bounded verification; no executor invocation)
+- **AI-041.0 Vendor-Neutral Executor Adapter Contract — IN REVIEW** (separate pure contract and deterministic harness; no invocation authority or real executor)
+- **AI-041.1 OpenAIAgentsExecutor — DONE** (implementation/review chain integrated through `c9c04d94217847e6bbe5066f54f8d69897693862`: managed transport, durable start/exposure, current authority, outcome capture, provider identity/recovery and reconciliation foundation; production/live dispatch BLOCKED)
+- **AI-042.1 / AI-042.1a Sandbox Execution Contract — DONE** (`f63e79b8cfb8e3ae1c369b7f31c00bf9944ca36e`; accepted pure contract, not physical enforcement)
+- **AI-042.2 Git Worktree Isolation — DONE** (`47212635607c6c7a37f2af4a56f548c793af444a`; reviewed local physical adapter behind mandatory trusted storage/authority port, not production runtime readiness)
+- **AI-042 Execution Environment — PARTIAL / IN PROGRESS** (`runtimeDispatchAllowed=false`; production/live dispatch BLOCKED)
+- **AI-041.2 Second Vendor / Portability Proof — DONE** (`46456844aac0251763d41277decfa066cdfc65cf`; consolidated independent PASS/integration; fake execution, not live enablement)
+- **AI-041.3 Executor Router — DONE** (`f36d4ac923f12c5b61602c4cb0a950ad1602edcc`; consolidated independent PASS/integration; deterministic policy only, no dispatch authority)
+- **AI-042 minimal managed ExecutionEnvironment closure — DONE** (same B2 integration; AI-042 overall remains PARTIAL / IN PROGRESS)
+- **B3 / AI-043.0–AI-043.5 and AI-043 — DONE** (`4f64f5b5b519da855498d5d56131b94ee8601a26`; consolidated independent PASS + exact integration, deterministic/fake-live-blocked scope including within-wave progress; not live provider readiness)
+- **AI-044 — LIVE READINESS IN PROGRESS / NOT DONE** (existing foundations retained; real engineering proof pending in Series B; paid/hosted Phase L issuer DENY-ONLY; no live proof claimed)
+- **AI-052 Private Execution Environment — PLANNED after AI-051** (first production-capable PAC-owned private/self-hosted coding environment; no implementation/dispatch authorization now)
+- **Roadmap v1.6 / decision 02 — Owner-approved development workflow first** (current §1.5 / §18; decision 01 priority superseded; release gates and v1.5 managed-first/private rules retained, AI-052 after AI-051)
+- **Roadmap Rebase v1.4 — preserved vendor-neutral architecture baseline** (`docs/ROADMAP_REBASE_V1.4.md`; historical rebase, not repeated by v1.5)
+
+AI-037.1.1 passed independent re-gate and was committed/pushed through the Owner-approved repository workflow.
+
+M1 Real Money Safety is DONE. The M1 Roadmap Review Gate first found one blocker (F-1: a paid definitive provider failure plus lost final persistence could be dispatched again without Owner action). The Owner approved the corrective (RCR-1 / AI-037.1.2), implemented in commit `27a1f6d`, which passed independent re-gate.
+
+## 5. Milestone map
+
+Milestone IDs and accepted statuses are retained. Implementation priority is
+§1.5 / §18: complete Owner onboarding/planning and the managed M5/M6 workflow,
+prove the Smart Algorithms pilot, then PAC self-development and remaining M7
+release work. M7 operation-specific safety prerequisites remain blocking wherever
+they apply. M8 and AI-052 keep their approved dependencies; priority grants no
+runtime authority or new milestone acceptance.
+
+| Milestone | Recorded status / v1.6 delivery placement | Goal | Exit criterion |
+|---|---|---|---|
+| M1. Real Money Safety | DONE | Safely spend real money on model calls | No automatic duplicate paid dispatch; safe recovery path; timeout/lease guard; pool guard; minimum observability |
+| M2. Direct Model Provider Capability | IN REVIEW (M2.2 deferred by Owner) | Connect a real model through the `ModelProvider` abstraction | Real usage/cost/latency recorded; persistence failures do not silently create a second provider call |
+| M3. Owner Product | ACTIVE | Useful Projects-first Owner experience | Owner can understand projects, runs, approvals, blockers, cost and roadmap without tenant bypass |
+| M4. Vendor-Neutral Executor Platform | IN PROGRESS (AI-041.2/041.3 + minimal managed closure DONE; live dispatch BLOCKED; AI-042 overall PARTIAL) | Replaceable managed executors behind `ExecutorAdapter`, routed by `ExecutorRouter`, over an `ExecutionEnvironment` abstraction | First executor works in the production path; a second, different managed executor proves portability without pipeline change |
+| M5. Roadmap-Driven Autonomy | B3 DONE in accepted deterministic/fake-live-blocked scope (architecture rebased in v1.4) | Deterministic control-plane controller advances an executable roadmap through executors (no PAC-owned generic agent loop) | No manual “go next” between ordinary technical steps; Owner appears only at gates |
+| M7. Staging / Hardening | PLANNED release acceptance; remaining implementation work follows proven managed workflow / PAC self-development; applicable gates retained | Production-ready bounded control-plane infrastructure, no live-dispatch unlock | A.1 gates, pre-release PAC-DB-FINAL, Security Final Audit, separate deployment approval and actual-environment post-deploy acceptance |
+| M6. Automated Engineering Proof | AI-044 IN PROGRESS / NOT DONE; real proof in Series B; paid/hosted financial gate BLOCKED | Real Smart Algorithms feature → verified PR → final Owner acceptance | Full authorized pipeline passes; executor switching preserves it; merge/deploy remain separate |
+| M8. Remote Owner Control | PLANNED | Secure remote control (Telegram first) | Roadmap/runs/approvals/commit/push controlled through the same Owner Control API |
+| Post-M8. Private Execution Environment (AI-052) | PLANNED after AI-051 | Production-capable PAC-owned private/self-hosted engineering environment | Independently gated durable resource, containment, limits, network/secrets, evidence and recovery; no automatic deployment |
+
+## 6. M1 — Real Money Safety — DONE
+
+Before autonomous development, a real model call must be payable, observable, and safe under database/connection failures.
+
+### AI-037.0 — Live PostgreSQL Regression Suite — DONE
+
+- permanent opt-in live PostgreSQL regression tests
+- pool/session safety evidence
+- HD-12 proofs
+- tenant/snapshot/reconciliation evidence within task scope
+- normal `npm test` remains DB-independent
+
+### AI-037.1 — HD-12 duplicate paid dispatch fail-safe — DONE
+
+If the provider has already run successfully but final state persistence is not confirmed, the execution does not become ordinary retryable failure.
+
+Safe behavior:
+
+`provider dispatched + final state not confirmed → outcome_unknown / recovery_required → automatic provider redispatch blocked`
+
+### AI-037.1.1 — Minimal Owner Recovery — DONE
+
+- local Owner-operated recovery for the narrow HD-12 case
+- factual view of Run / Step / execution / invocation / budget / audit
+- explicit Owner acknowledgement of lost-result and duplicate-cost risk before retry authorization
+- recovery itself does not call the provider
+- every recovery action is audited
+- full reuse of the already returned provider output remains deferred to durable Step result recovery
+
+### AI-037.6a — Provider timeout ≤ claim lease — DONE
+
+Composition-time validation:
+
+`provider timeout + safety margin <= claim lease`
+
+Heartbeat/lease renewal remains deferred until there is evidence that a fixed lease is insufficient.
+
+### AI-037.4a — Pool release guard + minimum metrics — DONE
+
+- FATAL/PANIC → session-breaking
+- reusable release only when transaction status is safe
+- minimum counters/signals: DB failures, destroyed sessions, `recovery_required`, `outcome_unknown`, ambiguous commit, provider redispatch
+
+### AI-037.1.2 — Paid definitive failure fail-safe — DONE
+
+Owner-approved corrective (RCR-1) for the M1 blocker F-1; commit `27a1f6d`.
+
+- potentially billable failed provider result + lost final persistence → `outcome_unknown` → ordinary redispatch blocked
+- retry requires explicit Owner duplicate-cost acknowledgement
+- exact free (0 tokens, 0 cost) definitive failures keep ordinary retry behavior
+
+### M1 Roadmap Review Gate — DONE
+
+Outcome:
+
+- the original F-1 blocker is resolved by AI-037.1.2, which passed independent re-gate
+- AI-037.2 / .3 / .5 / .6b / .8 remain deferred (§12); none is required before the first controlled M2 real-provider call
+- AI-037.5 becomes mandatory earlier only if PostgreSQL for M2 is non-loopback
+
+The gate reviewed:
+
+- whether the M2 scope is still the minimum required for a real paid provider
+- whether newly discovered debt changes the Real Provider gate
+- whether any deferred item became a blocker
+- whether the next milestone should be re-ordered
+
+M1 is timeboxed operationally rather than by a hard calendar promise. The Owner should set or refresh the target window while M1 is active; if the window is exceeded materially, roadmap review is mandatory before scope expansion.
+
+## 7. M2 — Direct Model Provider Capability (Real Provider Gate)
+
+The first real provider route remains OpenAI unless the Owner changes the routing decision, because the abstraction and adapter already exist.
+
+Status: IN REVIEW. M2 is NOT DONE; the M2 Roadmap Review Gate is not complete.
+
+- **M2.0 — DONE.** Real-provider composition root and local runner.
+- **M2.1 — DONE.** Fake OpenAI SDK below the real adapter, against live PostgreSQL.
+- **M2.2 — DEFERRED BY OWNER**, awaiting intentional API billing activation. This is commercial/API sequencing, not a technical blocker in M2.0/M2.1. No real provider call has been made. When API use becomes useful, provider routes will be tested intentionally under their proper gates. Before the one Owner-approved paid call, the Owner verifies the configured model prices against the provider's current pricing and confirms that the provider-reported input tokens equal the preflight count.
+
+M2 proves the direct API-backed `ModelProvider` path. Managed executors (OpenAI Agents API, Claude Code, others) and subscription-backed **executor** access are an `ExecutorAdapter` concern in M4 and do not replace the M2 real-provider proof. Subscription-backed **bounded model** access (ChatGPT plan via Sign in with ChatGPT) is a `ModelProvider` concern, implemented by AI-039.2; it does not replace or complete the M2 API-key gate. v1.4 does not change M2 scope.
+
+| Check | Requirement |
+|---|---|
+| Credentials | Server-side only; no logs/UI leakage |
+| Identity | Provider/model/request identity pinned |
+| Usage | Real input/output tokens and cost |
+| Budget | Pre-spend reservation and aggregate windows |
+| Timeout / retry | No hidden provider retries; SDK retries controlled |
+| Failures | 429/5xx/network ambiguity classified and audited |
+| Recovery | Persistence failure does not silently trigger a second model call |
+| Observability | Latency, cost, failures, recovery-required and redispatch visible |
+
+**M2 gate:** Private AI Cloud performs a real paid model invocation through the provider abstraction, records usage/cost/state correctly, and does not create an unapproved second provider call after persistence failure.
+
+### M2 Roadmap Review Gate — REQUIRED
+
+After the first real-provider capability is proven, review the entire M3–M8 roadmap before scaling implementation.
+
+The review must answer:
+
+- Which UI surfaces are now actually needed?
+- Is AI-040a ready to automate the current human handoff loop?
+- Is OpenAI Agents API still the right first managed executor (AI-041.1), given its status at that time?
+- Which access/payment modes are factually available for that executor at implementation time: subscription session, API key/provider credits, or self-hosted?
+- Which second executor is the best portability proof (default candidate: Claude Code)?
+- Which deferred technical debt now blocks autonomy or staging?
+- Are the planned roadmap hierarchy and navigation still appropriate?
+- Has the business scope expanded to Marketing/Sales/Support enough to change Department priorities?
+
+This gate prevents distant roadmap assumptions from turning into premature implementation obligations.
+
+## 8. Early self-development vertical slice
+
+### AI-040a — Local Developer Handoff — IN REVIEW
+
+AI-040 is split so Private AI Cloud can begin helping build itself before the full Owner UI and execution platform are complete.
+
+Minimal local/CLI flow:
+
+`Task Artifact → human-operated executor handoff → Patch/Report → Local Verification Runner → stable Review Package → Owner decision`
+
+v1.4: a future machine executor will use the M4 `ExecutorAdapter` boundary. AI-041.0 defines validation only, not a bridge that upgrades AI-040a's human-operated `selectedExecutor` metadata into invocation authority. AI-040a remains a human-operated handoff and must not build a PAC-owned agent loop or sandbox.
+
+Requirements:
+
+- no automatic commit/push
+- bounded repository/path access
+- capture patch/report/test evidence
+- lint/typecheck/tests/build/security verification where applicable
+- output a stable review package consumable by the Owner/reviewer
+- reuse existing FeaturePlan/policy/audit concepts where available; do not create a parallel development pipeline
+
+AI-040a may start after the Real Provider gate or in parallel with early M3 work if its dependencies are satisfied.
+
+Implemented local slice (awaiting independent re-gate): `npm run development:handoff -- prepare|review` reuses FeaturePlan / DevelopmentTask admission, existing repository policy and the task artifact generator. A protected external manifest binds the clean repository, branch, HEAD, explicit writable paths and required checks. REVIEW captures tracked and untracked text changes without staging, fails closed on drift/scope/unsupported artifacts, performs bounded allowlisted verification and probable-secret checks, and publishes versioned JSON/Markdown evidence with `ownerDecisionRequired: true`.
+
+No ExecutorAdapter, automatic executor invocation, runtime/DB/UI wiring, automatic approval or commit/push. AI-040b UI integration remains later; AI-041.0 is the next ExecutorAdapter contract task. The local verifier is not a sandbox or the future full Security Gate. Usage, schema, limits and local trust assumptions: [Local developer handoff v1](operations/local-developer-handoff.md).
+
+### AI-040b — Owner UI Integration — LATER
+
+Connect the same handoff pipeline to Projects/Runs/Approvals in the web UI. No duplicate workflow logic is created for the UI.
+
+## 9. M3 — Owner Product / simplified first UI
+
+The Owner experience remains Projects-first. The first working UI must expose decisions, projects, runs, approvals, blockers and cost without exposing every future subsystem as primary navigation.
+
+### 9.1 Primary navigation — MVP
+
+Initial top-level navigation:
+
+- **Dashboard** — Today for Owner, blockers, approvals, costs, active projects/runs
+- **Projects** — Smart Algorithms, Private Exchange and following products
+- **Runs** — active/recent execution lifecycle and evidence
+- **Approvals** — unified Owner decision queue
+- **Settings** — workspace/platform configuration
+
+If product testing shows that Runs is clearer inside Projects, the top-level navigation may reduce further to Dashboard / Projects / Approvals / Settings.
+
+### 9.2 Capabilities remain, but are grouped
+
+The following are retained as product capabilities, not necessarily as first-level navigation:
+
+**Platform / Settings**
+- Agents
+- Models / Providers
+- Workspace / Roles / Permissions
+- Budgets / Limits
+- Integrations
+
+**Operations surfaces**
+- QA / Evidence
+- Infrastructure
+- Security / Audit
+
+**Dashboard/Project surfaces**
+- Reports / Weekly Owner Report
+- cost/blocker/recommendation summaries
+
+The interface should expose complexity progressively instead of presenting every future capability at once.
+
+### 9.3 Project workspace
+
+Inside each Project:
+
+- Overview
+- Roadmap
+- Runs
+- Approvals
+- Departments
+- Knowledge
+- Activity
+
+Departments are project-specific and may later include Marketing, Sales, Support, Legal/Compliance, Finance and Operations without expanding global navigation.
+
+### 9.4 Run Detail
+
+Run Detail should show:
+
+| Block | Content |
+|---|---|
+| Identity | Project, Feature, Run ID, Agent, Model, Executor |
+| Lifecycle | Task → Plan → Execution → Tests → Security → Review → Approval → Commit → Push |
+| Economics | Tokens, cost, limits, duration |
+| Evidence | Patch, tests, build, security, live-DB gates, review |
+| State | running / waiting_owner / recovery_required / completed / failed |
+| Audit | who/what/when changed state |
+
+### 9.5 Approval Center
+
+- goal and requested action
+- diff/stat and evidence
+- tests/security results
+- cost and risk
+- separate approvals for result / commit / push / deploy
+- missing or unauthorized objects remain opaque
+- every decision is audit-logged
+
+### AI-038 — Unified Owner Console — PLANNED (active M3 umbrella; not DONE)
+
+Mock UI may continue in parallel. Backend wiring is allowed only after the tenant/transport boundary is safe.
+
+#### AI-038.0 — Owner Read Backend Bundle — DONE
+
+Passed independent re-gate; commit `ff6eac0`.
+
+- server-only Owner read bundle (`lib/composition/owner-read-runtime.server.ts`)
+- workspace and Owner principal fixed during trusted composition
+- the caller can pass only `runId` / `limit`; four read operations only; no write or command surface
+- live tenant isolation passed
+- no authentication was implemented in AI-038.0
+
+#### AI-038.1 — Identity/Auth Boundary — DONE
+
+Passed independent re-gate; commit `a9f2435`.
+
+- a provider-neutral `AuthenticatedIdentitySource` exists; identity is request-scoped
+- PAC verifies the active internal user, active membership in the configured tenant, and the factual Owner role in that tenant
+- user, membership and role revocation applies on the next request
+- the browser cannot claim a user, workspace or role
+- no concrete authentication existed in AI-038.1
+
+#### AI-038.2 — Concrete Owner Session Adapter — DONE
+
+Decomposed as follows.
+
+##### AI-038.2a — Auth.js GitHub Session Adapter — DONE
+
+Passed independent re-gate; commit `4e76afd`.
+
+- Auth.js (`next-auth` pinned `5.0.0-beta.32`) with GitHub as the only provider, stateless JWT sessions, and no Auth.js database adapter or Auth.js-owned tables
+- migration `0008_auth_identities`: provider + stable provider account subject → existing PAC user; revocable (`active` / `disabled` / delete); no email mapping, no auto-provisioning, nothing seeded
+- the session and JWT carry only `{ provider, providerSubject }`; OAuth tokens, email, login and the Auth.js user id are never copied
+- the concrete identity source returns only `{ userId }` to AI-038.1, which still decides membership and the Owner role per tenant
+- one authentication HTTP surface (`app/api/auth/[...nextauth]`); no proxy/middleware, no business API, no UI wiring
+
+##### AI-038.2b — Real GitHub OAuth Smoke — DONE
+
+Passed independent re-gate; commit `12212ad`.
+
+The author-side real external smoke ran on 2026-10-01 under the AGENTS.md exception for Owner-approved external smokes:
+- a local GitHub OAuth App, with credentials kept outside git;
+- a throwaway PostgreSQL 16 database;
+- a temporary local proof route, deleted afterwards.
+
+No production code changed. It awaits independent re-gate. Author-side results:
+- a real GitHub sign-in and callback produced an Auth.js JWT session carrying only `pacIdentity { provider, providerSubject }`;
+- with no `auth_identities` row, PAC denied (`unauthenticated`);
+- a temporary mapping from the factual subject to the seeded Owner enabled the real request-scoped `auth()` → AI-038.1 → AI-038.0 path, and one real `getRunOverview` read succeeded;
+- on the same live GitHub session, disabling or deleting the mapping denied, and disabling membership or removing the Owner role denied (`unavailable`); restoring state restored access, with no restart and no re-login;
+- caller-supplied workspace, actor, role and user claims were ignored, and a foreign-tenant run stayed invisible;
+- a real sign-out removed the session cookie, and later requests were denied;
+- after an Owner-reported local exposure of a session cookie, `AUTH_SECRET` was rotated, which invalidates every earlier JWT. A fresh real sign-in then succeeded. The public `/api/auth/session` contained exactly `expires` and `pacIdentity { provider, providerSubject }`, and sign-out removed both the identity and the session cookie.
+
+Findings:
+- Server-side `auth()` in `next-auth` v5 adds `user` = the decoded JWT, which holds only `pacIdentity`. The public `/api/auth/session` does not include it, and the identity adapter ignores it.
+- With stateless JWT, sign-out does not revoke an issued token. A leaked token stays valid until expiry or `AUTH_SECRET` rotation, while PAC authorization (mapping, membership, role) remains revocable per request.
+
+AI-038.2 is DONE: both AI-038.2a and AI-038.2b passed independent re-gate.
+
+**UI → real private runtime data** was locked until AI-038.2 passed (intentional fail-closed sequencing). It is now unlocked **for read-only wiring only**, through AI-038.3. Writes still require a separate, explicitly approved write boundary.
+
+#### AI-038.3 — Owner Console Real Read Wiring + Mission Control UI Foundation — DONE
+
+Passed independent re-gate; commit `70f4039`.
+
+- **Read path:** a server-only Owner Console loader (`lib/composition/owner-console-read.server.ts`) → `createRequestOwnerReadRuntime` (real Auth.js `auth()` → AI-038.1 → AI-038.0) → PostgreSQL. The workspace comes only from trusted server configuration. No business HTTP API, no Server Action, no write.
+- **Real data:**
+  - the Dashboard (attention metrics, approval queue, approval-linked runs);
+  - Approvals (read-only queue, no decision controls);
+  - Runs (approval-linked runs only; global run discovery is not connected);
+  - Run Detail (overview, steps, approval, usage/cost, audit);
+  - Projects (the current trusted project only).
+- **Mission Control shell:** Projects-first navigation, a top bar with a project switcher that shows only the trusted current project, a real pending-approval indicator and an Owner state. Fonts stay Geist / Geist Mono.
+- **Not included:** global `listRuns`, a trusted multi-project registry, task creation, approve/reject, and the full My Attention / Tasks UX.
+- **Owner visual checkpoint: ACCEPTED** as the UX foundation (Projects-first, Owner-attention-first, task/run-centric). Visual refinement is deferred to AI-038.5.
+
+#### AI-038.3.1 — Trusted Project Registry + Run Discovery Foundation — DONE
+
+Passed independent re-gate (including the run-snapshot consistency corrective); commit `d7d1ca0`. Backend and read foundation only.
+
+- **Model:** Workspace (tenant / security boundary) → Project (a product/system inside it) → Runs. A Project is not a folder, checkout, VPS directory, executor session, environment or branch.
+  - Git repositories are the canonical code source; PAC is the control plane.
+  - Managed executors, VPS runners and the Local Runner are execution environments.
+  - Local Mac folders and VPS checkouts are temporary working copies.
+  - The same Project ID works wherever execution happens.
+- **Registry:** migration `0009_project_registry` adds `projects`: workspace-scoped `project_key` (the Owner-facing Project ID, same stable-id rule as `workflow_runs.project_id`), display name, `active` / `paused` / `archived`, and optional non-secret HTTPS `repository_url` + `default_branch`.
+  - Strict CHECK constraints reject credentials, query strings, fragments, ssh/file URLs and local paths.
+  - It stores no filesystem path, no executor/environment/deployment policy and no secrets profile. Those wait for the typed M4 contracts (AI-041 / AI-042).
+  - Nothing is seeded.
+- **Owner reads:** `listProjects(limit?)` returns active and paused projects; archived ones are excluded. `listRuns(projectId, limit?)` is one bounded statement scoped by workspace AND project, newest first.
+  - Both go through AI-038.1 → AI-038.0 → the tenant facade → authorized access, with new read actions `list_projects` / `list_project_runs`.
+  - `projectId` is an untrusted selector resolved only inside the already-authorized workspace. An unknown, foreign, archived or malformed project gives the same opaque `unavailable`.
+- **Not included:** UI project switching (AI-038.3.2), repository clone/checkout, GitHub API, project writes/onboarding, and a foreign key from `workflow_runs.project_id` to the registry (hardening debt: existing runtime rows have no factual registry backfill).
+
+#### AI-038.3.2 — Trusted Project Context Routing + All Projects + Real Project Switcher — DONE
+
+Passed independent re-gate; commit `50cfed1`. Owner-approved model:
+- **All Projects is the default scope.** It is the absence of a `?project=` selector: a UI/query scope, not a registry row. `/dashboard` is the global Mission Control home.
+- **Real Project Switcher** (All Projects + the authenticated `listProjects()` results) switches PROJECT context only and stays on the same major page. Dashboard, Runs and Approvals become project-scoped, and sidebar navigation preserves the selected project.
+- **Selector validation:** `?project=` is an untrusted selector. It is honoured only if the structure is valid **and** the authenticated registry of the trusted workspace lists it. Malformed, duplicate, unknown, foreign and archived values all give one opaque "Project unavailable" and never fall back to All Projects. The workspace still comes only from trusted server configuration; there is no cookie or storage authority.
+- **Dashboard:** global (projects, workspace approvals, active work across projects, per-project activity) or per project (identity, repository, runs, project approvals).
+- **Runs:** global bounded aggregation over registry projects via `listRuns` (application fan-out, documented bounds) or per project.
+- **Approvals:** the workspace queue, or per project classified by the factual run project (`listRuns` membership + bounded `getRunOverview`); unresolved approvals are never assigned.
+- **Bell:** the top-bar approval bell stays workspace-global.
+- **Run Detail:** never presents a run under a selected project it does not factually belong to.
+- **Tasks** do not exist yet: current work is shown as Runs.
+
+#### AI-038.4 — Owner Tasks — DONE
+
+Split so that task persistence/read semantics and the first task write boundary are never introduced in one security-sensitive change.
+
+##### AI-038.4a — Project Task Foundation + Read Surfaces — DONE (`4a55f5b`)
+
+Implemented with corrective and passed the independent re-gate (committed `4a55f5b`). The application UI is read-only; the only writes are the narrow server-side mutation contract below, which has no UI, route or Server Action.
+
+- **Model:** a persistent **ProjectTask** (`project_tasks`, migration `0010`) is the Owner objective ("what needs to be done"). It is distinct from the FeaturePlan `DevelopmentTask` (an in-memory node inside a FeaturePlan; FeaturePlan persistence and linking stay deferred).
+- **Identity and lifecycle:**
+  - stable public `task_key` (unique per workspace; the uuid is internal);
+  - type `feature` / `fix` / `investigation` / `roadmap`;
+  - a 12-state lifecycle (draft; active: ready, planning, approved, running, verifying; attention: waiting_owner, blocked, recovery_required, failed; terminal: completed, cancelled);
+  - nullable P0–P4 priority and low–critical risk (never defaulted);
+  - `completed ⇔ completed_at`.
+
+  Task status is persisted task state, never derived from runs.
+- **Integrity:** every task belongs to one registered project of the same workspace (composite FK). **Task ↔ Run** (`project_task_runs`): 0..N runs per task, a run linked to at most one task, and the same workspace and project enforced by composite FKs on both sides.
+- **Reads:** `OwnerReadBackend.listTasks(view)`, `listProjectTasks(projectId, view)` and `getTask(taskId)`. Each is one bounded SQL statement, gated by the Project Registry (archived projects are undiscoverable), with linked runs snapshot-validated.
+- **Owner Console:**
+  - Tasks, Task Detail and a factual Task Result (aggregation only, no agent report);
+  - My Attention (attention-status tasks + pending approvals, project-narrowed via the AI-038.3.2 classification);
+  - Recently Completed (by the task's `completed_at`);
+  - Dashboard Current Tasks, global and per project.
+
+  Runs stay runs (attempts). `+ New Task` stays disabled.
+- **Task mutation contract (corrective):** `lib/tasks/owner-task-mutations.ts`, kept separate from `OwnerReadBackend`. It is server-side only, with no UI, route or Server Action binding.
+  - `createTask` (authenticated active Owner → trusted workspace → active project):
+    - one transaction; Owner authority and project rows held `FOR SHARE` until commit, so a concurrent pause or archive cannot slip through;
+    - the server generates the task ID, and the task starts as `draft`;
+    - `creation_idempotency_key` + immutable intent fingerprint: same key and same intent → the same task; same key and any changed intent → generic conflict.
+  - `attachRun`:
+    - same-tenant, same-project run, with canonical snapshot validation before linking; a corrupted column or snapshot fails closed;
+    - the same task again → idempotent success; a run owned by another task → conflict.
+  - Exactly one `task.created` / `task.run_attached` audit event, written in the same transaction; DB unique indexes on links, keys and task audits are the last race guards.
+  - No run start, model, executor or GitHub action.
+
+##### AI-038.4b — Quick Create + audited Task Mutation Binding — DONE (`60b563b`)
+
+Implemented and passed the independent re-gate (committed `60b563b`). It is the first Owner-facing task write: Quick Create wired to the AI-038.4a `createTask` contract. No new mutation engine and no schema change (0010 is immutable). It creates task **intent** only and must NOT automatically execute a run, call a model or an executor, mutate GitHub, commit, push or deploy.
+
+- **Path:** `+ New Task` (top bar, project-scoped when a project is selected) → `/tasks/new` → `"use server"` action `app/tasks/new/actions.ts` → server-only `lib/composition/owner-task-create.server.ts` (real Auth.js `auth()`, trusted `APP_DEMO_WORKSPACE_SLUG`, per-request pool) → `lib/composition/owner-task-create.ts`.
+  - That module is the only importer of `owner-task-mutations`, and it exposes `createTask` only.
+  - It calls the AI-038.4a `createTask` (transaction, Owner and project locks, audit).
+- **Form:**
+  - fields: project, title, goal, type, priority, risk;
+  - any other field (task ID, workspace, actor, status, run, …) → `invalid_input`;
+  - only **active** projects are offered: All Projects shows a selector; a project context preselects; a paused project shows "creation unavailable"; archived or unknown selectors keep the opaque state;
+  - the backend re-checks everything.
+- **Idempotency:**
+  - the server issues one opaque CSPRNG key per rendered form (hidden field, never in the URL, the audit or a projection);
+  - retries and double submits of that form replay to the same task;
+  - a changed intent with the same key → generic conflict;
+  - the pending-disabled button is only UX.
+- **Outcome:**
+  - created / replayed → redirect to the factual Task Detail (`/tasks/<taskId>?project=<projectId>`), read again through the existing read path;
+  - otherwise a generic `invalid_input` / `conflict` / `unavailable` / `unauthenticated` message.
+- `attachRun` stays unbound (no UI, action or route). Task ↔ Run binding is for a later orchestrator task (AI-040+).
+
+#### AI-038.5 — Mission Control Visual Refinement — DONE (`c7d9b26`; deferred from the AI-038.3 Owner checkpoint)
+
+Implemented, accepted by the Owner and passed the independent re-gate (committed `c7d9b26`). The AI-038.3 foundation is accepted but less refined than the approved Mission Control reference. Scope:
+- a stronger Mission Control character and a more distinctive panel hierarchy;
+- tighter premium typography and spacing, and a better information-density rhythm;
+- telemetry- or instrument-like presentation where useful, and less of a generic card-grid feel;
+- a refined sidebar and top bar, and a stronger visual hierarchy for operational status;
+- restrained custom iconography, and polished hover, focus and selected states;
+- desktop composition at 1440, 1728 and 1920 px.
+
+This is visual work only: no new data capability, write action or API.
+
+Implementation notes:
+- refined tokens, a global focus-visible ring, and shared panel / table / instrument primitives;
+- one semantic status-tone map (neutral / active / success / attention / danger / muted) for task, run, project, approval and risk badges;
+- control-plane sidebar and top bar (workspace context, project context selector, workspace-global approval indicators, `+ New Task`, session);
+- an attention-first Dashboard instrument strip; My Attention grouped by severity; inspection-style Task and Run detail; grouped Quick Create form;
+- every value is existing factual read data; there is no new telemetry.
+
+#### AI-038.6 — RU/EN Owner Console Localization — DONE (`5af9f50`)
+
+Implemented and passed the independent re-gate (committed `5af9f50`). This is presentation only: no domain, storage, auth, routing or write-semantics change.
+
+- **Locales:** `ru` (default) and `en` only.
+  - The `pac_locale` cookie holds exactly `ru` / `en` (Path=/, SameSite=Lax, ~1 year, Secure on HTTPS, not HttpOnly).
+  - Anything else falls back to `ru`.
+  - No locale routing (`/ru/...`), no locale query, no browser-language detection.
+- **Resolution:**
+  - `lib/i18n/locale.server.ts` is the one canonical server-side resolver (`cookies()`, cached per request);
+  - `<html lang>` follows it;
+  - Geist / Geist Mono request the `cyrillic` subset.
+- **Dictionaries** (`lib/i18n/messages.ts`):
+  - typed RU / EN with exact key parity and no per-key fallback;
+  - exhaustive label maps for task / run / approval / project status, risk, task type, capability and model-invocation status;
+  - domain values stay canonical English tokens; identifiers, stored content and brand names are never translated.
+  - Prototype Roadmap / Settings copy is mirrored 1:1 in `lib/i18n/prototype-content.ts`.
+- **Switcher:**
+  - a small client component `components/shell/locale-switcher.tsx` in the top bar, just before the account block (`🇷🇺 RU` / `🇬🇧 EN`);
+  - it writes only the cookie and calls `router.refresh()`, so the path and `?project=` context are unchanged;
+  - no route, Server Action or DB write.
+- **The locale never takes part in** auth, tenancy, Project Registry trust, reads, Quick Create payload / idempotency, audit or approvals.
+- **Corrective L10N-1:** every human-facing `app/**/page.tsx` is covered by a test-enforced inventory: Owner pages, prototype pages via `lib/i18n/prototype-{pages,mock,content}.ts`, and Russian-native simulators with their English remnants localized. Internal links from localized pages (for example Settings → `/knowledge`) reach only covered routes.
+
+#### AI-038.7 — Dynamic Ambient Shader Background — DONE (`4cb0dc0`)
+
+Implemented, accepted by the Owner and passed the independent re-gate (committed `4cb0dc0`). Visual-only Mission Control refinement: no product, runtime, data or i18n semantics.
+
+- **Renderer:** a native WebGL 1 ambient shader (`components/shell/ambient-renderer.ts`, no library) behind one small prop-less client component (`components/shell/ambient-shader-background.tsx`). `AppShell` stays a Server Component.
+- **Look:** a fluid luminous band that bends, widens and narrows through the middle-lower viewport over a deeper ocean / teal field, inspired by the React Bits HeroBand motion (own shader, not a copy). PAC palette only; no status colors.
+- **Fallback:** the AI-038.5 CSS ambient mesh stays the server-rendered background. It is used before hydration, without (hardware) WebGL, on shader compile / link failure and after a context loss (until reload). While the shader runs, the mesh fades out and its animations pause, so there is one moving layer. The static haze / vignette stays above both.
+- **Lifecycle / performance:**
+  - ~30 FPS cap on requestAnimationFrame;
+  - drawing buffer at 1 pixel per CSS pixel (DPR 1);
+  - resize only on real size changes;
+  - paused in hidden tabs, resuming without a time jump;
+  - under `prefers-reduced-motion` the shader never starts (static CSS frame);
+  - no pointer interaction;
+  - full cleanup on unmount.
+- **Never** a telemetry signal: the shader receives only size and time.
+
+### AI-037.7 — Tenant-bound facade + pre-auth limits — DONE
+
+Passed independent re-gate; commit `50aeffb`.
+
+- trusted resolved-tenant binding
+- a foreign workspace is rejected before authorization or read
+- pre-auth structural/resource gate
+- Proxy/accessor defenses
+- the caller-owned dependency receiver-mutation corrective passed
+- live PostgreSQL tenant isolation passed
+
+Runtime command/write wiring remains deferred to a later write boundary.
+
+- facade bound to resolved tenant
+- workspace mismatch blocked before raw read
+- pre-auth body/shape/resource limits
+- Proxy rejection and cheap structural gate
+
+### AI-039 — Development Workflow Browser — DONE (`b0e0bb8`)
+
+Owner creates Development Request and sees FeaturePlan, dependencies, risk, executor recommendation and verification plan before repository mutation.
+
+A planning boundary only: no repository mutation, run, model, executor or GitHub action. (AI-039.1 below binds the planning port.)
+
+- **Development Request = ProjectTask.** There is no separate request entity: `ProjectTask → FeaturePlan revisions → DevelopmentTask[] → (future) Runs`.
+- **Durable, immutable FeaturePlan revisions** (migration `0011`, `project_task_feature_plans`):
+  - one plan lineage per task, revisions 1..N, never updated (trigger), editing saves revision N+1;
+  - composite FK to the ProjectTask of the same workspace and project;
+  - the stored plan is the canonical `validateAndNormalizeFeaturePlan` output with a sha256 fingerprint;
+  - draft status only; the ProjectTask status is never changed.
+- **Owner flow (corrective P-1):** `ProjectTask → Owner Planning Interview → AI-assisted candidate FeaturePlan → deterministic validation → Owner review / edit → immutable saved FeaturePlan revision`.
+  - The interview asks product questions only (desired result, where behavior changes, what must not break, how success is recognized, constraints), task-type aware, with "Not sure" as a valid answer. It never asks for files, paths, commands, step ids or dependencies.
+  - Planning is ONE bounded structured completion through a provider-neutral planning port in the ModelProvider vocabulary — not an executor task, no tools or agent loop. The candidate is untrusted: it is rejected (never repaired) unless `validateAndNormalizeFeaturePlan` and `buildDevelopmentTaskWaves` accept it.
+  - The candidate is never saved by AI; only the Owner's explicit "save draft revision" creates a revision.
+  - The Project Registry holds no repository contents, so the planner never names repository paths: a candidate's allowed paths are marked as needing technical clarification and must be filled before saving.
+  - At AI-039 no planning provider was bound, so production showed a factual "AI planner unavailable" state. AI-039.1 binds the port through a real planning Run (below); without a valid planning policy the state stays "unavailable".
+- **Plan Builder (advanced editor / fallback)** at `/tasks/[taskId]/development` (from Task Detail; no new navigation item):
+  - steps with stable ids, dependencies chosen from other steps, risk, priority, Owner-approval flag and one-per-line scope / paths / criteria / commands;
+  - a bounded FormData parser and one Server Action → the server-only save contract (`lib/development/feature-plan-mutations.ts`);
+  - Owner + task + project locks, idempotent by an opaque form key + intent fingerprint, exactly one `task.feature_plan_revision_created` audit event;
+  - only a `draft` task of an `active` project can receive a revision.
+- **Browser** (read through the existing AI-038.0 / AI-038.1 chain, new read action `read_task_feature_plans`):
+  - development request, plan and bounded revision history;
+  - dependency waves from `buildDevelopmentTaskWaves` (logical readiness only), aggregate risk = max step risk;
+  - verification plan = exactly the commands written in the plan.
+  - Stored plans are re-validated and re-fingerprinted on every read and fail closed when corrupted.
+- **Executor recommendation:** factually unavailable until ExecutorRouter (AI-041.3); no executor is shown or implied.
+- **Follow-up (Owner decision):** adaptive, task-specific interview questions proposed by the planning model (on top of the fixed task-type questions, product-only, each with "Not sure") — after a real planning provider is bound.
+- **Repository changes:** factually not started.
+
+### AI-039.1 — Ledger-backed AI FeaturePlan Planning — DONE
+
+The AI-039 planning port bound to a REAL bounded model invocation, through the existing runtime.
+
+**DONE means:** implementation, deterministic / fake-SDK / live-PostgreSQL verification and the independent architecture review are complete.
+
+**It does not mean** that a real API-key paid call was performed, that API billing was verified live, or that M2.2 is complete.
+
+**Direct API-key live smoke deferred by Owner until API billing is available.** The API-key path is kept as implemented. The one Owner-approved paid planning call remains a separate gated step, and M2.2 remains DEFERRED BY OWNER.
+
+- **Seam:** one real persisted single-step planning Workflow Run per planning request, through the existing lifecycle (`create → start → advance`).
+  - It inherits route, data-handling permit, invocation ledger, preflight, pre-spend budget reservation, provider-start fence, usage / cost settlement, `outcome_unknown`, recovery, audit and observability.
+  - No second ledger, no synthetic run / workflow / agent / step identity. The planning Run is visible on the Runs page.
+  - The Run's policy snapshot is a versioned built-in planning workflow (`pac-feature-plan-planning`, agent `pac-feature-planner`, step `feature-plan`, `proposal_only`, no tools, `maxAttempts` 1) for the task's real Project Registry project.
+- **Durable step result** (narrow, generic pull-forward of AI-037.2; migration `0012`):
+  - the output text of a succeeded invocation is stored in `workflow_model_invocation_results` in the same transaction as the ledger's usage / cost / budget settlement, sha256-fingerprinted;
+  - rows are immutable and tenant-bound (composite FKs); readers re-fingerprint and fail closed.
+  - A result therefore survives a later snapshot commit failure without a second dispatch.
+- **Planning request** (`project_task_planning_requests`, migration `0012`):
+  - Owner + task + project locks (the AI-039 plannability rule);
+  - idempotency key + request fingerprint: exact replay never dispatches again; the same key with a different request is a conflict;
+  - settled exactly once with the runtime outcome; one audit event each for started and settled.
+  - The candidate is re-derived from the durable result, never stored twice.
+- **Budget policy `feature_plan_planning`** from trusted server configuration (`PAC_PLANNER_*`):
+  - pinned identity, verified prices, per-call input / output / cost ceilings, daily-token and monthly-cost windows;
+  - fails closed, and the windows must hold one call.
+  - Production binding only when the policy, the credential and the trusted workspace are valid (loopback PostgreSQL until AI-037.5).
+- **Data handling:** project egress mode `approved_minimum`. Every planning request needs the Owner's explicit, unchecked-by-default consent in the form, turned into one-shot evidence bound to exactly that invocation.
+- **Strict output:** the whole output text must be one JSON object (no fences, no repair), then the AI-039 candidate validator. Non-empty `allowedPaths` still reject the candidate.
+- **Outcomes:** `candidate`, `candidate_rejected`, `planner_unavailable`, `budget_denied`, `provider_unavailable`, `planning_failed`, `recovery_required`, plus `egress_approval_required` and `conflict`.
+- **Unchanged:** no auto-save, no task status change, no repository execution; provider SDK retries 0; the credential stays server-side only.
+
+### AI-039.2 — ChatGPT Plan Access — Phase A implemented/committed; Phase B blocked
+
+Phase A implemented and committed/pushed in `c3e3db4`: Sign in with ChatGPT connection in Settings → Integrations — public-client OAuth (dynamic registration, PKCE S256, state, nonce, 127.0.0.1 loopback callback), JWKS-validated ID token, local protected credential store, serialized rotating refresh, revocation on disconnect, account-specific model discovery. The live entitlement gate is deferred by an external supported-network blocker. **No inference proof; Phase B remains blocked.** Phase B (subscription accounting, adapter, planner binding) starts only if the official grant includes `chatgpt.tokens.use.direct`. Eligibility is determined by that official OAuth grant; a private PAC installation is not guaranteed ChatGPT-plan direct access. Initial `invalid_grant` recovery remains recorded debt, not AI-040a work.
+
+AI-044 Phase S separately reuses this Phase-A foundation for a narrow engineering
+`ChatGPTPlanPatchExecutor`, **not** another OAuth system or completion of this
+generic planner/ModelProvider Phase B. Current official SIWC docs support eligible
+Plus/Pro local/open-source clients and selected private clients; this does not
+guarantee any account/model entitlement or remotely hosted commercial use.
+AI-045/VPS must re-check eligibility. The Phase S candidate requires exact
+registration/model, plan-only Owner preflight and durable one-shot approval before
+token access; no real inference proof has been performed.
+
+Purpose: use official Sign in with ChatGPT / ChatGPT plan usage as a second `ModelProvider` access mode for bounded FeaturePlan planning.
+
+```
+ModelProvider
+  ├── api_key               (AI-039.1, preserved)
+  └── subscription_session  (AI-039.2)
+```
+
+Both access modes feed the same flow: `Planning Interview → ledger / policy → candidate → deterministic validation → Owner review`. `ModelProvider` is NOT collapsed into `ExecutorAdapter`.
+
+Approved architecture direction (only this is recorded):
+
+- the official Sign in with ChatGPT OAuth path;
+- ChatGPT-plan usage for eligible Responses API requests;
+- access mode `subscription_session`, with no API key required for this route;
+- OAuth credentials protected server / local only; no tokens in browser storage;
+- the existing `api_key` path preserved;
+- no fake $0 cost: subscription usage / quota is represented separately from metered API cost;
+- no repository execution, and no ExecutorAdapter work yet.
+
+Actual availability / eligibility and the supported request contract must be re-verified against official OpenAI documentation during AI-039.2.
+
+## 10. Architecture Decomposition Gate
+
+Before expansion of the execution layer, perform controlled backend decomposition. Backend architecture follows modular-monolith domain/application/infrastructure boundaries, not literal frontend FSD.
+
+| Module | Responsibility |
+|---|---|
+| workflow-runtime | domain, application/use-cases, policies, contracts, postgres infrastructure |
+| model-invocation | routing, provider identity, invocation lifecycle |
+| budgets | reservations, windows, reconciliation |
+| approvals | approval policy/lifecycle |
+| audit | immutable event contracts and queries |
+| tenants | workspace resolution and isolation |
+| execution | `ExecutorAdapter` / `ExecutorRouter` / `ExecutionEnvironment` contracts and normalized artifacts/events (no PAC-owned agent loop or sandbox) |
+| providers | provider adapters |
+| shared | DB adapter, observability, validation primitives |
+
+Dependency rule:
+
+`API/Handler → Application/Use Case → Domain/Policy → Repository Contract → Infrastructure`
+
+Additional rules:
+
+- new functionality must not endlessly enlarge central runtime files
+- file/class >1000 lines requires decomposition review
+- large mechanical refactors are not mixed with critical correctness fixes
+- decomposition gate happens before AI-041/042 scale-up
+- v1.4: the gate must not block AI-041.0, which is a new, isolated contract module; it applies before executor integrations scale up (AI-041.1+)
+
+## 11. M4 — Vendor-Neutral Executor Platform — IN PROGRESS (v1.5)
+
+M4 builds the executor platform, not an agent runtime. PAC owns the request, policy, routing, evidence, quality, security, approval and audit around execution. The selected executor owns how it reasons, which tools it calls in its own loop, its context management, its subagents and (when managed) its sandbox. Design input: `docs/architecture/executor-adapter-strategy-v0.1.md`.
+
+Current checkpoint: AI-041.1 and AI-042.1/042.1a/042.2 are **DONE** within
+their accepted slices; M4 and AI-042 overall are not DONE. AI-041.2 is **DONE**;
+B2 AI-041.3 and minimal **managed** ExecutionEnvironment closure (§18) are DONE,
+independently accepted and integrated at `f36d4ac923f12c5b61602c4cb0a950ad1602edcc`.
+Production/live
+dispatch remains **BLOCKED**; local worktree readiness is not execution authority.
+
+`PAC → ExecutorRouter → ExecutorAdapter → { OpenAIAgentsExecutor | ClaudeCodeExecutor | QwenExecutor | DeepSeekExecutor | LocalExecutor | future }`
+
+This is the extensible architecture, not an enabled route list. Before AI-052,
+only factually supported managed execution may be permitted by policy; local/VPS
+coding and SelfHostedExecutor remain blocked by §1.3.
+
+Rules:
+
+- Provider-specific SDK objects, events and errors stop at the adapter boundary. No provider-specific types appear in FeaturePlan, policy, routing, runtime state, audit or UI.
+- A provider session is not PAC workflow state; a provider trace is not PAC audit; a provider scanner verdict is not PAC security policy.
+- Capability detection fails closed: an executor that cannot satisfy the requested capability, environment, access mode or data-handling requirement is not selected.
+- No second dispatch on an ambiguous outcome; existing M1 invariants (budget-before-spend, `outcome_unknown`, idempotency, audit) apply to executor runs.
+
+### AI-041.0 — Vendor-Neutral Executor Adapter Contract — IN REVIEW (first new implementation task created by v1.4)
+
+Define only the PAC-owned contract and its contract tests. No SDK, no provider adapter, no network, no migration unless the task explicitly scopes one.
+
+Implemented narrow foundation (awaiting independent re-gate): `lib/contracts/executor-adapter.ts` separates configured stable identity, bounded capability declarations, immutable invocation input and strictly validated terminal results. It reuses FeaturePlan validation, DevelopmentTask admission and existing pure bounded-data/path/evidence utilities. The deterministic test harness produces scoped, SHA-256-bound file proposals and reports. A successful result is not independently verified work: `verificationStatus: not_run`, `ownerDecisionRequired: true`; unknown outcomes never imply retry permission.
+
+There is no execute/invoke/dispatch method, permit issuer, provider/SDK/network call, filesystem execution, new persistence or Git authority. `allow` means contract-valid only (`invocationAuthorized: false`). AI-040a remains unchanged and human-operated. Full shapes, limits, trust assumptions and deferred additions: [ExecutorAdapter contract v1](architecture/executor-adapter-contract-v1.md).
+
+Future platform coverage (not all implemented by the narrow AI-041.0 foundation):
+
+- `ExecutorRequest` — bounded task derived from an admitted FeaturePlan task (scope/paths, acceptance criteria, verification plan, limits)
+- `ExecutorCapabilities` — what an executor factually supports
+- `ExecutorAccessMode` — `subscription_session`, `api_key`, `provider_credits`, `self_hosted`, future supported mode
+- `ExecutionEnvironmentRef` — reference to the environment that runs the work
+- `ExecutorRunIdentity` — PAC run identity plus opaque provider references
+- `ExecutorEvent` — normalized progress/status events
+- `ExecutorArtifact` — normalized patch/report/log artifacts
+- `ExecutorUsage` — `metered_api` (tokens, actual cost), `subscription` (quota/allowance; cost only if factually exposed), `provider_credits`, `self_hosted` (compute/resource)
+- `ExecutorOutcome` — terminal outcome including `outcome_unknown`
+- status, cancel, and resume where the executor supports it
+
+Exit: contract and adversarial contract tests pass; a deterministic fake executor satisfies the contract; nothing calls a real provider.
+
+### AI-041.1 — OpenAI Agents API Adapter (`OpenAIAgentsExecutor`) — DONE (production/live dispatch BLOCKED)
+
+First managed executor implementation, whose completed implementation/review chain
+was accepted at `c9c04d94217847e6bbe5066f54f8d69897693862`. DONE covers the
+managed transport, durable start/exposure fence, current authority, outcome capture,
+provider identity/recovery and retrieval-only reconciliation foundation. It does
+not mean production/live dispatch is enabled or a live execution was proven.
+PAC remains responsible for FeaturePlan, policy, routing, quality, security, audit,
+cost normalization, approval and corrective orchestration; the provider may own
+session execution, the agent loop, tools, context runtime, subagents and hosted
+execution. Provider capabilities/access must still be verified against official
+documentation at implementation/enablement time; no new capability claim is made
+by this status alignment (see `docs/ROADMAP_REBASE_V1.4.md`).
+
+Owner exception for this slice: prerequisite AI-041.0 / Decomposition gates were explicitly excluded, not declared passed. The implementation preserves security invariants. Scope was explicitly extended to a separate Executor Budget / Provider-Start Fence Bridge; existing ModelInvocation/Workflow Run grants are not reused.
+
+Implemented: managed session request construction, minimized explicitly supplied context, bounded SSE/result conversion, factual AI-041.0 result validation; separate opaque dispatch permits and monetary exposure reservations; synchronous process-local test fence; retained exposure and explicit reconciliation on missing/ambiguous usage. AI-041.1a (DONE / COMMITTED / PUSHED; official sources re-checked 2026-10-12) binds the current Agents API `spend_control.limit` in USD cents to the factual reservation, rounding down without releasing the full micros reserve. The cap is in the exact fingerprinted request; returned cap must match. Consumption is best-effort evidence only. Provider-side defense in depth does not replace the durable PAC fence/reservation, aggregate budget, replay protection, Owner authorization or tenant/account binding. Production/live dispatch remains BLOCKED before credential access/network. No UI/route, SDK upgrade, repository execution or patch application; the internal durable prerequisites below add migrations separately. Timeout is not remote cancellation. No live execution proof. [Architecture, bounds, official sources and enablement conditions](architecture/openai-agents-executor-v1.md).
+
+Internal prerequisite **AI-041.1b0 Trusted Executor Attempt Identity — DONE / COMMITTED / PUSHED**, independently re-gated and committed as `2109545f829dfe4e63a23e95301893c534e75947`, is not roadmap expansion. AI-011 owns attempts; b0 exposes trusted `{developmentRunId, number, kind}` identity. Invocation ID is correlation, not authority for a new attempt. AI-041.1a is DONE / COMMITTED / PUSHED as `fc924885781ed9e651fb8d5e47588fd6a5ea1773`.
+
+**AI-041.1b Durable Executor Start & Exposure Fence — DONE / COMMITTED / PUSHED**, commit `d72a439a456cb1370b49448fb354ea93b381907b`. Migration `0013` serializes aggregate micros reservation and binds one capped request/start per workspace/Run/attempt; acknowledgement uncertainty never reissues a capability and post-start exposure stays held. [Durable boundary](architecture/durable-executor-start-v1.md).
+
+**AI-041.1c Durable Current Run / Attempt Authority Binding — DONE / COMMITTED / PUSHED**, commit `bde59001b1a4bc28582bd6c76b6059d41cdcf74a`. Migration `0014` establishes a narrow current-authority record/journal, monotonic generation and canonical Run/admission fingerprints. Trusted server-only register/advance/revoke operations precede exposure reservation; prepare/start re-check current authority and immutable exposure bindings under the same PostgreSQL lock. Full canonical corrective history, not a caller attempt number, proves adjacent advancement. [Authority trust, locking and limitations](architecture/executor-current-authority-v1.md). No public issuer, autonomous cancellation producer or Owner UX.
+
+**AI-041.1d Durable Executor Outcome Capture & Exposure Settlement — DONE / COMMITTED / PUSHED**, commit `c5299f5d19ae1addb38e5ef5335a24428b7074e4`. Migration `0015` stores the bounded normalized terminal proposal for one factual workspace/Run/attempt, atomically settles exposure, releases held micros once and journals it. Restart readers revalidate all bindings and content/digest without redispatch. Ambiguity retains full exposure and no fabricated terminal row; a future trusted reconciler can supply definitive evidence through the same internal ingress. `settled` means exposure closed after durable definitive terminal output, NOT exact monetary cost. Production/live dispatch remains BLOCKED. This is only the executor-specific pull-forward of AI-037.2; AI-037.2/.3/.8, controller/AI-043 and M4 are not DONE. [Outcome settlement](architecture/executor-outcome-settlement-v1.md).
+
+**Historical AI-041.1 Live Readiness Review — BLOCKED**, at the d commit above; implementation closure does not enable live dispatch. **AI-041.1e Durable Provider Execution Identity & Recovery Correlation — DONE / COMMITTED / PUSHED**, commit `780a005c96233be1572eb5592433a0e58b8d7869`. Migration `0016` binds deterministic opaque correlation and write-once provider session/turn IDs to the exact historical start/account/model/request, with an atomic journal and single-use acknowledged start+correlation capability. The bounded parser awaits identity acknowledgements; it has no DB access. W2 (possibly-created session without known ID) remains unresolved, held and non-retryable; metadata/listing is not Create Session idempotency. [Identity boundary and official sources](architecture/executor-provider-identity-v1.md).
+
+**AI-041.1f OpenAI Agents Retrieval-Only Provider Reconciler — DONE**, integrated at `c9c04d94217847e6bbe5066f54f8d69897693862` after independent final corrective re-gate. Saved session/turn/items are read only through an injected in-process fake GET client, bounded exhaustive pagination and exact unique discovery. Reconstructed proposals reuse stream conversion and ExecutorAdapter; terminal evidence uses the existing d capture/atomic settlement and e identity operations, with no new ledger/migration. Zero/incomplete/multiple matches, nonterminal state and malformed evidence retain full unsettled exposure and never retry Create/message/new turn. Historical recovery does not revive authority or clear sticky incidents. Production GET/dispatch and credentials remain structurally unavailable; trusted credential/account and egress authority, sufficient approved financial policy, production composition and live proof remain separate. [Retrieval-only boundary](architecture/executor-provider-reconciliation-v1.md). AI-037.2/.3/.8 and M4 remain NOT DONE. No real call or live enablement is claimed; the Owner-approved infrastructure/live gates remain separate (§15 / §18).
+
+Replaces the v1.3 default "CodexBackend via Codex CLI subscription session". Codex CLI/SDK/Cloud routes remain possible future executors or environments if a supported control-plane interface is confirmed (see AI-041.R1).
+
+Accepted implementation checkpoint: the fake/local-PG-reviewed chain now includes
+the durable executor fence, current authority, outcome capture, identity and
+retrieval-only reconciliation foundation. Future production enablement still
+requires trusted authority/account/transport/egress composition, sufficient
+approved financial policy and separately approved live smoke. The original live
+exit criterion is not met or claimed; FeaturePlan, QA, evidence and Owner approval
+semantics remain unchanged. This task closes implementation/review, not live access.
+
+### AI-041.2 — Second Vendor / Portability Proof — DONE
+
+**AI-041.2a — DONE** at `f782e1e438b4030efeba1bd70b90485ab71a52e3` after independent PASS:
+[provider-neutral request seam](architecture/executor-provider-request-v1.md), unchanged OpenAI bytes.
+**AI-041.2b1 — DONE**, integrated at `fca80a5a272ef734295cd250432f42ea2333db3b` after independent PASS:
+[predecessor quiescence barrier](architecture/executor-predecessor-quiescence-v1.md)
+over shared durable start/settlement facts.
+**AI-041.2b2 — DONE**, integrated at `45c55e56ed98df2e40822cee1e3c89ca90a54d1a` after independent PASS:
+append-only [provider CHECK migration](architecture/executor-provider-constraint-migration-v1.md)
+`0017`, exact `openai, anthropic` domain; identity/finance/runtime unchanged.
+AI-041.2b is DONE. AI-041.2 c/d and the amended
+[authority rebind](architecture/executor-authority-rebinding-v1.md) (`0018`)
+passed consolidated independent re-gate and controlled integration at
+`46456844aac0251763d41277decfa066cdfc65cf`. AI-041.2 is DONE within fake
+architectural portability/durable semantics, not Claude live execution.
+[Portability proof](architecture/executor-portability-proof-v1.md) keeps one shared
+authority/exposure/identity/settlement core. No separate R/C commit. B2 subsequently
+integrated ExecutorRouter and managed environment policy; no live enablement.
+Overall v1.5 ordering, `runtimeDispatchAllowed=false` and production/live BLOCKED
+status are unchanged. Schema eligibility is not a provider execution grant.
+
+Accepted goal after integrated AI-042.2: connect a genuinely
+independent second executor and prove portability without redesigning the PAC
+engineering pipeline. Preferred candidate: **Claude Code / Claude executor**,
+only if capability/access research at implementation time confirms a suitable
+officially supported interface. Claude is not an unconditional dependency;
+otherwise the Owner selects another supported independent executor. Supported
+subscription/API access remains an adapter/policy choice, not workflow semantics.
+
+Before AI-052, use a provider-managed environment if available and compliant with
+PAC policy. Lack of a suitable managed interface means blocked/research or another
+Owner-approved supported managed candidate, never an unmanaged local Claude/Codex
+process on the PAC VPS. No local coding authority is implied by subscription access.
+
+Portability gate — with a different executor, PAC keeps:
+
+- same FeaturePlan
+- same Admission Policy
+- same budgets and reservation/recovery semantics
+- same Quality Gate
+- same Security Gate
+- same evidence
+- same approvals
+- same audit
+- same corrective orchestration
+
+### AI-041.3 — Executor Router — DONE (B2 integrated)
+
+Separate from the existing direct-model `ModelRouter` (`model-capability-routing-policy.ts`), which keeps serving `ModelProvider` calls. Routing inputs: capability, task class, risk, cost, latency, availability, data residency, privacy, context/repository needs, execution environment, access/payment mode, provider quotas/limits, historical eval quality, Owner preference. Introduced when there are at least two executors to choose between (no earlier than AI-041.2).
+
+AI-041.3 follows accepted AI-041.2. B2 implements a bounded trusted immutable
+registry for both factual executor identities, admitted task/current attempt
+derivation, managed eligibility, hard filters, deterministic quality/cost/latency
+ranking and separate hard/soft Owner preference. Unknown required evidence denies;
+optional unknown metrics rank last, never as zero/perfect. Route fingerprints bind
+all normalized requirements/candidates/evidence/selection and policy version.
+Every route has `dispatchAuthorized=false`, `runtimeDispatchAllowed=false`.
+No ModelRouter coupling, public registration, route DB store, SDK, credentials,
+network, new migration or financial/authority lifecycle. No production supported
+route is assumed. [Router contract and trust](architecture/executor-router-v1.md).
+Consolidated independent re-gate and controlled integration passed at
+`f36d4ac923f12c5b61602c4cb0a950ad1602edcc`. This closes routing policy only;
+selection never becomes executor start authority.
+
+### Research / integration targets (not implementation tasks yet)
+
+| Item | Priority | Status | Note |
+|---|---|---|---|
+| AI-041.R1 Codex Cloud capability investigation | P1 | RESEARCH | Programmatic interface suitability, repository access, environment lifecycle, reusable environments, task lifecycle, artifacts, branch/PR workflow, logs, limits, cost, security boundary, identity/access. Not a dependency until a supported control-plane interface is confirmed. |
+| Codex Security as `SecurityEvidenceProvider` | P1/P2 | FUTURE | Evidence source only; does not replace lint, tests, SAST, dependency/secret scanning, architecture checks, PAC policies or human review. |
+| Sign in with ChatGPT | P2 | RESEARCH | Identity, eligible plan usage (Plus/Pro), credits, commercial/private eligibility, limits, quota visibility. Not mandatory; not assumed available for every deployment. |
+| Dots | — | DEFERRED / RESEARCH | Architecture/UX/automation benchmark. A future `DotExecutor` only if an officially supported programmatic interface appropriate for PAC appears. PAC is not a wrapper around Dots. |
+
+### Executor access / authentication / payment modes
+
+Execution access and payment are replaceable runtime configuration, not workflow semantics. The control plane may select among supported modes according to Owner policy, availability, quota, security, and cost.
+
+| Mode | Intended use | Accounting / security rule |
+|---|---|---|
+| `subscription_session` | Provider-supported subscription access, e.g. eligible ChatGPT plan usage or Claude/Claude Code subscription where officially supported | PAC stores only status and policy facts needed for orchestration; it does not copy raw interactive session secrets into Run state or audit. Quota/allowance is tracked separately from API token spend. |
+| `api_key` | Direct provider API credential | Secret remains server-side; exact usage/cost/budget rules apply where provider reporting supports them. |
+| `provider_credits` | API-funded route using provider account credits/balance | Same execution contract as API key mode; funding source must not change workflow semantics. |
+| `self_hosted` | Future local/private inference or executor infrastructure | No provider subscription dependency; compute/resource accounting is separate from token billing. Coding execution is blocked until AI-052 gates; this mode declaration is not authority. |
+| future supported mode | Any later officially supported mode | Added only behind the same contract. |
+
+Rules:
+
+- Executors are not substitutes for the direct `ModelProvider` API abstraction.
+- An executor may support more than one access mode; runtime capability detection must fail closed when a requested mode is unavailable.
+- Switching subscription ↔ API ↔ credits ↔ self-hosted must not change FeaturePlan, repository scope, QA, evidence, approval, audit, or recovery contracts.
+- No fabricated USD per-call cost is recorded for subscription mode unless the provider exposes a trustworthy monetary figure.
+- API mode continues to use explicit token/cost budgets and provider-spend controls.
+- Private AI Cloud never obtains subscription access by scraping browser state or copying unsupported credentials, and never stores passwords, browser cookies or raw interactive session tokens.
+- Provider-specific login/session lifecycle remains inside the adapter and the provider-supported session store.
+
+### Deferred executors
+
+- QwenExecutor, DeepSeekExecutor — deferred until there is a real use case
+- LocalExecutor / SelfHostedExecutor / private coding execution — deferred to AI-052 after AI-051 and blocked until its gates; earlier implementation requires a new explicit Owner roadmap-change approval
+
+These remain extension points, not near-term obligations. A factual requirement
+alone does not override the v1.5 private-execution sequence.
+
+### Verification Runner is not an AI executor
+
+`LocalRunner` is separated conceptually from executors. It runs PAC's own Quality Gate checks (lint, typecheck, unit/contract/integration tests, build, secret/dependency scans, architecture checks, local deterministic tools) on executor output. The executor does not own the final Quality Gate.
+
+### AI-042 — Execution Environment Abstraction + Conditional Self-Hosted Fallback — PARTIAL / IN PROGRESS
+
+v1.3 required PAC to build an isolated universal Coding Worker. v1.4 replaces that with an `ExecutionEnvironment` abstraction, managed execution first:
+
+`ExecutionEnvironment = provider_hosted | openai_hosted | codex_cloud_if_supported | local | vps_self_hosted | future_provider`
+
+A PAC-owned private coding environment remains conditional on a factual need:
+privacy, data residency, ZDR, private network, special hardware, vendor
+independence, provider outage/fallback, cost or security requirements. **v1.5
+also fixes its implementation stage at AI-052, after AI-051.** Such a need is
+not permission to implement or enable it earlier; §1.3 requires a new explicit
+Owner roadmap-change approval for an earlier implementation.
+
+AI-042.2 DONE does **not** make a Container Runner the automatic next task.
+Managed execution stays first: when the provider environment satisfies PAC's
+requirements, use `PAC → ExecutorAdapter → provider-managed execution`. PAC does
+not duplicate the provider's generic agent loop, subagent engine, context
+management, browser/computer runtime or managed sandbox mechanics. PAC retains
+task scope, roadmap/orchestration, policies, budgets, evidence, independent QA,
+security, corrective orchestration, approvals and audit.
+
+Self-hosted remains a first-class **conditional / deferred to AI-052** capability,
+not a cancelled one:
+`ExecutionEnvironment → local / vps_self_hosted → WorktreePort → AI-052 containment/runtime`.
+Confidential repositories/private development, privacy, data residency, private
+network access, special hardware, provider outage/fallback, vendor independence,
+an inadequate provider security environment, self-hosted/local models or economic
+justification may motivate the AI-052 scope or a new explicit Owner-approved
+roadmap change; none silently activates an earlier runtime. No container,
+SelfHostedExecutor or broader environment runtime is implemented here.
+
+**Minimal closure before AI-043 is managed-only:** define enough
+ExecutionEnvironment capability/policy semantics to safely select and use
+factually supported managed environments. It does not require a full self-hosted
+container stack, production WorktreeStoragePort or private process enforcement.
+AI-052 later supplies that private/self-hosted physical realization. Managed
+capabilities must still satisfy PAC's security requirements; an unavailable
+managed capability is denied, not replaced by an uncontained local process.
+
+**B2 minimal managed closure — DONE**, independently accepted and integrated at
+`f36d4ac923f12c5b61602c4cb0a950ad1602edcc`.
+[ExecutionEnvironment policy](architecture/managed-execution-environment-v1.md)
+represents filesystem/path/network/secrets/time/resource/file/artifact/verification/
+residency/data-handling capabilities as supported/unsupported/unknown plus evidence.
+Required unknowns deny; supported without provenance is invalid. Conditional Codex
+Cloud needs factual interface evidence; no product-name assumption. No environment
+creation/physical enforcement or fallback to local/VPS/self_hosted. AI-042 overall
+remains PARTIAL / IN PROGRESS; acceptance covers only this managed policy slice.
+
+The safety requirements are kept as environment capability/policy requirements that every environment (managed or self-hosted) must satisfy or be denied:
+
+- filesystem restriction / isolated worktree
+- repository/path allowlist
+- network policy
+- secrets isolation
+- timeouts
+- budgets and changed-file limits
+- artifact and verification-output collection back to the control plane
+
+#### AI-042.1 / AI-042.1a — Sandbox Execution Contract — DONE
+
+Owner-authorized contract/policy foundation on accepted AI-041.1 baseline
+`c9c04d94217847e6bbe5066f54f8d69897693862`. Pure provider-neutral spec,
+bounded admission, lifecycle/evidence, command/path/network/secret/resource
+policies, restart-validated snapshot and CAS/fencing proposal contract.
+AI-042.1a corrective separates historical validation/current execution admission
+and resource-generation-bound cleanup-only authority; unifies effective maxFiles
+at platform max 64; defines HTTPS-only Network Contract v1 with public-peer,
+DNS-rebinding/TLS/platform checks and deny-redirect semantics; and adds isolated
+mutation-sensitive regressions. These remain proposals/pure probes, not runtime.
+It does not create a sandbox or acquire a durable lease. Runtime/resource/network
+enforcement, physical cleanup and persistence adapter are **not implemented**;
+all decisions retain `runtimeDispatchAllowed: false`. No migration, real worktree,
+container, shell/provider/OAuth call or production enablement. Production/live
+dispatch stays **BLOCKED**. Physical local worktree operations are a separate
+AI-042.2 slice below; this pure contract does not itself implement enforcement,
+change the managed-first environment strategy or build an agent loop.
+Owner accepted and integrated this contract foundation as
+`f63e79b8cfb8e3ae1c369b7f31c00bf9944ca36e`. It does not enable live dispatch.
+See [contract, trust boundary and residual limitations](architecture/sandbox-execution-contract-v1.md).
+
+#### AI-042.2 — Git Worktree Isolation — DONE
+
+Passed independent re-gate and controlled integration as
+`47212635607c6c7a37f2af4a56f548c793af444a`.
+
+Physical local detached Git worktree lifecycle behind WorktreePort: trusted
+repository identity, exact local immutable baseline and post-create HEAD checks,
+private generation-specific paths, structured resource/evidence records,
+cleanup-only historical authority, guarded removal and factual restart/discovery.
+Generation/fingerprint/revision/fence ownership, partial-failure reconciliation
+and mutation/adversarial proof are part of the accepted local adapter slice.
+Primary checkout/HEAD/index/dirty files and protected branches remain untouched.
+No remote Git, generic command runner, coding agent or provider dispatch.
+
+The persistence/authority port is mandatory; no production durable adapter,
+migration or service composition is supplied. Real temporary Git tests use an
+external disposable durable fixture journal; this is not VPS/concurrency/store
+production readiness. Future store must durably CAS intents, exclude all writers
+across processes and never span Git work with an open DB transaction. Known
+same-UID filesystem TOCTOU and resource quota limits are explicit.
+Docker/Podman, agent process, CPU/RAM/network/DNS enforcement, secrets and live
+execution remain absent; `runtimeDispatchAllowed=false`. Production/live dispatch
+stays **BLOCKED**. Accepted evidence: focused 249/249, full suite 2635/2635,
+eight primary mutations plus independent M9/M10a/M10b detected. This is not
+production/VPS execution-environment readiness.
+See [physical worktree boundary, recovery and limits](architecture/git-worktree-isolation-v1.md).
+
+**AI-042 overall remains NOT DONE / PARTIAL.** Production worktree storage/CAS,
+cross-host/VPS-safe concurrency, OS/process containment, file-scope enforcement
+against a running process, CPU/RAM/disk quotas, network/DNS enforcement, secrets
+injection/isolation and live runtime dispatch are not implemented. All local
+adapter decisions keep `runtimeDispatchAllowed=false`; production/live dispatch
+remains **BLOCKED**. Minimal managed environment closure follows executor
+portability/routing (§18); AI-052, after VPS and Telegram hardening, is the private
+physical realization. Local/VPS/private coding remains blocked until AI-052's
+security/readiness gates. Only a new explicit Owner roadmap-change approval may
+resequence an earlier implementation; it does not waive those gates or itself
+grant dispatch. Worktree readiness never grants coding dispatch rights.
+
+**AI-042.2 NON-BLOCKING DEBT:** at the next relevant worktree subsystem change,
+move independent M9 (cleanup factual-absence), M10a (required storage port) and
+M10b (implicit in-memory persistence fallback) from external review harnesses
+into the checked-in regression/mutation suite. No corrective implementation is
+part of this documentation/status alignment.
+
+### Removed from PAC-owned scope (v1.4)
+
+| Former/implicit plan | v1.4 decision | Where it lives instead |
+|---|---|---|
+| PAC-owned generic agent loop (prompt → think → tool → observe → recover) | REMOVE from PAC scope | Executor, behind `ExecutorAdapter`. The existing `agent-step-runtime` (one bounded model invocation per step; tool-call proposals fail closed) stays as control-plane logic and is not grown into a generic loop. |
+| Generic context compaction (history → summarize → compact → restore) | REMOVE from PAC scope | Provider-owned. PAC owns Project Knowledge, policies, decisions, FeaturePlans, artifacts, evidence and durable audit. |
+| Mandatory own cloud sandbox / coding worker | REPLACE_WITH_PROVIDER + conditional fallback | AI-042 managed environment semantics first; private/self-hosted realization at AI-052 after AI-051, subject to §1.3. |
+| Generic browser/computer-use runtime | REMOVE from PAC scope | Executor capability. PAC owns task, permission, policy, allowed origins/resources, approval, evidence, audit. |
+| Generic subagent spawn/wait/aggregate runtime | REMOVE from PAC scope | Provider-native subagents are executor internals. PAC keeps Task Graph, dependencies, waves, routing, ownership, policy, evidence. |
+| Proprietary full replacement for managed vulnerability research | REMOVE from PAC scope | Managed tools (e.g. Codex Security) may become a `SecurityEvidenceProvider`; PAC Security Policy keeps final authority. |
+
+## 12. Deferred debt before autonomy/staging
+
+| Package | Purpose | Required by |
+|---|---|---|
+| AI-037.2 | Durable Step result; recovery without provider redispatch | Executor-only terminal capture, identity and retrieval foundation integrated. B3 controller-required canonical DevelopmentExecutionRun snapshot/revision recovery is accepted/integrated; general Step recovery/tooling remains deferred. Full package NOT DONE. |
+| AI-037.3 | Ambiguous COMMIT reconciliation + general recovery tooling | B3 controller command/revision/fingerprint reconciliation slice is accepted/integrated; broader runtime/tooling remains PARTIAL/deferred, not DONE. |
+| AI-037.5 | TLS/config allowlist + startup validation | Before staging (earlier if M2 PostgreSQL is non-loopback) |
+| AI-037.6b | Lease heartbeat / DB clock if needed | DEFERRED/not pulled forward while B3 uses short transaction/CAS steps without a long-lived controller lease; slow executor work retains its existing fences. Any new long-lived lease makes this a hard prerequisite. |
+| AI-037.8 | Durable admission control | B3 controller-required atomic roadmap ProjectTask claim/admission slice is accepted/integrated; broader historical admission package remains PARTIAL/deferred. |
+
+v1.4 does not change these packages' scope; "autonomous worker" in v1.3 meant the control-plane controller, not a PAC-owned coding worker.
+
+## 13. M5 — Roadmap-Driven Autonomy — B3 DONE (architecture v1.4)
+
+v1.4: autonomy is orchestration of executors by a deterministic, durable control-plane controller. It is not a PAC-owned generic LLM think/tool loop.
+
+After executor portability (AI-041.2), routing (AI-041.3) and minimal managed AI-042
+environment closure, **AI-043 is accepted in deterministic/fake-live-blocked scope**. Its distinctive
+PAC capability is `ready work → plan → executor selection → execution →
+verification → bounded corrective loop → Owner gate → roadmap update → next ready work`.
+This remains deterministic/durable control-plane logic, not a proprietary generic
+LLM agent loop.
+
+**Integrated B3:** AI-043.0–AI-043.5 plus only controller-required AI-037 slices,
+accepted by consolidated independent re-gate and controlled integration at
+`4f64f5b5b519da855498d5d56131b94ee8601a26`. AI-043 is DONE only in the proven
+deterministic/fake-live-blocked scope. Cooperative wave-frontier tests prove
+disjoint committed starts before outcome consumption and overlap serialization,
+not just active snapshot coexistence. Broader AI-037 packages remain PARTIAL;
+AI-037.6b remains deferred (no long-lived controller lease). Production/live
+dispatch remains BLOCKED and `runtimeDispatchAllowed=false`. Historical implementation records:
+[roadmap](architecture/roadmap-autonomy-v1.md),
+[controller](architecture/development-controller-v1.md),
+[approval gates](architecture/development-approval-gates-v1.md).
+
+Target behavior: the Owner does not send “go next” after each ordinary task. The roadmap becomes an executable state machine. The system proceeds until an Owner gate, hard stop, or budget/risk limit.
+
+### 13.1 Roadmap hierarchy — progressive, not mandatory complexity
+
+The long-term model remains capable of representing:
+
+`Project → Roadmap → Release → Milestone → Epic → Feature → FeaturePlan → Task`
+
+But only the following are mandatory for the first usable roadmap/autonomy UX:
+
+`Project → Milestone → ProjectTask → FeaturePlan → DevelopmentTask`
+
+ProjectTask is the existing Owner-level feature/fix/investigation/roadmap intent;
+FeaturePlan revisions remain immutable; DevelopmentTask is the executable node.
+No second Feature table or task-status vocabulary is introduced. Legacy tasks may
+remain outside milestones and are never silently enrolled into autonomy.
+
+Rules:
+
+- `Release` is optional and introduced only when release planning needs it.
+- `Epic` is optional and introduced only when Features need grouping at scale.
+- `FeaturePlan` remains an internal execution-planning entity and does not have to be shown as a permanent Owner navigation level.
+- The system must not require empty placeholder Release/Epic objects just to satisfy a theoretical hierarchy.
+
+### AI-043.0 — Executable Product Roadmap Contract — DONE (B3 scope)
+
+Roadmap item metadata includes as needed:
+
+- Goal / Scope / Non-goals
+- Dependencies
+- Acceptance criteria
+- Risk / Priority
+- Estimated cost
+- Allowed agents/repos
+- Required QA/security
+- Approval policy
+- Artifacts/evidence
+- Version/change history
+
+Statuses include:
+
+`blocked, ready, planning, approved, running, verifying, waiting_owner, completed, failed, recovery_required`
+
+### AI-043.1 — Roadmap Planner — DONE (B3 scope)
+
+- finds ready work from dependencies
+- forms execution waves
+- allows independent tasks to run in parallel
+- never starts blocked items
+
+### AI-043.2 — Continuous Development Controller — DONE (B3 scope; architecture v1.4)
+
+Deterministic, durable control-plane controller (PostgreSQL state):
+
+`ready task → FeaturePlan → Admission Policy → ExecutorRouter → ExecutorAdapter → artifacts/evidence → Quality/Security Gates → corrective or approval → update roadmap → next work`
+
+Restart resumes from durable state. The controller's decisions are deterministic policy/state transitions; any LLM reasoning happens inside an executor or a bounded `ModelProvider` call. It must not become a proprietary generic think/tool loop.
+
+B3 uses append-only `0019`/`0020`, existing ProjectTask states and generic approval
+queue, exact FeaturePlan bindings, one-step command/CAS journals and the existing
+durable executor lifecycle. No long-lived controller lease, second approval system,
+new financial lifecycle or automatic Git action. A proven report-only analysis
+gap required one narrow AI-011 `submit_analysis` event/optional report digest;
+patch-only canonical snapshots retain their old shape and all QA/review gates.
+
+### AI-043.3 — Approval Gate Engine — DONE (B3 scope)
+
+**AUTO** examples:
+- lint/typecheck/tests
+- repeat verification after corrective patch
+- bounded self-fix inside approved scope
+- ordinary QA/security checks
+
+**OWNER APPROVAL** examples:
+- architecture change
+- scope/roadmap change
+- budget/risk increase
+- high-risk migration
+- real provider/credential changes
+- code acceptance
+- commit
+- push
+- deploy
+
+**HARD STOP** examples:
+- tenant/security invariant broken
+- budget corruption
+- unknown state without safe recovery
+- inconsistent repository/runtime state
+
+### AI-043.4 — Autonomous Corrective Loop — DONE (B3 scope; architecture v1.4)
+
+PAC owns the corrective orchestration; the selected executor performs the corrective coding/reasoning.
+
+`FAIL → collect evidence → classify root cause → select executor → create bounded corrective task → executor performs fix → rerun affected checks → rerun full required Quality Gate`
+
+Builds on the existing corrective-attempt contract in `development-execution.ts` (attempt kinds, max attempts, `awaiting_correction`).
+
+Bounded by:
+
+- max attempts
+- max tokens/cost
+- max duration
+- max changed files
+- risk ceiling
+
+### AI-043.5 — Roadmap Owner UX — DONE (B3 scope)
+
+- milestone progress
+- Current / Next / Blocked
+- active agents/runs
+- spend today / budget window
+- Owner decisions required
+- roadmap change requests with impact/cost/risk
+
+B3 implements a minimal real read-only `/roadmap`: authorized milestone/task/node
+progress, Current/Next/Blocked/Recovery, factual selected route/current attempt,
+Quality/Security state, required Owner decisions and held exposure (not invented
+actual spend). No roadmap write controls, controller tick, guard upsert or provider
+call during rendering. Production/live dispatch remains BLOCKED.
+
+## 14. M6 — Automated Engineering Proof
+
+**Managed workflow / Smart Algorithms acceptance in the current priority (§1.5).**
+Complete this real proof before PAC self-development and the remaining production
+release work. Every prerequisite for the actual live operation still applies;
+the new order is not a live permit or permission to bypass required safety work.
+The dated preparation narratives below retain their historical scope; they do not
+close live acceptance or promote AI-044 to DONE.
+
+### AI-044 — Task → Verified PR — LIVE READINESS IN PROGRESS / NOT DONE
+
+Phase L fail-closed primitives were accepted/integrated at `41c0a166...`.
+The Owner-approved Phase S preparation introduced a separate
+[subscription-session patch proposal executor](architecture/ai-044-subscription-patch-executor-v1.md)
+candidate using official SIWC direct Responses, exact-SHA context and existing
+approval/authority/QA-corrective boundaries. It has no coding environment/tools,
+API-key/credit/model fallback, general runtime unlock or real inference.
+Required manual external settings receipt: selected registration app limit<100%,
+credits disabled, no automatic-purchase reliance; this is not provider attestation.
+That preparation required independent re-gate; it grants no live authority.
+Generic production/live remains BLOCKED,
+`runtimeDispatchAllowed=false`. AI-044 stays NOT DONE. AI-044.1 separates exact
+readContextPaths from Admission-only allowedWritePaths and binds both to the
+approved attempt/Owner intent; context never grants write authority. The
+paid/hosted financial blocker below is unchanged.
+
+Owner replaced the production-proof target with **Smart Algorithms — Liquidity
+Intelligence Drawer v0.1**. Portfolio Analytics and its historical frozen SHA,
+source set, smoke command and zero-write assumptions are no longer required.
+Do not implement Liquidity during AI-044.1: after independent gate/integration,
+the new Owner-approved FeaturePlan selects its own exact baseline, explicit
+bounded read references, admitted writes and acceptance/verification commands.
+No Smart Algorithms fetch/source change or inference is authorized here.
+
+Owner-approved amended Phase L implements **LIVE READINESS PRIMITIVES / LIVE
+PERMIT IMPOSSIBLE**: pure hosted profile/archive/network, artifact/recovery,
+approval/QA binding and explicit financial categories. These primitives do not
+establish live readiness. Current official evidence does not establish a finite
+total exposure bound covering active hosted compute and every charge category.
+Container maximum remains UNKNOWN; issuer DENY-ONLY; composition has no usable
+credential/provider port. No timeout, price rate, account hard limit, shaped
+numeric claim or Owner approval substitutes for proof. [Evidence and freeze](architecture/ai-044-live-engineering-proof-v1.md).
+The historical analytics zero-write finding remains historical evidence only,
+not a requirement or assumption for the new feature or generic executor.
+Only after independent PASS may the remaining financial-bound problem be resolved
+without weakening policy. Any later live execution still needs trusted source
+integration, exact independent gate/integration and one-shot numeric Owner approval.
+No real provider call; no Smart Algorithms changes.
+
+Primary production proof — a REAL Smart Algorithms feature moves through:
+
+`Product request → FeaturePlan → Admission Policy → Task Graph → Executor selection → Implementation → Automated verification → Corrective loop if needed → Security review → Human review → Verified PR`
+
+QA and Security verification, bounded correction and human review are mandatory
+parts of this acceptance criterion. This real feature-to-Verified-PR case is the
+principal proof that PAC works as an engineering system, not only as contracts.
+
+- the executor may be OpenAI, Claude, Qwen or another provider; switching executor must not require changing the engineering pipeline
+
+- Owner intervenes only at policy gates
+- recoverable FAIL is automatically analyzed and may re-enter self-fix
+- merge remains manual until separately approved
+- after a successful Smart Algorithms case, Private Exchange becomes the second higher-risk production case
+
+## 15. M7 — Staging / Hardening
+
+**Series A production-readiness/release track (§1.4).** PAC-DB-FINAL and the
+comprehensive PAC Security Final Audit are mandatory checkpoints before release;
+actual-environment database/HTTP/security verification follows deployment. No
+required release acceptance is marked complete by this sequencing change.
+
+### AI-045 — Production-like Infrastructure — PLANNED
+
+The historical AI-045.0 implementation checkpoint recorded an IN REVIEW
+foundation under the 2026-11-07 early-infrastructure exception. Its acceptance
+criteria concern hosting only: PAC + PostgreSQL16, loopback access and an explicit
+checksummed migration gate. Public reverse proxy/TLS remains AI-045.1 work unless
+separately accepted. See [operator runbook](operations/vps-container-foundation.md).
+Foundation/image/backup smoke evidence does not close general release acceptance.
+AI-044 remains IN PROGRESS; AI-052 remains PLANNED / BLOCKED.
+
+Current implementation priority is the managed Owner workflow and AI-044 proof,
+then PAC self-development and remaining production release work (§1.5). The
+existing VPS/infrastructure is preserved; no fresh deployment is requested.
+Mandatory database/security/recovery gates still precede the operations they
+protect. This supersedes scheduling, not historical evidence or authorization.
+AI-042.2 never grants a coding-container runtime.
+
+**AI-045 infrastructure containers are not an AI-052 coding sandbox.** Docker/
+containers may host ordinary PAC infrastructure: control plane, orchestration
+workers, PostgreSQL-related services where appropriate, reverse proxy, monitoring
+and infrastructure services. This does not authorize a coding-agent/container
+runner or establish a trusted self-hosted coding sandbox. That containment stack
+belongs to AI-052 after the Telegram Owner Control chain through AI-051.
+
+- VPS/deployment environments
+- control-plane hosting (VPS) and PostgreSQL
+- Docker/containers for normal infrastructure deployment where they improve reproducibility, not self-hosted coding execution
+- reverse proxy and TLS
+- secrets management
+- PostgreSQL backups and restore drill
+- migrations gate
+- CI/CD and deployment approvals
+- health/readiness checks
+- metrics and structured logs
+- alerting
+- rate limiting / WAF where appropriate
+- control-plane resource monitoring
+- queue/backpressure when the control-plane workload actually requires it (Redis/BullMQ is not required merely because older documents assumed a PAC-owned agent worker)
+- security monitoring and incident handling/evidence
+
+The preserved v1.4 architecture does not require a PAC-owned cloud coding worker.
+Under v1.5, a private/self-hosted implementation of ExecutionEnvironment belongs
+to AI-052; normal VPS infrastructure deployment does not advance its permission.
+
+Before staging, close the technical-debt packages that are actual staging blockers at that time.
+
+## 16. M8 — Remote Owner Control through Telegram
+
+Telegram is another client of the same PAC Control Plane. Telegram does not get a separate backend or separate security rules. Web UI, Telegram and future clients use one Owner Control API, policies, approvals and audit.
+
+### AI-046 — Owner Control Contract — PLANNED
+
+Universal commands include:
+
+- listProjects
+- getProjectStatus
+- listRuns / getRun
+- createDevelopmentRun
+- pause/cancel
+- listApprovals / approve/reject
+- requestRecovery
+- getCosts
+- roadmap status / roadmap change request
+
+### AI-047 — Secure Telegram Bot — PLANNED
+
+- whitelist/account binding/Owner role
+- replay protection and rate limiting
+- no arbitrary shell/SQL
+- no secrets in messages
+- every command/callback audit-logged
+
+### AI-048 — Remote Roadmap / Run Control — PLANNED
+
+Owner can create Development Run, select Project, inspect plan/risk/cost, approve execution, pause a project, or open evidence from a phone.
+
+### AI-048.1 — Durable Owner Notifications — PLANNED
+
+PostgreSQL outbox → worker → Telegram + Email.
+
+Events include:
+
+- Run started/completed/blocked
+- approval required
+- security gate failed
+- budget limit/cost anomaly
+- `recovery_required`
+- PR ready
+- roadmap change request
+
+### AI-049 — Telegram Approvals — PLANNED
+
+Use the same policy/audit contract as Web UI.
+
+### AI-050 — Commit / Push Approvals — PLANNED
+
+Code accepted ≠ commit allowed ≠ push allowed. Merge remains manual until separately changed by Owner decision.
+
+### AI-051 — Telegram Hardening — PLANNED
+
+- duplicate webhook/retries
+- forged/expired callback
+- wrong user/workspace
+- Run changed after approval
+- concurrent Web + Telegram decision
+- bot token rotation
+- notification durability
+- audit completeness
+
+### AI-052 — Private Execution Environment — PLANNED (after AI-051)
+
+Build the first **production-capable PAC-owned private/self-hosted engineering
+execution environment**, after VPS and the complete Telegram Owner Control chain.
+This is the post-M8 private execution target, not another Telegram endpoint.
+AI-042.1/042.1a contracts and AI-042.2 Git worktree isolation are foundations;
+neither is a private coding runtime or permission to launch one.
+
+AI-052 is explicitly a PAC self-development target: by that stage AI-043/AI-044
+should have proven the working engineering pipeline used to build it, through
+supported managed external executors such as Codex/OpenAI and Claude. This is not
+a claim that autonomy or the Verified PR pipeline works today. Provider access
+remains conditional on factual capability, Owner policy, budgets and applicable
+gates. No capability below is implemented or authorized by adding this roadmap item.
+
+#### Intended capability groups
+
+| Group | AI-052 target (future implementation, independently gated) |
+|---|---|
+| Durable resource layer | Production WorktreeStoragePort; durable CAS/fencing; protected historical resource state; cross-process ownership; cross-host/VPS-safe coordination where required; crash/restart reconciliation |
+| Container / process execution | Isolated container/process runner; bounded commands; process termination; timeout enforcement; hostile/crashed process recovery |
+| Filesystem containment | Enforced allowed read/write scope and worktree boundary; symlink/path protection; deny process access outside its assigned workspace |
+| Resource limits | Enforced CPU, RAM, disk, process-count and execution-duration limits |
+| Network enforcement | Physical Network Contract v1 enforcement; DNS validation/rebinding protection; destination allowlists; redirect enforcement; deny private/internal/metadata destinations unless an explicit approved policy/contract authorizes an exception |
+| Secrets | Scoped, execution-bound secret injection/access; no secrets persisted in task/audit payloads; revocation and cleanup |
+| Evidence | Bounded/redacted execution logs, artifacts, resource usage, security, cleanup and restart/recovery evidence |
+| Private executor | SelfHostedExecutor; local/private models; future Lemetti-owned model; zero-external-model-egress mode |
+
+The network target does not invent an exception to the accepted Network Contract
+v1. Any future private-network exception requires explicit approved contract/policy
+support and its own security review; a factual need alone is not permission.
+
+#### PAC self-development and Owner gates
+
+`Owner-approved AI-052 milestone → PAC Roadmap Controller → FeaturePlans →
+managed Codex/OpenAI / Claude → QA → Security → bounded corrective loop →
+Owner approvals → Verified PRs`.
+
+AI-043's deterministic durable control plane and AI-044's real Smart Algorithms
+feature-to-Verified-PR proof are what later make this self-development path usable.
+The selected executor still owns its internal agent mechanics; PAC orchestrates
+the engineering process, evidence and approvals rather than building a generic
+proprietary LLM loop.
+
+No automatic merge, push without approval, production deployment or modification
+of active security policy outside approval gates. AI-052 must pass its own
+security/readiness gates before local/VPS/private coding can be authorized;
+passing those gates is not blanket dispatch or automatic self-deploy approval.
+Earlier implementation requires a **new explicit Owner roadmap-change approval**.
+
+## 17. Autonomy and Owner intervention model
+
+| Event | Mode |
+|---|---|
+| Lint/typecheck/unit tests | AUTO |
+| Repeat test after fix | AUTO |
+| Bounded corrective attempt in approved scope (executor performs fix, PAC re-gates) | AUTO |
+| Documentation-only change | AUTO by policy |
+| Auth / security-sensitive change | SECURITY REVIEW + OWNER APPROVAL |
+| Secrets | DENY unless a separately approved secret-management operation exists |
+| QA/security verification | AUTO |
+| New scope / roadmap change | OWNER APPROVAL |
+| Architecture change | OWNER APPROVAL |
+| Budget/risk ceiling increase | OWNER APPROVAL |
+| DB migration | OWNER APPROVAL |
+| Real provider / new executor / new credentials | OWNER APPROVAL |
+| Code acceptance | OWNER APPROVAL |
+| Commit | OWNER APPROVAL |
+| Push | OWNER APPROVAL |
+| Deploy | OWNER APPROVAL |
+| Tenant/security invariant broken | HARD STOP |
+| Unknown state without safe recovery | HARD STOP |
+
+## 18. Execution order and parallelism
+
+Roadmap does not imply strictly serial development. Parallel work is allowed only when dependencies and file/DB ownership do not create unsafe conflicts.
+
+### Real Provider gate track (M2.2 remains deferred)
+
+`AI-037.0 DONE → AI-037.1 DONE → AI-037.1.1 DONE → AI-037.6a DONE → AI-037.4a DONE → AI-037.1.2 DONE → M1 Review Gate DONE → Real Provider Gate IN REVIEW (M2.0 DONE, M2.1 DONE, M2.2 DEFERRED BY OWNER) → M2 Review Gate`
+
+### A. Current operational line (unchanged by the rebase)
+
+While M2.2 is deferred: `AI-037.7 DONE → AI-038.0 DONE → AI-038.1 DONE → AI-038.2a DONE → AI-038.2b DONE → AI-038.3 DONE → AI-038.3.1 DONE → AI-038.3.2 DONE → AI-038.4a Project Task Foundation + read surfaces DONE → AI-038.4b Quick Create / task mutation binding DONE → AI-038.5 Mission Control Visual Refinement DONE → AI-038.6 RU/EN Owner Console Localization DONE → AI-038.7 Dynamic Ambient Shader Background DONE → AI-039 Development Workflow Browser DONE → AI-039.1 Ledger-backed AI FeaturePlan Planning DONE (direct API-key live smoke deferred by Owner) → AI-039.2 Phase A committed (entitlement gate deferred; Phase B blocked) → AI-040a IN REVIEW` (M3 Owner path, §9). AI-038.2 passed; the Owner Console reads real runtime data through AI-038.3, read-only. The rebase does not cancel or skip any unfinished AI-038 work.
+
+### B. First new architecture implementation introduced by v1.4
+
+`AI-041.0 Vendor-Neutral Executor Adapter Contract` (its separate gate status
+remains IN REVIEW). It is contract-only and separate from line A. The Owner
+explicitly excluded its prerequisite gate and the Decomposition gate for AI-041.1;
+this does not mark either gate PASS. AI-041.1's implementation/review chain is
+now DONE, with production/live dispatch still BLOCKED.
+
+### Early development automation
+
+`AI-040a` may begin after the Real Provider gate or in parallel with early M3 work when dependencies are satisfied.
+
+### UI
+
+AI-038.2, AI-038.3, AI-038.3.1 and AI-038.3.2 are DONE: the Owner Console reads real runtime data with All Projects and real project switching, read-only. AI-038.4a (DONE) adds persistent Owner Tasks as read surfaces; AI-038.4b (DONE) adds Quick Create, the only UI write (draft task intent through the audited `createTask`). AI-039 (DONE) adds the second UI write: saving immutable draft FeaturePlan revisions of a ProjectTask, with no execution. AI-039.1 (DONE; direct API-key live smoke deferred by Owner) adds the Owner-approved planning request, which runs one budget-bounded planning Run and never saves a plan or changes the task. Other UI write actions need separate tasks.
+
+### Current development critical path — v1.6, decision 02 / workflow first
+
+Accepted foundations remain available, not rebuilt: AI-041.1/041.2/041.3,
+AI-042.1/042.1a/042.2 and minimal managed closure, B3/AI-043 in its accepted
+deterministic/fake-live-blocked scope, plus existing onboarding/Knowledge/planning
+components. AI-042 overall and M4 are not DONE; no live permission is inferred.
+
+```text
+Working Project Onboarding
+  Project Creation → Repository Binding → Versioned Knowledge
+  → AI Project Planning / Interactive Clarification / Review
+  → Owner Approval of versioned plan and task graph
+  → Managed Development Workflow / task FeaturePlans / dependency readiness
+  → QA / Security / bounded Corrective Loop
+  → Verified PR → Owner final acceptance
+    First real end-to-end pilot: Smart Algorithms (AI-044; NOT DONE)
+  → PAC Self-Development using the same approved managed workflow
+  → Remaining Production Release Gates (A.1 / OP-1 / recovery evidence)
+  → PAC-DB-FINAL pre-release acceptance → Comprehensive Security Final Audit
+  → Separate Owner approval of exact SHA / artifact / authorized migrations
+  → Production Release → separate actual post-deploy HTTP / DB / security checks
+```
+
+This is implementation priority, not permission to execute any step now. Apply
+mandatory safety gates before each protected operation, irrespective of its place
+in this list. Initial implementation/data-flow verification uses fake/local,
+zero-egress paths. F2/F3 are deferred, not resolved or risk-accepted (§1.5).
+PAC-DB-FINAL's pre-release and separate actual post-deployment phases remain
+mandatory; staging/rehearsal evidence cannot prove the deployed database.
+
+Decision 02 supersedes decision 01's production-first priority, preserving its
+release conditions (§1.4). M6 real proof still needs factual supported access,
+exact plan/context/admission, budgets, authority, QA/Security and separate one-shot
+Owner approval. Independent gates remain mandatory. `runtimeDispatchAllowed=false`
+and production/live dispatch remain BLOCKED. PAC self-development neither
+supplies live authority nor authorizes automatic commit/push/merge/deploy.
+
+v1.5 private-execution rules are unchanged: AI-052 follows AI-051 and the required
+managed pipeline/readiness gates. Qwen/DeepSeek remain deferred; no unsupported
+Codex Cloud, Claude, SIWC or other access/capability becomes a mandatory assumed
+route. Local/VPS/private coding remains BLOCKED before AI-052's own gates. Earlier
+private-runtime implementation still needs a new explicit Owner roadmap-change
+approval, which cannot waive the security/readiness gates.
+
+### Store/recovery debt
+
+AI-037.2/.3/.6b/.8 are pulled forward by autonomy/staging gates, not merely by numbering.
+
+### Infrastructure
+
+Preserve the existing AI-045 VPS/infrastructure. Remaining release implementation follows the proven managed workflow and PAC self-development; all applicable database/security/recovery gates and separate deployment approval still precede protected operations. No fresh deployment, AI-052 enablement or provider dispatch is requested.
+
+### Remote control
+
+`AI-046 → AI-047 → AI-048 → AI-048.1 → AI-049 → AI-050 → AI-051 → AI-052`
+
+AI-052 follows completed Telegram hardening; infrastructure/Telegram delivery
+alone does not authorize local/VPS coding execution before AI-052's own gates.
+
+## 19. Milestone definitions of done
+
+| Milestone | Definition of Done |
+|---|---|
+| Real Money Safety | No automatic duplicate paid dispatch; failure enters safe recovery; timeout/lease and pool lifecycle are safe; minimum observability exists |
+| Real Provider | Real provider works through abstraction; usage/cost/audit are trustworthy |
+| Owner Product | Projects-first interface exposes real runs/approvals/roadmap without tenant bypass and without unnecessary top-level complexity |
+| Vendor-Neutral Executor Platform | First managed executor works through `ExecutorAdapter`; a second, different executor proves portability without pipeline change; every execution environment satisfies the environment safety policy |
+| Roadmap Autonomy | System selects next ready work and does not require manual “go next” between normal technical steps |
+| Automated Engineering Proof | Real Smart Algorithms feature reaches verified PR; switching executor needs no pipeline change |
+| Staging / Series A production release | Exact approved control-plane artifact, required CI/PG/HTTP gates, PAC-DB-FINAL pre-release assessment, comprehensive Security Final Audit and separately approved deployment with actual-environment post-deploy verification; live dispatch remains separately gated |
+| PAC-DB-FINAL | Independent controlled production-like DB acceptance plus actual post-deployment target verification; schema/ledger, isolation/RLS, roles, transactions, constraints, resources and backup/recovery evidence (§1.4 A.2) |
+| PAC Security Final Audit | Independent comprehensive application/supply-chain/container/infrastructure review, validated findings and policy-bound release disposition (§1.4 A.3); Trivy alone is insufficient |
+| Telegram Owner | Owner safely manages roadmap/runs/approvals through the same control plane from mobile |
+| Private Execution Environment (AI-052, post-Telegram) | Independently gated production-capable private resource ownership, process/file containment, limits, network/secrets, evidence/recovery and private executor support; no automatic deployment |
+
+## 20. Final target state
+
+The Owner defines or approves the product roadmap once. Private AI Cloud then plans allowed work, routes it to a selected executor/model, manages budgets, runs its own Quality and Security Gates, orchestrates bounded corrective attempts performed by executors, and continues through the roadmap. PAC remains a vendor-neutral control plane: executors do the internal agent work; PAC owns the engineering process. The Owner appears only at predefined approval gates, blockers, strategy changes, risk/budget escalation, and critical external actions.
+
+The system must remain one managed process in which executors and payment methods
+can change without rebuilding the pipeline. Long-term access modes include API
+credentials/credits, officially supported subscriptions and future self-hosted
+routes; a declared mode is not authority to run local coding processes. Before
+AI-052 the default remains supported managed execution under §1.3, and the
+workflow stays independent of these access/payment choices.
+
+It must support both:
+
+- autonomous Roadmap Mode
+- manual Feature Mode
+- Fix / Investigate mode
+
+The first complete real-world engineering pilot remains Smart Algorithms: a real feature moving from approved roadmap to Verified PR and final Owner acceptance. In the current implementation priority (§1.5), that proof precedes PAC self-development and remaining production release work. Applicable live/database/security prerequisites still precede each protected operation; no live or deployment authority follows from the order. Private Exchange remains a later, higher-risk engineering proof.
+
+One control plane can serve multiple Projects, including Private AI Cloud,
+Smart Algorithms, Trading Terminal and Private Exchange. PAC itself may be a
+Project using the same engineering pipeline, scope policy, QA/security, Owner
+approvals and separate commit/push/deploy gates. Self-development never implies
+automatic self-deploy.
+
+The provider-neutral target remains `ExecutorRouter → {OpenAI | Claude | future
+providers | SelfHostedExecutor}`. A future own model/executor must plug in without
+redesigning roadmap, FeaturePlan, QA, security, approvals, audit or recovery.
+Private mode may require zero external model/provider egress. Self-hosted/private
+AI and hybrid deployments stay first-class conditional capabilities, with their
+production coding realization deferred to AI-052 after AI-051. A factual need
+does not bypass the explicit Owner roadmap-change and readiness gates. No
+SelfHostedExecutor is implemented by this documentation change. Direct bounded model access
+still belongs to the separate `ModelProvider` abstraction.
+
+## 21. Version management
+
+| Field | Value |
+|---|---|
+| Document | Private AI Cloud Development Roadmap |
+| Version | v1.6 — decision 02, Owner-approved development workflow first |
+| Status | Current / Authoritative |
+| Canonical source | `docs/ROADMAP.md` |
+| PDF | Generated snapshot only |
+| Change control | New strategic version requires Owner approval |
+| Priority | Decision 02: Owner workflow → managed proof / Smart Algorithms → PAC self-development → remaining production gates → release; applicable gates remain mandatory, v1.5 private restrictions and v1.4 architecture retained |
+| Decision record | PAC-ROADMAP-UPDATE-02 (Owner-approved 2026-11-14), §1.5 / §18; supersedes decision 01 priority (§1.4), retaining its gates; v1.5 private sequencing in §1.3 / AI-052; architecture: `docs/ROADMAP_REBASE_V1.4.md` |
+| Document index | `docs/README.md` |
+
+### v1.6 revision 02 change summary — Owner-approved development workflow first
+
+- Record PAC-ROADMAP-UPDATE-02 dated 2026-11-14 and replace the implementation
+  critical path consistently (§1.5 / §18), preserving decision 01 as history.
+- Reuse existing onboarding/Knowledge/manual import and AI-039/041/042/043/044;
+  project-document AI generation, live engineering proof and private execution
+  remain unproven/blocked. No historical implementation status is promoted.
+- Record F1 complete at `ade8741ddc8121d107b6b0e62a452a09ce8dcb84` and
+  Owner-reported green Quality Gates #163/#164; defer F2/F3 implementation with
+  9 remaining findings (8 moderate, 1 high), unresolved and unaccepted.
+- Keep PAC-DB-FINAL, OP-1/recovery, security audit, release and post-deployment
+  gates mandatory for their protected operations. Preserve the existing VPS;
+  no fresh deployment, new spend, live dispatch or automatic Git operation.
+- Prove the managed Smart Algorithms pilot before PAC self-development; retain
+  AI-052 after the approved managed and Telegram/AI-051 prerequisites.
+
+### v1.6 decision 01 change summary — historical production-first priority
+
+Historical summary retained; its scheduling priority is superseded by decision 02
+(§1.5 / §18). The release/safety checkpoints and accepted architecture remain in
+force. The following bullets record the original decision, not the current order.
+
+- PAC-ROADMAP-UPDATE-01 changes scheduling only: Series A database finalization →
+  comprehensive security audit → PAC infrastructure release → Series B complete
+  autonomous development pipeline → Smart Algorithms real pilot.
+- Add mandatory PAC-DB-FINAL with controlled production-like pre-release review
+  and actual post-deployment verification, and comprehensive Security Final Audit;
+  all evidence, risk disposition and separate deployment approvals remain required.
+- Keep OP-1, release/security/PG/HTTP/native/recovery gates factual and open where
+  evidence is missing. No scan, test, migration or deployment is executed here.
+- Reuse implemented onboarding/Knowledge/manual planning and AI-041/042/043
+  foundations; distinguish blocked project-document AI planning from existing
+  task-level FeaturePlan planning and manual draft import.
+- Preserve AI-044 IN PROGRESS / NOT DONE and its exact live prerequisites; merge
+  and deployment remain separate Owner decisions after Verified PR acceptance.
+- Keep v1.5 managed-first/private execution boundaries, AI-052 after AI-051,
+  vendor-neutral control-plane ownership and all security invariants unchanged.
+  No operational status is promoted to DONE and no dispatch authority is granted.
+
+### v1.5 change summary — Owner-approved private execution sequencing
+
+Historical version/checkpoint record; current release order is superseded by
+v1.6 decision 02 (§1.5 / §18). The architectural/private-execution rules remain in force.
+
+- Strategic sequencing change, **not an architecture rebase**. Preserve the
+  v1.4 vendor-neutral control plane, managed-first approach, separate ModelProvider
+  and ExecutorAdapter, provider-owned agent internals and conditional self-hosted capability.
+- Preserve AI-041.1, AI-042.1/042.1a and AI-042.2 DONE; AI-042 overall PARTIAL /
+  IN PROGRESS; AI-041.2/041.3 and minimal managed closure are now integrated DONE;
+  B3 / AI-043 is integrated DONE in deterministic/fake-live-blocked scope;
+  AI-044 live readiness is current, Phase L integrated, Phase S awaits independent re-gate; paid financial gate BLOCKED / NOT DONE;
+  M9/M10a/M10b NON-BLOCKING DEBT; production/live
+  dispatch BLOCKED and runtimeDispatchAllowed=false.
+- Managed Codex/OpenAI and conditional Claude execution precede private runtime
+  implementation; only factual supported interfaces and policy-compliant managed
+  environments may be selected. No unmanaged local coding CLI substitute.
+- AI-042 closure before AI-043 is minimal managed capability/policy closure,
+  not a requirement to build a full self-hosted container stack.
+- Introduce AI-052 Private Execution Environment after AI-045 VPS and AI-046–AI-051
+  Telegram Owner Control. Local/VPS/private coding remains blocked until AI-052's
+  gates; earlier implementation requires a new explicit Owner roadmap-change approval.
+- AI-045 infrastructure containers do not constitute or authorize AI-052 coding
+  containment. AI-052 is a PAC self-development target through the established
+  managed-executor/QA/security/Owner/Verified-PR pipeline, never automatic self-deploy.
+
+### v1.4 change summary
+
+- PAC reframed as a **vendor-neutral AI Engineering Control Plane**: PAC owns the engineering process; executors own the internal agent execution mechanism.
+- Explicit PAC-owned vs provider-owned boundary (§1.2; `docs/architecture/control-plane-architecture-v1.0.md`).
+- Managed executor first; `ExecutionBackend` concept renamed/reframed as `ExecutorAdapter` plus a separate `ExecutorRouter`; direct `ModelProvider` and its router preserved and kept separate.
+- Removed from PAC-owned future scope: generic agent loop, generic context compaction, generic browser/computer-use runtime, generic subagent runtime, proprietary managed-security-research replacement.
+- AI-042 rebased from "Isolated Coding Worker" to a managed-first `ExecutionEnvironment` abstraction with a conditional self-hosted fallback; safety requirements kept as environment policy.
+- Codex Security treated as a future `SecurityEvidenceProvider`; PAC Security Policy keeps final authority.
+- FeaturePlan, Admission Policy, Quality Gate, Corrective Loop, Security Policy, Human Approval, Audit/Evidence, cost/usage normalization and observability preserved and strengthened as PAC-owned.
+- OpenAI Agents API added as the P1 first managed executor candidate (AI-041.1 `OpenAIAgentsExecutor`), replacing the v1.3 CodexBackend default; Claude Code remains the preferred second-vendor portability proof.
+- Codex Cloud added as P1 research (AI-041.R1), not a dependency; Codex Security P1/P2 evidence provider; Sign in with ChatGPT P2 research, not mandatory; Dots deferred as benchmark / possible future adapter.
+- AI-041.0 Vendor-Neutral Executor Adapter Contract is the first new implementation task created by the rebase.
+- AI-043.2 restated as a deterministic durable controller; AI-043.4 as a PAC-owned corrective loop with executor-performed fixes.
+- M6 exit criterion preserved and extended with executor portability; M7 no longer assumes a PAC-owned coding worker or Redis/BullMQ by default; M8 unchanged in concept.
+- AI-038.2a marked DONE (commit `4e76afd`); AI-038.2b, AI-038.2, M2 and M3 remain not done; M2.2 remains DEFERRED BY OWNER.
+- All completed stages are preserved without renumbering: AI-001…AI-036.7; AI-037.0, AI-037.1, AI-037.1.1, AI-037.6a, AI-037.4a, AI-037.1.2, AI-037.7; the M1 Roadmap Review Gate; AI-038.0, AI-038.1, AI-038.2a; M2.0, M2.1 (see §4). AI-037.2 / .3 / .5 / .6b / .8 remain DEFERRED (§12).
+
+### v1.3 change summary
+
+- Formalized the separation between direct `ModelProvider` API routes and coding `ExecutionBackend` routes.
+- Added executor access/payment abstraction: `subscription_session`, `api_key`, `provider_credits`, and `self_hosted`.
+- Required `CodexBackend` to support provider-supported Codex CLI subscription-session access when available, alongside an OpenAI API/API-credit route.
+- Required `ClaudeCodeBackend` to support provider-supported Claude Code subscription-session access when available, alongside an Anthropic API/API-credit route.
+- Prohibited copying passwords, browser cookies, or raw interactive subscription/session credentials into workflow state, audit, or generic PAC storage.
+- Made FeaturePlan, QA, evidence, approvals, audit, and recovery invariant across executor payment/authentication modes.
+- Distinguished subscription quota/availability accounting from exact API token/cost accounting; no synthetic per-call USD cost is invented for subscription mode.
+- Clarified that M2 still proves the direct API-backed `ModelProvider` path; subscription-backed coding executors are implemented in M4.
+
+### v1.2 change summary
+
+- `docs/ROADMAP.md` becomes the canonical source of truth; PDF becomes a generated snapshot.
+- v1.2 introduced repository-tracked execution status for the active AI-037 hardening sequence.
+- Added mandatory Roadmap Review Gates after M1 and M2.
+- Split AI-040 into early `AI-040a Local Developer Handoff` and later `AI-040b Owner UI Integration`.
+- Simplified first Owner navigation to Dashboard / Projects / Runs / Approvals / Settings.
+- Retained Marketing, Sales, Support, Legal, Finance and other future business capabilities as Project Departments rather than global primary navigation.
+- AI-041 now builds one production backend first and uses the second implementation as the portability proof; Qwen/SelfHosted are deferred.
+- LocalRunner is separated from AI executor backends and treated as a deterministic Verification Runner.
+- Roadmap hierarchy remains extensible, but Release/Epic are optional and the initial Owner UX uses Project → Milestone → Feature → Task.
+- Long-term architecture remains extensible; implementation complexity is paid only when the next product capability requires it.
