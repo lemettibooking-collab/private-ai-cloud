@@ -1,0 +1,156 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- fake provider captures canonical runtime requests */
+import assert from 'node:assert/strict';
+import test from 'node:test';
+const live=await import(new URL('file:///Users/rabota2/Desktop/IT/Private%20AI%20Cloud/private-ai-cloud/tests/pg/helpers/live-pg.ts').href);
+const pg=await import(new URL('file:///Users/rabota2/Desktop/IT/Private%20AI%20Cloud/private-ai-cloud/lib/db/postgres.ts').href);
+const accessModule=await import(new URL('file:///Users/rabota2/Desktop/IT/Private%20AI%20Cloud/private-ai-cloud/lib/projects/project-owner-access.ts').href);
+const kb=await import(new URL('file:///Users/rabota2/Desktop/IT/Private%20AI%20Cloud/private-ai-cloud/lib/projects/project-knowledge.ts').href);
+const composition=await import(new URL('file:///Users/rabota2/Desktop/IT/Private%20AI%20Cloud/private-ai-cloud/lib/composition/owner-project-planning-generation.ts').href);
+const mock=await import(new URL('file:///Users/rabota2/Desktop/IT/Private%20AI%20Cloud/private-ai-cloud/lib/providers/deterministic-mock-model-provider.ts').href);
+const db=await live.useLiveDatabase('backlogenrollment'),A=live.primaryWorkspace;
+await live.insertWorkspace(db.admin,A);
+const owner='00000000-0000-4000-8000-000000009101';
+await db.admin.query("insert into users(id,email,name,status)values($1,'generation@pac.test','Test','active')",[owner]);
+await db.admin.query("insert into auth_identities(user_id,provider,provider_subject,status)values($1,'github','9101','active')",[owner]);
+const member=(await db.admin.query("insert into workspace_members(workspace_id,user_id,status)values($1,$2,'active')returning id",[A.id,owner])).rows[0].id;
+const role=(await db.admin.query("insert into roles(workspace_id,code,name)values($1,'owner','Owner')returning id",[A.id])).rows[0].id;
+await db.admin.query('insert into member_role_assignments(member_id,role_id)values($1,$2)',[member,role]);
+const database=pg.createWorkflowRuntimePostgresDatabase({connectionString:db.url,maxConnections:8});
+const session={pacIdentity:{provider:'github',providerSubject:'9101'}};
+const access=accessModule.createProjectOwnerAccess({database,domainWorkspaceId:A.domain,session});
+const knowledge=kb.createProjectKnowledge(access);
+const identity={providerId:'mock',providerKind:'mock',deploymentId:'mock-deployment',providerModelId:'mock-model',providerRequestModelId:'mock-model-v1',providerModelVersion:'mock-model-v1'};
+const policy={version:1,purpose:'project_document_planning',destination:'deterministic:local',identity,maxInputTokens:1000,maxOutputTokens:1000,maxCostUsdMicros:1000,dailyTokenBudget:2000,monthlyCostBudgetUsdCents:100,inputCostUsdMicrosPerMillionTokens:100,outputCostUsdMicrosPerMillionTokens:200,pricesVerifiedOn:'2020-01-01'};
+const plan=(count=1)=>JSON.stringify({schemaVersion:'pac-project-plan/v1',title:'Generated project',tasks:[{id:'task-1',title:'Review outcome',goal:'Deliver outcome',description:'Review source data',type:'feature',priority:'P2',dependencyIds:[],acceptanceCriteria:['Verified'],scope:['Proposal only'],sourceReferences:[count-1]}]});
+let serial=0;
+async function fixture(count=1){
+ const projectId='generation-'+(++serial);await db.admin.query('insert into projects(workspace_id,project_key,display_name)values($1,$2,$2)',[A.id,projectId]);
+ const sources=[];
+ for(let i=0;i<count;i++){
+  const filename=`source-${i}.md`,r=await knowledge.upload({projectId,filename,expectedVersion:0,requestId:`generation-doc-${serial}-${i}`,bytes:Buffer.from('Untrusted source '+i)});
+  assert.equal(r.status,'ok');sources.push({filename,version:r.value.document.version,sha256:r.value.document.sha256});
+ }
+ return{projectId,sources};
+}
+function provider(text:string,mode='success'){
+ let counts=0,runs=0;const delegates=new Map<string,any>();
+ const p={identity,async health(){return{verdict:"allow",reasons:[],normalizedHealth:{providerId:identity.providerId,deploymentId:identity.deploymentId,status:"healthy",observedAt:new Date().toISOString(),latencyMs:1,detailCode:null}};},
+ async preflight(request:any,budget:any){counts++;
+ const result={invocationId:request.invocationId,outcome:'succeeded',finishReason:'stop',providerId:identity.providerId,providerModelId:identity.providerModelId,providerRequestModelId:identity.providerRequestModelId,providerModelVersion:identity.providerModelVersion,outputText:text,structuredOutput:null,toolCallProposals:[],usage:{inputTokens:10,outputTokens:5,totalTokens:15},latencyMs:5,costUsdMicros:1,error:null};
+ const made=mock.createDeterministicMockModelProvider({identity,health:{providerId:identity.providerId,deploymentId:identity.deploymentId,status:'healthy',observedAt:new Date().toISOString(),latencyMs:1,detailCode:null},scripts:[{request,result}]});
+ assert.equal(made.verdict,'allow',JSON.stringify(made.reasons));delegates.set(request.invocationId,made.provider);return made.provider!.preflight(request,budget);
+ },async run(request:any){runs++;if(mode==='unknown')throw Error('fake timeout');return delegates.get((request.request??request).invocationId).run(request);}};
+ return{p,counts:()=>counts,runs:()=>runs};
+}
+async function offer(s:any,f:any,key?:string){const r=await s.prepare(f);assert.equal(r.status,'ok',JSON.stringify(r));return{...f,offerFingerprint:r.value.offerFingerprint,operationKey:key??'pp-'+(++serial).toString(16).padStart(32,'0'),consent:true};}
+const planningModule=await import(new URL('file:///Users/rabota2/Desktop/IT/Private%20AI%20Cloud/private-ai-cloud/lib/planning/project-planning.ts').href);
+const contract=await import(new URL('file:///Users/rabota2/Desktop/IT/Private%20AI%20Cloud/private-ai-cloud/lib/planning/project-planning-contract.ts').href);
+const planning=planningModule.createProjectPlanning(access,{domainWorkspaceId:A.domain,identityFingerprint:contract.planDigest(session.pacIdentity)});
+
+const enrollment=await import(new URL('file:///Users/rabota2/Desktop/IT/Private%20AI%20Cloud/private-ai-cloud/lib/planning/project-roadmap-enrollment.ts').href);
+const featurePlans=await import(new URL('file:///Users/rabota2/Desktop/IT/Private%20AI%20Cloud/private-ai-cloud/lib/development/feature-plan-mutations.ts').href);
+const roadmapStore=await import(new URL('file:///Users/rabota2/Desktop/IT/Private%20AI%20Cloud/private-ai-cloud/lib/db/roadmap-store.ts').href);
+const tenants=await import(new URL('file:///Users/rabota2/Desktop/IT/Private%20AI%20Cloud/private-ai-cloud/lib/db/workflow-runtime-tenant.ts').href);
+const taskMutations=await import(new URL('file:///Users/rabota2/Desktop/IT/Private%20AI%20Cloud/private-ai-cloud/lib/tasks/owner-task-mutations.ts').href);
+const {roadmapPlan}=await import(new URL('file:///Users/rabota2/Desktop/IT/Private%20AI%20Cloud/private-ai-cloud/tests/fixtures/roadmap.mts').href);
+const service=enrollment.createProjectRoadmapEnrollment(access,{domainWorkspaceId:A.domain,identityFingerprint:contract.planDigest(session.pacIdentity)});
+const planWriter=featurePlans.createOwnerFeaturePlanMutations({database,domainWorkspaceId:A.domain,identitySource:{resolve:()=>({userId:owner})}});
+test.after(async()=>{await database.close();});
+async function backlog(origin='manual_import',status='approved',count=2,change:(raw:any)=>void=()=>{}){
+ const raw=JSON.parse(plan(origin==='ai_generated'?4:1));for(let i=1;i<count;i++)raw.tasks.push({...raw.tasks[0],id:'task-'+(i+1),title:'Task '+(i+1),dependencyIds:['task-'+i]});
+ change(raw);
+ let f:any,fake:any=null,input:any=null,fp:string;
+ if(origin==='ai_generated'){f=await fixture(4);fake=provider(JSON.stringify(raw));const s=serviceGeneration(fake);input=await offer(s,f);const r=await s.generate(input);assert.equal(r.status,'proposal_available');fp=contract.planDigest(r.proposal);assert.equal((await planning.saveGenerated({projectId:f.projectId,operationKey:input.operationKey,planFingerprint:fp,expectedRevision:0})).status,'ok');}
+ else{f=await fixture();const up=await knowledge.upload({projectId:f.projectId,filename:'manual.md',expectedVersion:0,requestId:'manual-'+serial,bytes:Buffer.from('```pac-plan-v1\n'+JSON.stringify(raw)+'\n```')});assert.equal(up.status,'ok');const selector={projectId:f.projectId,filename:'manual.md',version:1,sourceSha256:up.value.document.sha256};const preview=await planning.preview(selector);assert.equal(preview.status,'ok');fp=contract.planDigest(preview.value.validation.plan);assert.equal((await planning.save({...selector,previewFingerprint:preview.value.previewFingerprint,expectedRevision:0})).status,'ok');}
+ const decision={projectId:f.projectId,revision:1,planFingerprint:fp,decision:status};if(status!=='pending')assert.equal((await planning.decide(decision)).status,'ok');
+ const selected=(await planning.read(f.projectId)).value.selected;
+ const selector={projectId:f.projectId,revision:1,planFingerprint:fp,sourceFingerprint:selected.sourceFingerprint};
+ return{f,fake,input,decision,selector,raw,taskIds:raw.tasks.map((t:any)=>contract.planningTaskKey(f.projectId,t.id))};
+}
+const serviceGeneration=serviceForGeneration;
+function serviceForGeneration(fake:any){return composition.createProjectPlanningGeneration({database,domainWorkspaceId:A.domain,session,policy:()=>policy,provider:fake.p});}
+async function previewOf(b:any){const p=await service.preview(b.selector);assert.equal(p.status,'ok',JSON.stringify(p));return p.value;}
+async function enroll(b:any){const p=await previewOf(b),intent={...b.selector,previewFingerprint:p.previewFingerprint},result=await service.enroll(intent);assert.equal(result.status,'ok',JSON.stringify(result));return{p,intent,result};}
+async function saveFeature(b:any,index=0){const taskId=b.taskIds[index],r=await planWriter.saveDraftRevision({idempotencyKey:'backlog-plan-'+(++serial),taskId,plan:roadmapPlan()});assert.equal(r.status,'created');return r;}
+async function readyIntent(b:any,index=0){const p=await previewOf(b),t=p.tasks.find((t:any)=>t.taskId===b.taskIds[index]);return{...b.selector,previewFingerprint:p.previewFingerprint,taskId:t.taskId,expectedVersion:t.version,featurePlanId:t.featurePlan?.planId??'missing-plan',featurePlanRevision:t.featurePlan?.revision??1,featurePlanFingerprint:t.featurePlan?.fingerprint??'a'.repeat(64)};}
+async function stateCounts(projectId:string){
+ const o:any={};for(const table of ['project_tasks','roadmap_milestones','roadmap_task_dependencies','roadmap_task_events','project_planning_drafts'])o[table]=(await db.admin.query(`select count(*)::int n,md5(coalesce(string_agg(to_jsonb(t)::text,'' order by to_jsonb(t)::text),'')) digest from ${table} t where workspace_id=$1 and project_key=$2`,[A.id,projectId])).rows[0];return o;
+}
+const {registerHooks}=await import('node:module');
+registerHooks({resolve(specifier,context,next){if(specifier==='server-only')return{url:'data:text/javascript,export%20%7B%7D',shortCircuit:true};return next(specifier,context);}});
+const root=process.cwd();
+const approvals=await import(new URL('file://'+root+'/lib/db/roadmap-approvals.ts').href);
+const controllerCore=await import(new URL('file://'+root+'/lib/roadmap/development-controller.ts').href);
+const portsModule=await import(new URL('file://'+root+'/tests/fixtures/development-controller.mts').href);
+const blocked=await import(new URL('file://'+root+'/lib/composition/development-controller.server.ts').href);
+const revision=await import(new URL('file://'+root+'/lib/development/feature-plan-revision.ts').href);
+for(const origin of ['manual_import','ai_generated'])test(origin+': actual approved backlog to exact typed FeaturePlan consumption, admission and production dispatch block',async()=>{
+ const b=await backlog(origin);await enroll(b);await saveFeature(b);
+ const projectId=b.f.projectId,taskId=b.taskIds[0];
+ const original=(await db.admin.query('select plan_key,revision,plan_json,plan_fingerprint from project_task_feature_plans where workspace_id=$1 and task_key=$2',[A.id,taskId])).rows;
+ assert.equal(original.length,1);assert.equal(original[0].plan_json.status,'draft');
+ assert.equal(original[0].plan_fingerprint,revision.featurePlanFingerprint(original[0].plan_json));
+ await service.ready(await readyIntent(b));
+ const tenant=await tenants.createPostgresWorkflowRuntimeTenantResolver(database).resolve(A.domain);assert(tenant);
+ const p=portsModule.controllerPorts(database,tenant,taskId);
+ const repository={...p.repository,allowedPaths:['lib/feature/']};
+ const controller=await blocked.createBlockedDevelopmentControllerComposition({database,domainWorkspaceId:A.domain,repository,routingSource:p.routingSource});assert(controller);assert.equal(controller.runtimeDispatchAllowed,false);
+ const state=()=>controller.inspect(projectId,taskId);let n=0;
+ const cmd=async()=>{const s=await state();assert(s);return{commandId:`integration-${origin}-${++n}`,projectId,taskId,expectedVersion:s.task.version,expectedControllerRevision:s.revision};};
+ const tick=async()=>{const d=await controller.advanceController(await cmd());assert.equal(d.runtimeDispatchAllowed,false);return d;};
+ assert.equal((await tick()).action,'claim_ready_task');assert.equal((await tick()).action,'require_plan_approval');
+ const requestCommand=await cmd(),races=await Promise.all([controller.advanceController(requestCommand),controller.advanceController({...requestCommand,commandId:requestCommand.commandId+'-race'})]);
+ assert(races.every(r=>['applied','waiting_owner'].includes(r.status)),JSON.stringify(races));
+ assert.equal((await tick()).status,'waiting_owner');
+ const q=(await db.admin.query(`select b.*,r.status,r.action_type from roadmap_approval_bindings b join approval_requests r on r.workspace_id=b.workspace_id and r.id=b.approval_request_id where b.workspace_id=$1 and b.task_key=$2`,[A.id,taskId])).rows;assert.equal(q.length,1);const binding=q[0];
+ assert.equal(binding.action_type,'development_feature_plan_approval');assert.equal(binding.status,'pending');assert.equal(binding.draft_fingerprint,original[0].plan_fingerprint);assert.notEqual(binding.execution_fingerprint,binding.draft_fingerprint);assert.equal(binding.plan_key,original[0].plan_key);assert.equal(binding.plan_revision,1);
+ const s=await state();assert(s);const dc={commandId:`decision-${origin}`,projectId,taskId,expectedVersion:s.task.version,approvalRequestId:binding.approval_request_id,bindingFingerprint:binding.binding_fingerprint,decision:'approved'};
+ const decisions=approvals.createRoadmapOwnerApprovalDecisions({database,tenant,identitySource:{resolve:()=>({userId:owner})}});
+ for(const bad of [{workspaceId:A.id},{allowedPaths:['/']},{planId:'fabricated'},{decision:'withdrawn'}])assert.equal((await decisions.decide({...dc,...bad})).status,'invalid_input');
+ const before=(await db.admin.query('select count(*)::int n from audit_events where workspace_id=$1',[A.id])).rows[0].n;
+ assert.equal((await decisions.decide({...dc,bindingFingerprint:'a'.repeat(64)})).status,'conflict');
+ assert.equal((await db.admin.query('select count(*)::int n from audit_events where workspace_id=$1',[A.id])).rows[0].n,before);
+ const lost=live.installQueryInterceptor();lost.rules.push(live.rule('lost typed decision commit',live.sqlTag('executor-transaction:commit'),async(_c,sql,v,send)=>{await send(sql,v);throw Error('synthetic commit acknowledgment loss');}));
+ try{assert.equal((await decisions.decide(dc)).status,'replayed');assert.equal(lost.rules[0].fired,1);}finally{lost.restore();}
+ assert.equal((await decisions.decide(dc)).status,'replayed');
+ const consume=await cmd(),consumeRace=await Promise.all([controller.advanceController(consume),controller.advanceController({...consume,commandId:consume.commandId+'-race'})]);
+ assert.equal(consumeRace.filter(r=>r.status==='applied').length,1,JSON.stringify(consumeRace));
+ const after=await state();assert(after?.approvedPlan);assert.equal(after.approvedPlan.plan.status,'approved');assert.equal(after.approvedPlan.draftFingerprint,binding.draft_fingerprint);assert.equal(after.approvedPlan.executionFingerprint,binding.execution_fingerprint);
+ assert.equal((await tick()).action,'start_plan_execution');assert.equal((await tick()).action,'create_development_run');assert.equal((await tick()).action,'start_development_attempt');
+ for(let i=0;i<3;i++){const d=await tick();assert.equal(d.status,'live_unavailable');assert.equal(d.action,'select_route');}
+ assert.deepEqual((await db.admin.query('select plan_key,revision,plan_json,plan_fingerprint from project_task_feature_plans where workspace_id=$1 and task_key=$2',[A.id,taskId])).rows,original);
+ assert.equal((await db.admin.query('select count(*)::int n from controller_operations where workspace_id=$1 and project_key=$2',[A.id,projectId])).rows[0].n,0);
+ assert.equal((await db.admin.query('select count(*)::int n from executor_run_authorities where workspace_id=$1 and project_key=$2',[A.id,projectId])).rows[0].n,0);
+ assert.equal(p.stats.starts,0);assert.equal(p.stats.transmissions,0);if(b.fake)assert.equal(b.fake.runs(),1);
+ console.log(JSON.stringify({origin,taskStatus:(await state()).task.status,typedApproval:'approved',storedDraft:'unchanged',boundedOutcome:'live_unavailable',executorStarts:0,runtimeDispatchAllowed:false}));
+});
+async function waiting(label){
+ const b=await backlog('manual_import','approved',1);await enroll(b);await saveFeature(b);assert.equal((await service.ready(await readyIntent(b))).status,'ok');
+ const tenant=await tenants.createPostgresWorkflowRuntimeTenantResolver(database).resolve(A.domain);assert(tenant);
+ const p=portsModule.controllerPorts(database,tenant,b.taskIds[0]),controller=controllerCore.createDevelopmentController({database,tenant,repository:{...p.repository,allowedPaths:['lib/feature/']},routingSource:p.routingSource,contextSource:p.contextSource,executorPort:{...p.executorPort,mode:'blocked'},qualityPort:p.qualityPort,securityPort:p.securityPort});
+ let n=0;const state=()=>controller.inspect(b.f.projectId,b.taskIds[0]);const cmd=async()=>{const s=await state();assert(s);return{commandId:label+'-'+(++n),projectId:b.f.projectId,taskId:b.taskIds[0],expectedVersion:s.task.version,expectedControllerRevision:s.revision};};
+ for(let i=0;i<3;i++)assert.equal((await controller.advanceController(await cmd())).status,'applied');
+ const q=(await db.admin.query('select approval_request_id::text,binding_fingerprint from roadmap_approval_bindings where workspace_id=$1 and task_key=$2',[A.id,b.taskIds[0]])).rows[0];assert(q);
+ const s=await state(),decision={commandId:label+'-decision',projectId:b.f.projectId,taskId:b.taskIds[0],expectedVersion:s.task.version,approvalRequestId:q.approval_request_id,bindingFingerprint:q.binding_fingerprint,decision:'approved'};
+ const decisions=approvals.createRoadmapOwnerApprovalDecisions({database,tenant,identitySource:{resolve:()=>({userId:owner})}});
+ const ownModule=await import(new URL('file://'+root+'/lib/roadmap/roadmap-owner-commands.ts').href);
+ const writer=ownModule.createRoadmapOwnerCommands({database,tenant,identitySource:{resolve:()=>({userId:owner})}});
+ return{b,tenant,p,controller,state,cmd,decision,decisions,writer};
+}
+test('rejected exact FeaturePlan blocks without start; project backlog approval is insufficient',async()=>{
+ const x=await waiting('rejected');assert.equal((await x.controller.advanceController(await x.cmd())).status,'waiting_owner');assert.equal((await x.decisions.decide({...x.decision,decision:'rejected'})).status,'applied');const d=await x.controller.advanceController(await x.cmd());assert.equal(d.action,'hard_stop');assert.equal(d.state.task.status,'blocked');assert.equal(x.p.stats.starts,0);
+});
+test('paused project and foreign current Owner cannot decide; concurrent Owner approval/tick commits one valid consumption',async()=>{
+ const x=await waiting('decision-tick');await db.admin.query("update projects set status='paused' where workspace_id=$1 and project_key=$2",[A.id,x.b.f.projectId]);assert.equal((await x.decisions.decide(x.decision)).status,'unavailable');await db.admin.query("update projects set status='active' where workspace_id=$1 and project_key=$2",[A.id,x.b.f.projectId]);
+ const fixtures=await import(new URL('file://'+root+'/tests/fixtures/roadmap.mts').href);const f=await fixtures.roadmapFixture(db,'dev02-foreign');
+ const foreign=approvals.createRoadmapOwnerApprovalDecisions({database,tenant:x.tenant,identitySource:f.identitySource});assert.equal((await foreign.decide(x.decision)).status,'unavailable');
+ const results=await Promise.all([x.decisions.decide(x.decision),x.controller.advanceController(await x.cmd())]);assert.equal(results[0].status,'applied');assert(['waiting_owner','applied'].includes(results[1].status));
+ let s=await x.state();if(!s.approvedPlan)assert.equal((await x.controller.advanceController(await x.cmd())).action,'consume_plan_approval');s=await x.state();assert(s.approvedPlan);assert.equal(x.p.stats.starts,0);
+ assert.equal((await db.admin.query('select count(*)::int n from approval_decisions where workspace_id=$1 and approval_request_id=$2',[A.id,x.decision.approvalRequestId])).rows[0].n,1);
+});
+test('cancelled task cannot re-ready or consume historical pending binding',async()=>{
+ const x=await waiting('cancelled'),s=await x.state();assert.equal((await x.writer.changeState({commandId:'cancel-dev02',projectId:x.b.f.projectId,taskId:x.b.taskIds[0],expectedVersion:s.task.version,nextStatus:'cancelled'})).status,'applied');assert.equal((await x.decisions.decide(x.decision)).status,'conflict');assert.notEqual((await service.ready(await readyIntent(x.b))).status,'ok');assert.equal((await x.controller.advanceController(await x.cmd())).action,'none');assert.equal(x.p.stats.starts,0);
+});
+test('replan/edit/re-ready cannot reuse previous exact plan approval',async()=>{
+ const x=await waiting('replan'),s=await x.state();assert.equal((await x.writer.changeState({commandId:'replan-dev02',projectId:x.b.f.projectId,taskId:x.b.taskIds[0],expectedVersion:s.task.version,nextStatus:'draft'})).status,'applied');await saveFeature(x.b);assert.equal((await x.decisions.decide(x.decision)).status,'conflict');assert.equal((await service.ready(await readyIntent(x.b))).status,'ok');assert.equal((await x.controller.advanceController(await x.cmd())).action,'claim_ready_task');assert.equal((await x.decisions.decide({...x.decision,commandId:'replan-forged-current',expectedVersion:(await x.state()).task.version})).status,'conflict');assert.equal(x.p.stats.starts,0);
+});

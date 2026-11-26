@@ -1,0 +1,41 @@
+name: PAC-DEV-02 E-01 evidence closure
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CI: 'true'
+  NEXT_TELEMETRY_DISABLED: '1'
+  PAC_E01_ROOT: ${{ runner.temp }}/pac-dev02-e01-${{ github.run_id }}-${{ github.run_attempt }}
+
+jobs:
+  evidence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout reviewed candidate
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Exact Node toolchain (runner only)
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24.22.2'
+          package-manager-cache: false
+      - name: Reproduce original evidence and repository checks
+        run: python3 .github/pac-dev02/verify.py run
+      - name: Verify cleanup and seal evidence
+        if: ${{ always() }}
+        run: python3 .github/pac-dev02/verify.py finalize
+      - name: Upload evidence even on failure
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: pac-dev02-e01-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.PAC_E01_ROOT }}/evidence/
+          if-no-files-found: error
+          retention-days: 30

@@ -1,0 +1,1 @@
+node --test tests/pg/project-roadmap-enrollment.test.mts tests/pg/feature-plan-revisions.test.mts tests/pg/roadmap-foundation.test.mts tests/pg/roadmap-foundation-mutations.test.mts tests/pg/development-controller.test.mts tests/pg/development-controller-store.test.mts tests/pg/development-controller-integrity.test.mts tests/pg/development-controller-mutations.test.mts
