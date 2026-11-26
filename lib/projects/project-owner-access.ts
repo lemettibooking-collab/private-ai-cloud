@@ -44,8 +44,7 @@ export function createProjectOwnerAccess(config: { database: unknown; domainWork
   const database: WorkflowRuntimeDatabase = Object.freeze({ connect: () => Reflect.apply(connect, undefined, []) as ReturnType<WorkflowRuntimeDatabase["connect"]> });
   const session = snapshotProjectSession(config.session);
   const source = createGitHubSessionIdentitySource({ database, sessionResolver: { resolve: () => session } });
-  return Object.freeze({
-    async run<T>(projectId: unknown, write: boolean, work: (client: WorkflowRuntimeSqlClient, context: ProjectOwnerContext) => Promise<T>): Promise<ProjectAccessResult<T>> {
+  async function runAuthorized<T>(projectId: unknown, write: boolean, work: (client: WorkflowRuntimeSqlClient, context: ProjectOwnerContext, tenant: ResolvedWorkflowRuntimeTenant) => Promise<T>, activeShare = false): Promise<ProjectAccessResult<T>> {
       if (!isProjectKey(projectId)) return Object.freeze({ status: "invalid_input" });
       if (typeof window !== "undefined") return Object.freeze({ status: "unavailable" });
       if (!session) return Object.freeze({ status: "unauthenticated" });
@@ -61,14 +60,23 @@ export function createProjectOwnerAccess(config: { database: unknown; domainWork
              select id::text, project_key, display_name, status, repository_url, default_branch,
                     repository_revision::text as repository_revision
              from projects where workspace_id=$1 and project_key=$2 and status=any($3::text[])
-             for ${write ? "update" : "share"}`,
-            [tenant.workspaceDatabaseId, projectId, write ? ["active"] : ["active", "paused"]],
+             for ${write && !activeShare ? "update" : "share"}`,
+            [tenant.workspaceDatabaseId, projectId, write || activeShare ? ["active"] : ["active", "paused"]],
           );
           if (row.rowCount !== 1 || !projectSummaryFromRow(row.rows[0])) throw new Unavailable();
-          return work(client, Object.freeze({ workspaceId: tenant.workspaceDatabaseId, userId, project: row.rows[0] }));
+          return work(client, Object.freeze({ workspaceId: tenant.workspaceDatabaseId, userId, project: row.rows[0] }), tenant);
         });
         return Object.freeze({ status: "ok", value });
       } catch (error) { return Object.freeze({ status: error instanceof Conflict ? "conflict" : "unavailable" }); }
+  }
+  return Object.freeze({
+    run<T>(projectId:unknown,write:boolean,work:(client:WorkflowRuntimeSqlClient,context:ProjectOwnerContext)=>Promise<T>){
+      return runAuthorized(projectId,write,work);
+    },
+    // Active-project mutations that join the Roadmap guard → task lock order.
+    // SHARE stays compatible with FeaturePlan's existing task → project SHARE path.
+    runActiveShare<T>(projectId: unknown, work: (client: WorkflowRuntimeSqlClient, context: ProjectOwnerContext, tenant: ResolvedWorkflowRuntimeTenant) => Promise<T>) {
+      return runAuthorized(projectId,true,work,true);
     },
   });
 }

@@ -1,3 +1,6 @@
+import { ProjectRoadmapControls } from '@/components/domain/owner-console/project-roadmap-controls';
+import { projectRoadmapCopy } from '@/lib/i18n/project-roadmap-copy';
+import { previewProjectRoadmapAction,enrollProjectRoadmapAction } from './actions';
 import { projectGenerationCopy } from "@/lib/i18n/project-planning-copy";
 import Link from "next/link";
 import { AppShell } from "@/components/shell/app-shell";
@@ -21,6 +24,7 @@ export default async function ProjectPlanningPage({params,searchParams}:Props){
  <SectionCard title={c.history}><nav className="flex gap-3 text-sm text-accent">{view.plans.history.map(r=><Link href={`/projects/${encodeURIComponent(projectId)}/planning?revision=${r.revision}`} key={r.revision}>{c.revision} {r.revision} · {c[r.status as "draft"|"approved"|"rejected"]}</Link>)}</nav>{!view.plans.history.length&&<p className="text-sm">{c.empty}</p>}</SectionCard>
  {selected&&<SectionCard title={`${selected.plan.title} · ${c.revision} ${selected.revision}`}><p className="text-sm">{c.decision}: {c[selected.status]}</p><p className="text-sm">{c.origin}: {c[selected.origin??"manual_import"]}</p>{(selected.sources??(selected.source?[selected.source]:[])).map(s=><p key={`${s.filename}:${s.version}`} className="my-2 break-all text-xs">{s.filename} · {s.version} · {c.sourceHash}: {s.sha256}</p>)}<p className="break-all text-xs">{selected.sourceFingerprint}</p><p className="break-all text-xs">{c.planHash}: {selected.planFingerprint}</p>
  <ul className="my-4 space-y-3 text-sm">{selected.plan.tasks.map(t=><li key={t.id}><strong>{t.id} · {t.title} · {t.priority}</strong><p>{t.goal}</p><p>{t.description}</p><p>{c.criteria}: {t.acceptanceCriteria.join("; ")}</p><p>{c.scope}: {t.scope.join("; ")}</p><p>{c.dependencies}: {t.dependencyIds.join(", ")}</p>{selected.status==="approved"&&<Link className="text-accent" href={`/tasks/${selected.tasks.find(link=>link.sourceId===t.id)!.taskId}?project=${encodeURIComponent(projectId)}`}>{c.task}: {t.id}</Link>}</li>)}</ul>
+ {selected.status==='approved'&&view.binding.projectStatus==='active'&&<ProjectRoadmapControls key={`${projectId}:${selected.revision}:${selected.planFingerprint}`} selector={{projectId,revision:selected.revision,planFingerprint:selected.planFingerprint,sourceFingerprint:selected.sourceFingerprint}} previewAction={previewProjectRoadmapAction} enrollAction={enrollProjectRoadmapAction} c={projectRoadmapCopy(locale)}/>}
  {selected.status==="draft"&&view.binding.projectStatus==="active"&&<PlanningDecisionForm action={decideProjectPlanAction} canApprove={selected.revision===view.plans.latestRevision&&!view.plans.history.some(r=>r.status==="approved")} c={c} planFingerprint={selected.planFingerprint} projectId={projectId} revision={selected.revision}/>}<p className="mt-3 text-sm text-ink-3">{c.execution_not_authorized}</p><p className="mt-2 text-sm text-ink-3">{c.activeLocked}</p></SectionCard>}</div>}
  </AppShell>;
 }

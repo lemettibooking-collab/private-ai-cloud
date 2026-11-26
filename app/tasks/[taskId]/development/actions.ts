@@ -4,6 +4,8 @@
 // the untrusted FormData to the server-only binding, which re-authenticates the Owner for THIS request
 // and calls the audited saveDraftRevision contract. Planning data only: no run, model, executor,
 // GitHub or repository action, and no ProjectTask status change.
+import { submitProjectRoadmap } from '@/lib/composition/owner-project-roadmap.server';
+import { revalidatePath } from 'next/cache';
 import { redirect } from "next/navigation";
 import { submitOwnerFeaturePlan } from "@/lib/composition/owner-feature-plan-save.server";
 
@@ -24,4 +26,10 @@ export async function saveFeaturePlanAction(_previous: FeaturePlanFormState, for
   // reads the persisted revision again through the read path (no optimistic client state).
   if (outcome.status === "redirect") redirect(outcome.href);
   return { status: outcome.status, errors: outcome.status === "invalid_plan" ? outcome.errors : [] };
+}
+
+export async function readyProjectRoadmapTaskAction(_previous:unknown,form:FormData){
+ const result=await submitProjectRoadmap('ready',form);
+ if(result.status==='applied'||result.status==='replayed'){revalidatePath('/tasks/[taskId]/development','page');revalidatePath('/tasks');revalidatePath('/roadmap');}
+ return{status:result.status};
 }

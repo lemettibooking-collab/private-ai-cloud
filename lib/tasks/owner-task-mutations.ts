@@ -258,6 +258,18 @@ export function createOwnerTaskMutations(input: unknown): OwnerTaskMutations {
       return await inTransaction(database, async (client) => {
         await lockOwnerAuthority(client, auth.tenant, auth.userId);
         await lockProject(client, auth.tenant, intent.projectId, ["active"]);
+        const workspace=auth.tenant.workspaceDatabaseId;
+        // PAC-DEV-01: serialize ordinary task creation with complete-project graph
+        // admission. Always acquire the guard, including before first enrollment;
+        // otherwise a creator that observed no guard could race its insertion.
+        await client.query(`insert into roadmap_project_guards(workspace_id,project_key) values($1,$2) on conflict do nothing`,[workspace,intent.projectId]);
+        await client.query(`/* task-mutation:roadmap-guard */ select project_key from roadmap_project_guards where workspace_id=$1 and project_key=$2 for update`,[workspace,intent.projectId]);
+        const capacity=await client.query(`/* task-mutation:roadmap-capacity */ select
+          exists(select 1 from roadmap_milestones where workspace_id=$1 and project_key=$2) as managed,
+          exists(select 1 from project_tasks where workspace_id=$1 and creation_idempotency_key=$3) as replay,
+          (select count(*)::int from (select task_key from project_tasks where workspace_id=$1 and project_key=$2 limit 256) bounded) as total`,[workspace,intent.projectId,intent.idempotencyKey]);
+        if(capacity.rowCount!==1)throw new Unavailable();
+        if(capacity.rows[0].managed&&!capacity.rows[0].replay&&Number(capacity.rows[0].total)>=256)throw new Conflict();
         const inserted = await client.query<{ id: string; task_key: string }>(
           `/* task-mutation:create */
            insert into project_tasks (workspace_id, project_key, task_key, title, goal, task_type, status, priority,

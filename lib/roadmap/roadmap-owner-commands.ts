@@ -1,6 +1,7 @@
 import type { WorkflowRuntimeDatabase, WorkflowRuntimeSqlClient } from "../db/workflow-runtime-store";
 import type { ResolvedWorkflowRuntimeTenant } from "../db/workflow-runtime-tenant";
 import type { RoadmapCommand, RoadmapTaskMutation } from "../db/roadmap-store";
+import type { RoadmapMetadata } from "./roadmap-contract";
 import type { ProjectTaskStatus } from "../tasks/project-task";
 // @ts-expect-error Node direct TypeScript needs the runtime extension.
 import { exactOwnData, capturedMethod, resolveUserId, lockOwnerAuthority, Conflict, Unavailable } from "../tasks/owner-task-mutations.ts";
@@ -66,21 +67,7 @@ export function createRoadmapOwnerCommands(raw: unknown) {
     return executeRoadmapCommand(database,tenant,command,fp,async c=>{
       await lockOwnerAuthority(c,tenant,user);await lockRoadmapProject(c,tenant,command.projectId);
       const replay=await roadmapReplay(c,tenant,command,fp);if(replay)return replay;
-      const q=await c.query(`select status,state_version,milestone_key from project_tasks where workspace_id=$1 and project_key=$2 and task_key=$3 for update`,[tenant.workspaceDatabaseId,command.projectId,command.taskId]);
-      if(q.rowCount!==1)throw new Unavailable();const before=q.rows[0];
-      if(before.state_version!==command.expectedVersion || !["draft","ready"].includes(before.status as string)
-        || before.milestone_key!==null && before.milestone_key!==command.milestoneId)throw new Conflict();
-      const m=await c.query(`select milestone_key from roadmap_milestones where workspace_id=$1 and project_key=$2 and milestone_key=$3 and status='active' for share`,[tenant.workspaceDatabaseId,command.projectId,command.milestoneId]);if(m.rowCount!==1)throw new Conflict();
-      const graph=await c.query(`select t.task_key,t.status,t.priority,coalesce(array_agg(d.dependency_task_key order by d.dependency_task_key) filter(where d.dependency_task_key is not null),'{}') deps
-        from project_tasks t left join roadmap_task_dependencies d on d.workspace_id=t.workspace_id and d.project_key=t.project_key and d.task_key=t.task_key
-        where t.workspace_id=$1 and t.project_key=$2 group by t.task_key,t.status,t.priority order by t.task_key limit 257`,[tenant.workspaceDatabaseId,command.projectId]);
-      if(!validateRoadmapGraph(graph.rows.map(r=>({taskId:r.task_key as string,status:r.status as ProjectTaskStatus,priority:r.priority as string|null,dependencyIds:r.task_key===command.taskId?dependencies:r.deps as string[]}))))throw new Conflict();
-      await c.query(`update project_tasks set milestone_key=$4,roadmap_metadata=$5::jsonb,roadmap_metadata_fingerprint=$6,state_version=state_version+1
-        where workspace_id=$1 and project_key=$2 and task_key=$3 and state_version=$7`,[tenant.workspaceDatabaseId,command.projectId,command.taskId,command.milestoneId,JSON.stringify(metadata),roadmapFingerprint(metadata),command.expectedVersion]);
-      await c.query(`delete from roadmap_task_dependencies where workspace_id=$1 and project_key=$2 and task_key=$3`,[tenant.workspaceDatabaseId,command.projectId,command.taskId]);
-      for(const dep of dependencies)await c.query(`insert into roadmap_task_dependencies(workspace_id,project_key,task_key,dependency_task_key) values($1,$2,$3,$4)`,[tenant.workspaceDatabaseId,command.projectId,command.taskId,dep]);
-      await journalRoadmapTask(c,tenant,command,fp,{status:before.status as ProjectTaskStatus,version:command.expectedVersion},before.status as ProjectTaskStatus,before.milestone_key===null?"enrolled":"metadata_changed",user);
-      const task=await readRoadmapTaskInTransaction(c,tenant,command.projectId,command.taskId);if(!task)throw new Unavailable();return Object.freeze({status:"applied" as const,task});
+      return enrollRoadmapTaskInTransaction(c,tenant,{...command,milestoneId:command.milestoneId as string},fp,metadata,dependencies,user);
     },c=>lockOwnerAuthority(c,tenant,user));
   }
   async function changeState(input:unknown):Promise<RoadmapTaskMutation|Readonly<{status:"unauthenticated"}>>{
@@ -96,4 +83,24 @@ export function createRoadmapOwnerCommands(raw: unknown) {
     },c=>lockOwnerAuthority(c,tenant,user));
   }
   return Object.freeze({createMilestone,enroll,changeState});
+}
+
+/** Transaction-local enrollment primitive. Caller already holds Owner/project/guard locks.
+ * No public wrapper invocation or connection acquisition inside the transaction. */
+export async function enrollRoadmapTaskInTransaction(c:WorkflowRuntimeSqlClient,tenant:ResolvedWorkflowRuntimeTenant,command:RoadmapCommand & {milestoneId:string},fp:string,metadata:RoadmapMetadata,dependencies:readonly string[],user:string){
+      const q=await c.query(`select status,state_version,milestone_key from project_tasks where workspace_id=$1 and project_key=$2 and task_key=$3 for update`,[tenant.workspaceDatabaseId,command.projectId,command.taskId]);
+      if(q.rowCount!==1)throw new Unavailable();const before=q.rows[0];
+      if(before.state_version!==command.expectedVersion || !["draft","ready"].includes(before.status as string)
+        || before.milestone_key!==null && before.milestone_key!==command.milestoneId)throw new Conflict();
+      const m=await c.query(`select milestone_key from roadmap_milestones where workspace_id=$1 and project_key=$2 and milestone_key=$3 and status='active' for share`,[tenant.workspaceDatabaseId,command.projectId,command.milestoneId]);if(m.rowCount!==1)throw new Conflict();
+      const graph=await c.query(`select t.task_key,t.status,t.priority,coalesce(array_agg(d.dependency_task_key order by d.dependency_task_key) filter(where d.dependency_task_key is not null),'{}') deps
+        from project_tasks t left join roadmap_task_dependencies d on d.workspace_id=t.workspace_id and d.project_key=t.project_key and d.task_key=t.task_key
+        where t.workspace_id=$1 and t.project_key=$2 group by t.task_key,t.status,t.priority order by t.task_key limit 257`,[tenant.workspaceDatabaseId,command.projectId]);
+      if(!validateRoadmapGraph(graph.rows.map(r=>({taskId:r.task_key as string,status:r.status as ProjectTaskStatus,priority:r.priority as string|null,dependencyIds:r.task_key===command.taskId?dependencies:r.deps as string[]}))))throw new Conflict();
+      await c.query(`update project_tasks set milestone_key=$4,roadmap_metadata=$5::jsonb,roadmap_metadata_fingerprint=$6,state_version=state_version+1
+        where workspace_id=$1 and project_key=$2 and task_key=$3 and state_version=$7`,[tenant.workspaceDatabaseId,command.projectId,command.taskId,command.milestoneId,JSON.stringify(metadata),roadmapFingerprint(metadata),command.expectedVersion]);
+      await c.query(`delete from roadmap_task_dependencies where workspace_id=$1 and project_key=$2 and task_key=$3`,[tenant.workspaceDatabaseId,command.projectId,command.taskId]);
+      for(const dep of dependencies)await c.query(`insert into roadmap_task_dependencies(workspace_id,project_key,task_key,dependency_task_key) values($1,$2,$3,$4)`,[tenant.workspaceDatabaseId,command.projectId,command.taskId,dep]);
+      await journalRoadmapTask(c,tenant,command,fp,{status:before.status as ProjectTaskStatus,version:command.expectedVersion},before.status as ProjectTaskStatus,before.milestone_key===null?"enrolled":"metadata_changed",user);
+      const task=await readRoadmapTaskInTransaction(c,tenant,command.projectId,command.taskId);if(!task)throw new Unavailable();return Object.freeze({status:"applied" as const,task});
 }

@@ -233,3 +233,17 @@ export async function prepareAuthorizedProjectGeneration(client:WorkflowRuntimeS
  return Object.freeze({documents:Object.freeze(documents),messages:prepared.messages,
   preparationFingerprint:planDigest(["pac.project-ai-intake.v1",context.workspaceId,input.projectId,input.sources,prepared.fingerprint])});
 }
+
+/** Internal historical provenance read. Caller holds current Owner/project authority
+ * on this client. Approval materialization committed before Roadmap enrollment;
+ * current task lifecycle is deliberately NOT validated by creation-time SQL checks. */
+export async function readApprovedProjectPlanningInTransaction(client:WorkflowRuntimeSqlClient,context:ProjectOwnerContext,projectId:string,revision:number,authority?:GenerationAuthority){
+ const result=await client.query(`/* project-roadmap:approved-plan */ select * from project_planning_drafts where workspace_id=$1 and project_key=$2 and revision=$3 for share`,[context.workspaceId,projectId,revision]);
+ if(result.rowCount!==1||result.rows[0].status!=='approved')throw new Unavailable();
+ const row=result.rows[0],plan=await validateStored(client,context,row,authority);
+ await validateDecision(client,context,row,plan,false);
+ const links=await client.query(`select source_task_id,task_key from project_planning_task_links where workspace_id=$1 and project_key=$2 and draft_id=$3 order by source_task_id`,[context.workspaceId,projectId,row.id]);
+ if(links.rowCount!==plan.tasks.length)throw new Unavailable();
+ return Object.freeze({draftId:row.id as string,revision:row.revision as number,planFingerprint:row.plan_fingerprint as string,sourceFingerprint:row.source_fingerprint as string,origin:row.origin as 'manual_import'|'ai_generated',plan,
+  mappings:Object.freeze(links.rows.map(link=>Object.freeze({sourceId:link.source_task_id as string,taskId:link.task_key as string})))});
+}

@@ -1,4 +1,5 @@
 "use server";
+import { submitProjectRoadmap } from '@/lib/composition/owner-project-roadmap.server';
 import { revalidatePath } from "next/cache";
 import { submitProjectGeneration,submitProjectPlanning } from "@/lib/composition/owner-project-planning.server";
 export async function previewProjectPlanAction(_previous:unknown,form:FormData){return submitProjectPlanning("preview",form);}
@@ -18,4 +19,11 @@ export async function saveGeneratedProjectPlanAction(_previous:unknown,form:Form
  const r=await submitProjectPlanning('saveGenerated',form);
  if(r.status==='saved'||r.status==='replayed'){revalidatePath('/projects/[projectId]/planning','page');revalidatePath('/tasks');revalidatePath('/approvals');}
  return{status:r.status};
+}
+
+export async function previewProjectRoadmapAction(_previous:unknown,form:FormData){return submitProjectRoadmap('preview',form);}
+export async function enrollProjectRoadmapAction(_previous:unknown,form:FormData){
+ const result=await submitProjectRoadmap('enroll',form);
+ if(result.status==='applied'||result.status==='replayed'){revalidatePath('/projects/[projectId]/planning','page');revalidatePath('/roadmap');revalidatePath('/tasks');}
+ return{status:result.status};
 }

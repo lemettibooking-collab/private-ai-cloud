@@ -1,3 +1,7 @@
+import { ProjectRoadmapTaskControls } from '@/components/domain/owner-console/project-roadmap-controls';
+import { projectRoadmapCopy } from '@/lib/i18n/project-roadmap-copy';
+import { loadTaskProjectRoadmap } from '@/lib/composition/owner-project-roadmap.server';
+import { readyProjectRoadmapTaskAction } from './actions';
 import Link from "next/link";
 import type { FeaturePlanStepDraft } from "@/components/domain/owner-console/feature-plan-builder";
 import { DependencyWaves, ExecutionStatePanels, PlanStepPanel, PlanSummary, RevisionHistory, VerificationPlan } from "@/components/domain/owner-console/feature-plan-browser";
@@ -45,7 +49,7 @@ function Meta({ label, children }: { label: string; children: React.ReactNode })
 export default async function TaskDevelopmentPage({ params, searchParams }: TaskDevelopmentPageProps) {
   const { taskId } = await params;
   const view = await loadOwnerTaskDevelopment(taskId, (await searchParams).project);
-  const { t } = await getI18n();
+  const { t,locale } = await getI18n();
   const k = t.taskDevelopment;
   const unset = <span className="text-ink-3">{t.common.notSet}</span>;
   const selected = view.state === "available" && view.scope.mode === "project" ? view.scope.project : null;
@@ -75,6 +79,8 @@ export default async function TaskDevelopmentPage({ params, searchParams }: Task
       id: "step-1", title: "", goal: "", scope: "", nonGoals: "", allowedPaths: "", acceptanceCriteria: "", verificationCommands: "",
       dependsOn: [], riskLevel: task?.riskLevel ?? "medium", priority: task?.priority ?? "P2", requiresOwnerApproval: false,
     }];
+
+  const roadmap=task?await loadTaskProjectRoadmap(task.projectId,task.taskId):null;
 
   return (
     <AppShell selectedProject={selected}>
@@ -106,6 +112,7 @@ export default async function TaskDevelopmentPage({ params, searchParams }: Task
 
       {dev && task && (
         <div className="grid gap-4 xl:grid-cols-12">
+          {roadmap&&<SectionCard className="xl:col-span-12" title={projectRoadmapCopy(locale).title}><ProjectRoadmapTaskControls key={`${task.taskId}:${roadmap.previewFingerprint}:${roadmap.tasks.find(t=>t.taskId===task.taskId)?.version}:${latest?.fingerprint}`} preview={roadmap} reviewedPlan={latest?{planId:latest.planId,revision:latest.revision,fingerprint:latest.fingerprint}:null} taskId={task.taskId} action={readyProjectRoadmapTaskAction} c={projectRoadmapCopy(locale)}/></SectionCard>}
           <SectionCard className="xl:col-span-7" description={k.requestDescription} title={k.request}>
             <dl className="-my-2 divide-y divide-line">
               <Meta label={k.taskId}><span className="font-mono text-[11.5px]">{task.taskId}</span></Meta>

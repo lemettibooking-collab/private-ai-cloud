@@ -168,7 +168,10 @@ test("O. dependency direction: UI → Server Action → server composition → o
   // only strict input/Owner-lock/error primitives, never createTask or attachRun.
   assert.deepEqual(importers(/from\s+["'][^"']*\/tasks\/owner-task-mutations(\.ts)?["']/u),
     ["lib/composition/owner-ai044-proof.ts", "lib/composition/owner-openai-api-proof.ts", "lib/composition/owner-task-create.ts", "lib/db/ai044-subscription-approvals.ts", "lib/db/development-controller-approvals.ts", "lib/db/development-controller-store.ts", "lib/db/openai-api-approvals.ts", "lib/db/roadmap-approvals.ts", "lib/db/roadmap-owner-read.ts", "lib/db/roadmap-store.ts",
-      "lib/development/feature-plan-mutations.ts", "lib/development/feature-plan-planning-requests.ts", "lib/integrations/chatgpt/chatgpt-owner-authority.ts", "lib/planning/project-planning-contract.ts", "lib/planning/project-planning.ts", "lib/projects/owner-project-mutations.ts", "lib/projects/project-knowledge.ts", "lib/projects/project-owner-access.ts", "lib/projects/repository-binding.ts", "lib/roadmap/roadmap-owner-commands.ts"]);
+      "lib/development/feature-plan-mutations.ts", "lib/development/feature-plan-planning-requests.ts", "lib/integrations/chatgpt/chatgpt-owner-authority.ts", "lib/planning/project-planning-contract.ts", "lib/planning/project-planning.ts", "lib/planning/project-roadmap-enrollment.ts", "lib/projects/owner-project-mutations.ts", "lib/projects/project-knowledge.ts", "lib/projects/project-owner-access.ts", "lib/projects/repository-binding.ts", "lib/roadmap/roadmap-owner-commands.ts"]);
+  // PAC-DEV-01 adds only strict data/error primitives in the scoped planning→Roadmap bridge.
+  assert.match(code("lib/planning/project-roadmap-enrollment.ts"), /import \{ exactOwnData, Conflict, Unavailable \} from '\.\.\/tasks\/owner-task-mutations\.ts';/u);
+  assert.ok(!/\b(?:createTask|attachRun|createOwnerTaskMutations)\s*\(/u.test(code("lib/planning/project-roadmap-enrollment.ts")));
   for (const path of ["lib/development/feature-plan-mutations.ts", "lib/development/feature-plan-planning-requests.ts"]) {
     assert.match(code(path),
       /import \{ Conflict, Unavailable, capturedMethod, exactOwnData, inTransaction, lockOwnerAuthority, resolveUserId \} from "\.\.\/tasks\/owner-task-mutations\.ts";/u, path);
@@ -208,8 +211,8 @@ test("O. dependency direction: UI → Server Action → server composition → o
   assert.match(draftAction, /import type \{ FeaturePlanCandidate \} from "@\/lib\/development\/feature-plan-planner";/u, "the planner module is a type-only import");
   assert.ok(!applicationFiles().filter((path) => !serverActionFiles.includes(path)).some((path) => /["']use server["']/u.test(code(path))), "no inline Server Function elsewhere");
   const planAction = code("app/tasks/[taskId]/development/actions.ts");
-  assert.deepEqual([...planAction.matchAll(/^export\s+(?:async\s+)?(?:function|const|let|class)\s+(\w+)/gmu)].map((match) => match[1]), ["saveFeaturePlanAction"]);
-  assert.deepEqual([...planAction.matchAll(/from\s+["']([^"']+)["']/gu)].map((match) => match[1]).sort(), ["@/lib/composition/owner-feature-plan-save.server", "next/navigation"]);
+  assert.deepEqual([...planAction.matchAll(/^export\s+(?:async\s+)?(?:function|const|let|class)\s+(\w+)/gmu)].map((match) => match[1]), ["saveFeaturePlanAction", "readyProjectRoadmapTaskAction"]);
+  assert.deepEqual([...planAction.matchAll(/from\s+["']([^"']+)["']/gu)].map((match) => match[1]).sort(), ["@/lib/composition/owner-feature-plan-save.server", "@/lib/composition/owner-project-roadmap.server", "next/cache", "next/navigation"]);
   const action = code("app/tasks/new/actions.ts");
   assert.deepEqual([...action.matchAll(/^export\s+(?:async\s+)?(?:function|const|let|class)\s+(\w+)/gmu)].map((match) => match[1]), ["quickCreateTaskAction"]);
   assert.deepEqual([...action.matchAll(/from\s+["']([^"']+)["']/gu)].map((match) => match[1]).sort(), ["@/lib/composition/owner-task-create.server", "next/navigation"]);
